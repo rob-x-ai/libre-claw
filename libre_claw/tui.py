@@ -1441,27 +1441,22 @@ class TUI:
         if not first:
             return "EOF"
         if first in {b"\r", b"\n"}:
+            timeout = 0.20
             tail = bytearray()
-            while True:
-                nxt = self._read_with_timeout(fd, 0.12)
+            end_time = time.monotonic() + timeout
+            while time.monotonic() < end_time:
+                nxt = self._read_with_timeout(fd, end_time - time.monotonic())
                 if nxt is None:
                     break
                 tail.extend(nxt)
-                if self._stdin_buffer:
-                    break
             # If immediate follow-up data is buffered, this is paste/flow text.
             if tail.startswith(b"\r\n") or tail.startswith(b"\n\r"):
                 tail = tail[2:]
             elif tail.startswith((b"\r", b"\n")):
                 tail = tail[1:]
             if not tail:
-                return "SOFT_ENTER" if self._stdin_buffer else "ENTER"
-            buffered = self._stdin_buffer
-            self._stdin_buffer = b""
-            if buffered:
-                self._unread_stdin(buffered + bytes(tail))
-            else:
-                self._unread_stdin(bytes(tail))
+                return "ENTER"
+            self._unread_stdin(bytes(tail))
             return "SOFT_ENTER"
         if first in {b"\x03"}:
             raise KeyboardInterrupt
@@ -1508,6 +1503,8 @@ class TUI:
 
         try:
             tty.setraw(fd)
+            sys.stdout.write("\x1b[?2004h")
+            sys.stdout.flush()
             sys.stdout.write(f"\n{self._format_input_line_prefix()}")
             sys.stdout.flush()
 
@@ -1534,13 +1531,14 @@ class TUI:
                         else:
                             lines.append(paste_line)
                             sys.stdout.write("\n")
-                            sys.stdout.write(self._format_input_line_prefix() + paste_line)
+                            sys.stdout.write(paste_line)
+                            sys.stdout.flush()
                     continue
 
                 if key in {"SHIFT_ENTER", "SOFT_ENTER"}:
                     lines.append("")
                     sys.stdout.write("\n")
-                    sys.stdout.write(self._format_input_line_prefix())
+                    sys.stdout.flush()
                     continue
 
                 if key == "BACKSPACE":
@@ -1570,6 +1568,7 @@ class TUI:
                 sys.stdout.flush()
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+            sys.stdout.write("\x1b[?2004l")
             sys.stdout.write("\n")
             sys.stdout.flush()
 
