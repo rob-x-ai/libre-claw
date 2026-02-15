@@ -6,6 +6,7 @@ Provides Agent class with handle_message, heartbeat_tick, and mode switching.
 import threading
 import re
 import subprocess
+import shutil
 import time
 import uuid
 from dataclasses import dataclass
@@ -289,7 +290,11 @@ class Agent:
         return updates
 
     def _extract_diff_blocks(self, text: str) -> List[str]:
-        return [match.strip() for match in re.findall(r"```diff\n([\s\S]*?)\n```", text)]
+        blocks: List[str] = []
+        blocks.extend(match.strip() for match in re.findall(r"```diff\n([\s\S]*?)\n```", text))
+        blocks.extend(match.strip() for match in re.findall(r"```(?:apply_patch|patch)\n(\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch)\n```", text))
+        blocks.extend(match.strip() for match in re.findall(r"\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch", text))
+        return blocks
 
     def _extract_bash_blocks(self, text: str) -> List[str]:
         return [
@@ -298,6 +303,8 @@ class Agent:
         ]
 
     def _apply_unified_diff(self, diff_text: str) -> str:
+        if diff_text.strip().startswith("*** Begin Patch"):
+            return self._apply_apply_patch_block(diff_text)
         try:
             p = subprocess.run(
                 ["git", "apply", "--whitespace=fix", "-"],
@@ -312,6 +319,26 @@ class Agent:
             return f"Diff apply failed: {(p.stderr or p.stdout).strip()[:300]}"
         except Exception as e:
             return f"Diff apply error: {e}"
+
+    def _apply_apply_patch_block(self, patch_text: str) -> str:
+        apply_patch_path = shutil.which("apply_patch")
+        if not apply_patch_path:
+            return "Auto-apply failed: apply_patch utility not found"
+
+        try:
+            p = subprocess.run(
+                [apply_patch_path],
+                cwd=str(self.workspace.path),
+                input=patch_text,
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+            if p.returncode == 0:
+                return "Applied OpenAI-style patch successfully."
+            return f"Patch apply failed: {(p.stderr or p.stdout).strip()[:300]}"
+        except Exception as e:
+            return f"Patch apply error: {e}"
 
     def _auto_apply_shell_script(self, script: str) -> str:
         blocked = ["rm -rf /", "mkfs", "shutdown", "reboot", "diskutil erase"]

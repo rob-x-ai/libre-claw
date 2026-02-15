@@ -4,6 +4,7 @@ Rich-based TUI with slash commands, streaming output, and a polished experience.
 """
 
 import re
+import shutil
 import subprocess
 import time
 from datetime import datetime
@@ -421,10 +422,19 @@ class TUI:
     def _extract_diff_block(self, text: str) -> Optional[str]:
         match = re.search(r"```diff\n([\s\S]*?)\n```", text)
         if not match:
+            match = re.search(r"```(?:apply_patch|patch)\n(\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch)\n```", text)
+            if match:
+                return match.group(1).strip()
+
+            match = re.search(r"\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch", text)
+            if match:
+                return match.group(0).strip()
             return None
         return match.group(1).strip()
 
     def _apply_unified_diff(self, diff_text: str) -> str:
+        if diff_text.strip().startswith("*** Begin Patch"):
+            return self._apply_apply_patch_block(diff_text)
         try:
             p = subprocess.run(
                 ["git", "apply", "--whitespace=fix", "-"],
@@ -439,6 +449,26 @@ class TUI:
             return f"Diff apply failed: {(p.stderr or p.stdout).strip()[:300]}"
         except Exception as e:
             return f"Diff apply error: {e}"
+
+    def _apply_apply_patch_block(self, patch_text: str) -> str:
+        apply_patch_path = shutil.which("apply_patch")
+        if not apply_patch_path:
+            return "Auto-apply failed: apply_patch utility not found"
+
+        try:
+            p = subprocess.run(
+                [apply_patch_path],
+                cwd=str(self.agent.workspace.path),
+                input=patch_text,
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+            if p.returncode == 0:
+                return "Applied OpenAI-style patch successfully."
+            return f"Patch apply failed: {(p.stderr or p.stdout).strip()[:300]}"
+        except Exception as e:
+            return f"Patch apply error: {e}"
 
     def _should_auto_apply(self, user_input: str) -> bool:
         lowered = user_input.lower()
@@ -576,6 +606,7 @@ class TUI:
                             )
 
                         if backend_name == "codex-cli" and hasattr(self.agent.backend, "complete_with_progress"):
+                            self.agent._set_mode(AgentMode.DIRECT)
                             context = self.agent.workspace.get_context(mode="direct")
                             system_prompt = self.agent._build_system_prompt(context, is_heartbeat=False)
 
@@ -600,11 +631,14 @@ class TUI:
                                 progress_callback=_progress,
                                 add_dirs=add_dirs,
                             )
+                            if resp.content == "NO_REPLY":
+                                resp.content = "Hi there — what would you like me to do?"
                             self.agent.backend.add_message(Message(role="assistant", content=resp.content))
                             self.agent.state.message_count += 1
                             self.agent.state.last_activity = datetime.now()
                             response = resp.content
                         elif backend_name == "openai-codex-oauth" and hasattr(self.agent.backend, "complete_with_progress"):
+                            self.agent._set_mode(AgentMode.DIRECT)
                             context = self.agent.workspace.get_context(mode="direct")
                             system_prompt = self.agent._build_system_prompt(context, is_heartbeat=False)
 
@@ -627,6 +661,8 @@ class TUI:
                                 context=context,
                                 progress_callback=_progress,
                             )
+                            if resp.content == "NO_REPLY":
+                                resp.content = "Hi there — what would you like me to do?"
                             self.agent.backend.add_message(Message(role="assistant", content=resp.content))
                             self.agent.state.message_count += 1
                             self.agent.state.last_activity = datetime.now()
@@ -638,7 +674,7 @@ class TUI:
                         elapsed = time.monotonic() - t0
 
                     # Optional auto-apply for coding-assistant style file actions.
-                    if self._should_auto_apply(user_input):
+                    if self._should_auto_apply(user_input) and not (response or "").startswith("Error:"):
                         script = self._extract_bash_block(response)
                         diff_block = self._extract_diff_block(response)
 
