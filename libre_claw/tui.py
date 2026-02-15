@@ -46,6 +46,7 @@ class TUI:
         "mode": "Show or switch mode (usage: /mode [direct|heartbeat])",
         "backend": "Show or switch backend (usage: /backend [claude_code|codex_cli|anthropic|openai|ollama])",
         "login": "Import/login provider auth (usage: /login openai)",
+        "model": "Show/set model for current backend (usage: /model [model-id])",
         "context": "Show loaded workspace context files",
         "daily": "Append to today's daily note (usage: /daily <text>)",
         "files": "List workspace files",
@@ -65,6 +66,13 @@ class TUI:
     def _openai_auth_target_path(self) -> Path:
         configured = self.config.backend.openai_auth_file or "~/.config/libre-claw/auth/openai.json"
         return Path(configured).expanduser()
+
+    def _user_config_path(self) -> Path:
+        return Path.home() / ".config" / "libre-claw" / "config.yaml"
+
+    def _save_user_config(self) -> None:
+        target = self._user_config_path()
+        self.config.save(target)
 
     def _import_openai_auth_from_codex(self) -> Optional[str]:
         """Try importing OpenAI/Codex auth from common local locations."""
@@ -222,6 +230,8 @@ class TUI:
                     self.console.print("  [error]Invalid backend. Use: claude_code, codex_cli, anthropic, openai, ollama[/error]")
                 else:
                     try:
+                        self.config.backend.type = backend
+                        self._save_user_config()
                         self.agent.switch_backend(backend)
                         self.console.print(f"  [system]Backend switched to: {backend}[/system]")
                     except Exception as e:
@@ -239,6 +249,8 @@ class TUI:
                     codex_bin = self.config.backend.codex_path or "codex"
                     status = subprocess.run([codex_bin, "login", "status"], capture_output=True, text=True, timeout=10)
                     if status.returncode == 0:
+                        self.config.backend.type = "codex_cli"
+                        self._save_user_config()
                         self.agent.switch_backend("codex_cli")
                         self.console.print("  [system]Detected Codex OAuth login. Backend switched to: codex_cli[/system]")
                         return True
@@ -261,10 +273,47 @@ class TUI:
                         return True
 
                 try:
+                    self.config.backend.type = "openai"
+                    self._save_user_config()
                     self.agent.switch_backend("openai")
                     self.console.print("  [system]Backend switched to: openai[/system]")
                 except Exception as e:
                     self.console.print(f"  [error]OpenAI backend switch failed: {e}[/error]")
+
+        elif cmd == "model":
+            backend = self.config.backend.type
+            if not args:
+                if backend == "openai":
+                    self.console.print(f"  Current model: [bold]{self.config.backend.openai_model}[/bold] (openai)")
+                elif backend == "anthropic":
+                    self.console.print(f"  Current model: [bold]{self.config.backend.anthropic_model}[/bold] (anthropic)")
+                elif backend == "ollama":
+                    self.console.print(f"  Current model: [bold]{self.config.backend.ollama_model}[/bold] (ollama)")
+                elif backend == "codex_cli":
+                    model = self.config.backend.codex_model or "(codex default)"
+                    self.console.print(f"  Current model: [bold]{model}[/bold] (codex_cli)")
+                else:
+                    self.console.print(f"  Backend [bold]{backend}[/bold] does not expose a model selector")
+            else:
+                model = args.strip()
+                if backend == "openai":
+                    self.config.backend.openai_model = model
+                elif backend == "anthropic":
+                    self.config.backend.anthropic_model = model
+                elif backend == "ollama":
+                    self.config.backend.ollama_model = model
+                elif backend == "codex_cli":
+                    self.config.backend.codex_model = model
+                else:
+                    self.console.print(f"  [error]Cannot set model for backend: {backend}[/error]")
+                    return True
+
+                self._save_user_config()
+                try:
+                    self.agent.switch_backend(backend)
+                except Exception:
+                    pass
+                self.console.print(f"  [system]Saved model '{model}' for backend {backend}[/system]")
 
         elif cmd == "context":
             ctx = self.agent.workspace.get_context(self.agent.state.mode.value)

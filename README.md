@@ -70,7 +70,8 @@ my-workspace/
 | `/proactive [start\|stop\|status]` | Control background proactive loop |
 | `/mode [direct\|heartbeat]` | Show/switch mode |
 | `/backend [claude_code\|codex_cli\|anthropic\|openai\|ollama]` | Show/switch model provider |
-| `/login openai` | Import Codex/OpenAI auth or paste token, then switch backend |
+| `/login openai` | Use Codex OAuth session (or paste token) and switch backend |
+| `/model [model-id]` | Show/set model for active backend and save config |
 | `/context` | Show loaded context files |
 | `/daily <text>` | Append to today's daily note |
 | `/files` | List workspace files |

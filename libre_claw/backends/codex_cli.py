@@ -46,8 +46,10 @@ class CodexCLIBackend(BaseBackend):
                 "--skip-git-repo-check",
                 "--output-last-message",
                 out.name,
-                full_prompt,
             ]
+            if self.config.codex_model:
+                cmd.extend(["-m", self.config.codex_model])
+            cmd.append(full_prompt)
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                 if result.returncode != 0:

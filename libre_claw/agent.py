@@ -50,6 +50,7 @@ class Agent:
                 BackendConfig(
                     claude_path=self.config.backend.claude_path,
                     codex_path=self.config.backend.codex_path,
+                    codex_model=self.config.backend.codex_model,
                     anthropic_api_key=self.config.backend.anthropic_api_key,
                     anthropic_auth_file=self.config.backend.anthropic_auth_file,
                     anthropic_model=self.config.backend.anthropic_model,
@@ -267,6 +268,7 @@ class Agent:
             BackendConfig(
                 claude_path=self.config.backend.claude_path,
                 codex_path=self.config.backend.codex_path,
+                codex_model=self.config.backend.codex_model,
                 anthropic_api_key=self.config.backend.anthropic_api_key,
                 anthropic_auth_file=self.config.backend.anthropic_auth_file,
                 anthropic_model=self.config.backend.anthropic_model,

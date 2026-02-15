@@ -123,6 +123,7 @@ def main():
             BackendConfig(
                 claude_path=config.backend.claude_path,
                 codex_path=config.backend.codex_path,
+                codex_model=config.backend.codex_model,
                 anthropic_api_key=config.backend.anthropic_api_key,
                 anthropic_auth_file=config.backend.anthropic_auth_file,
                 anthropic_model=config.backend.anthropic_model,
