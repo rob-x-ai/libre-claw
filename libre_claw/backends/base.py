@@ -34,10 +34,6 @@ class BackendConfig:
     codex_path: str = "/opt/homebrew/bin/codex"
     codex_model: Optional[str] = None
 
-    openclaw_gateway_url: str = "http://127.0.0.1:18789"
-    openclaw_gateway_token: Optional[str] = None
-    openai_codex_model: str = "openai-codex/gpt-5.3-codex"
-
     anthropic_api_key: Optional[str] = None
     anthropic_auth_file: Optional[str] = None
     anthropic_model: str = "claude-3-7-sonnet-latest"
