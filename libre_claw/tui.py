@@ -449,6 +449,28 @@ class TUI:
             return None
         return match.group(1).strip()
 
+    def _extract_diff_block(self, text: str) -> Optional[str]:
+        match = re.search(r"```diff\n([\s\S]*?)\n```", text)
+        if not match:
+            return None
+        return match.group(1).strip()
+
+    def _apply_unified_diff(self, diff_text: str) -> str:
+        try:
+            p = subprocess.run(
+                ["git", "apply", "--whitespace=fix", "-"],
+                cwd=str(self.agent.workspace.path),
+                input=diff_text,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if p.returncode == 0:
+                return "Applied unified diff successfully."
+            return f"Diff apply failed: {(p.stderr or p.stdout).strip()[:300]}"
+        except Exception as e:
+            return f"Diff apply error: {e}"
+
     def _should_auto_apply(self, user_input: str) -> bool:
         lowered = user_input.lower()
         triggers = ["edit", "update", "create", "write", "fix", "patch", "implement"]
@@ -635,10 +657,25 @@ class TUI:
                     # Optional auto-apply for coding-assistant style file actions.
                     if self._should_auto_apply(user_input):
                         script = self._extract_bash_block(response)
-                        if script:
+                        diff_block = self._extract_diff_block(response)
+
+                        # If no diff provided, ask model to provide one for preview.
+                        if script and not diff_block:
+                            diff_req = self.agent.handle_message(
+                                "Convert your proposed file edits into a single ```diff``` block only. No prose."
+                            )
+                            diff_block = self._extract_diff_block(diff_req)
+
+                        if script or diff_block:
                             decision = self._approval_mode
                             if self._approval_mode == "ask":
                                 self.console.print("\n  [command]Edit proposal detected.[/command]")
+                                preview = diff_block or script or "(no preview)"
+                                self.console.print(Panel(
+                                    Markdown(f"```\n{preview[:4000]}\n```"),
+                                    title="Proposed changes",
+                                    border_style="blue",
+                                ))
                                 choice = Prompt.ask(
                                     "  Approve edits?",
                                     choices=["once", "always", "never"],
@@ -654,7 +691,10 @@ class TUI:
                                     decision = "never"
 
                             if decision in {"once", "always"}:
-                                apply_result = self._auto_apply_shell_script(script)
+                                if diff_block:
+                                    apply_result = self._apply_unified_diff(diff_block)
+                                else:
+                                    apply_result = self._auto_apply_shell_script(script or "")
                                 response = f"{response}\n\n---\n**Auto-apply:** {apply_result}"
                             else:
                                 response = f"{response}\n\n---\n**Auto-apply:** denied by user preference"
