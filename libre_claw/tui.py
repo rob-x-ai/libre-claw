@@ -110,6 +110,7 @@ class TUI:
         self._message_count = 0
         self._approval_mode = "ask"  # ask | always | never
         self._auto_apply_verbose = bool(self.config.heartbeat.auto_apply_verbose)
+        self._stdin_buffer = b""
 
     def _workspace_config_path(self) -> Path:
         return self.agent.workspace.path / "config.yaml"
@@ -1408,15 +1409,36 @@ class TUI:
             return None
         return sys.stdin.buffer.read(1)
 
-    @staticmethod
-    def _read_key_from_terminal(fd: int) -> str:
-        first = sys.stdin.buffer.read(1)
+    def _read_stdin(self, fd: int) -> Optional[bytes]:
+        if self._stdin_buffer:
+            data = self._stdin_buffer[:1]
+            self._stdin_buffer = self._stdin_buffer[1:]
+            return data
+        return sys.stdin.buffer.read(1)
+
+    def _unread_stdin(self, data: bytes) -> None:
+        if data:
+            self._stdin_buffer = data + self._stdin_buffer
+
+    def _read_key_from_terminal(self, fd: int) -> str:
+        first = self._read_stdin(fd)
         if not first:
             return "EOF"
         if first in {b"\r", b"\n"}:
-            if select.select([fd], [], [], 0.001)[0]:
-                return "SOFT_ENTER"
-            return "ENTER"
+            tail = bytearray()
+            while True:
+                nxt = self._read_with_timeout(fd, 0.03)
+                if nxt is None:
+                    break
+                tail.extend(nxt)
+            if not tail:
+                return "ENTER"
+            if tail.startswith(b"\n"):
+                tail = tail[1:]
+                if not tail:
+                    return "ENTER"
+            self._unread_stdin(bytes(tail))
+            return "SOFT_ENTER"
         if first in {b"\x03"}:
             raise KeyboardInterrupt
         if first in {b"\x7f", b"\b"}:
