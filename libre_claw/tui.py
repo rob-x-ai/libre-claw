@@ -4,8 +4,12 @@ Rich-based TUI with slash commands, streaming output, and a polished experience.
 """
 
 import re
+import select
 import shutil
+import sys
 import subprocess
+import termios
+import tty
 import time
 import textwrap
 from datetime import datetime
@@ -1397,6 +1401,114 @@ class TUI:
             m = (seconds % 3600) // 60
             return f"{h}h {m}m"
 
+    @staticmethod
+    def _read_with_timeout(fd: int, timeout: float) -> Optional[bytes]:
+        ready, _, _ = select.select([fd], [], [], timeout)
+        if not ready:
+            return None
+        return sys.stdin.buffer.read(1)
+
+    @staticmethod
+    def _read_key_from_terminal(fd: int) -> str:
+        first = sys.stdin.buffer.read(1)
+        if not first:
+            return "EOF"
+        if first in {b"\r", b"\n"}:
+            if select.select([fd], [], [], 0.001)[0]:
+                return "SOFT_ENTER"
+            return "ENTER"
+        if first in {b"\x03"}:
+            raise KeyboardInterrupt
+        if first in {b"\x7f", b"\b"}:
+            return "BACKSPACE"
+        if first == b"\x15":
+            return "CTRL_U"
+        if first == b"\x04":
+            return "EOF"
+
+        if first != b"\x1b":
+            return first.decode("utf-8", "ignore")
+
+        seq = bytearray(first)
+        while True:
+            nxt = TUI._read_with_timeout(fd, 0.002)
+            if nxt is None:
+                break
+            seq.extend(nxt)
+            if nxt in {b"~", b"u"}:
+                break
+            if len(seq) > 16:
+                break
+
+        esc = seq.decode("utf-8", "ignore")
+        if re.fullmatch(r"\x1b\[[0-9]+;2u", esc):
+            return "SHIFT_ENTER"
+        if esc in {"\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D"}:
+            return "ARROW"
+        return "ESC"
+
+    def _format_input_line_prefix(self, line_no: int) -> str:
+        return f"{line_no:>3}| "
+
+    def _read_multiline_input(self) -> str:
+        if not sys.stdin.isatty():
+            return Prompt.ask("\n [user]>[/user]")
+
+        fd = sys.stdin.fileno()
+        old_attrs = termios.tcgetattr(fd)
+        lines: list[str] = [""]
+        line_no = 1
+
+        try:
+            tty.setraw(fd)
+            sys.stdout.write(f"\n{self._format_input_line_prefix(line_no)}")
+            sys.stdout.flush()
+
+            while True:
+                key = self._read_key_from_terminal(fd)
+                if key == "":
+                    continue
+
+                if key == "ENTER":
+                    return "\n".join(lines).strip("\n")
+
+                if key in {"SHIFT_ENTER", "SOFT_ENTER"}:
+                    lines.append("")
+                    line_no += 1
+                    sys.stdout.write("\n")
+                    sys.stdout.write(self._format_input_line_prefix(line_no))
+                    continue
+
+                if key == "BACKSPACE":
+                    current = lines[-1]
+                    if not current:
+                        continue
+                    lines[-1] = current[:-1]
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+                    continue
+
+                if key == "CTRL_U":
+                    lines[-1] = ""
+                    sys.stdout.write("\r\033[K")
+                    sys.stdout.write(self._format_input_line_prefix(line_no))
+                    sys.stdout.flush()
+                    continue
+
+                if key in {"ESC", "ARROW"}:
+                    continue
+
+                if key == "EOF":
+                    raise KeyboardInterrupt
+
+                lines[-1] += key
+                sys.stdout.write(key)
+                sys.stdout.flush()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
     def run(self) -> None:
         """Run the TUI main loop."""
         self._running = True
@@ -1406,7 +1518,7 @@ class TUI:
             while self._running:
                 try:
                     # Prompt
-                    user_input = Prompt.ask("\n [user]>[/user]")
+                    user_input = self._read_multiline_input()
 
                     if not user_input.strip():
                         continue
