@@ -5,7 +5,7 @@ Uses local Codex login session (ChatGPT OAuth) via `codex exec`.
 
 import subprocess
 import tempfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .base import BackendConfig, BaseBackend, Message, Response
 
@@ -23,13 +23,7 @@ class CodexCLIBackend(BaseBackend):
     def supports_tools(self) -> bool:
         return False
 
-    def complete(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        context: Optional[Dict[str, str]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-    ) -> Response:
+    def _build_prompt(self, prompt: str, system_prompt: Optional[str], context: Optional[Dict[str, str]]) -> str:
         parts = []
         if system_prompt:
             parts.append(f"<system>\n{system_prompt}\n</system>")
@@ -37,7 +31,16 @@ class CodexCLIBackend(BaseBackend):
             for filename, content in context.items():
                 parts.append(f"<file name=\"{filename}\">\n{content}\n</file>")
         parts.append(prompt)
-        full_prompt = "\n\n".join(parts)
+        return "\n\n".join(parts)
+
+    def complete_with_progress(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        context: Optional[Dict[str, str]] = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> Response:
+        full_prompt = self._build_prompt(prompt, system_prompt, context)
 
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=True) as out:
             cmd = [
@@ -46,26 +49,53 @@ class CodexCLIBackend(BaseBackend):
                 "--skip-git-repo-check",
                 "--output-last-message",
                 out.name,
+                "--json",
             ]
             if self.config.codex_model:
                 cmd.extend(["-m", self.config.codex_model])
             cmd.append(full_prompt)
+
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                if result.returncode != 0:
-                    return Response(content=f"Error: Codex exec failed: {result.stderr.strip()}", stop_reason="error")
+                if progress_callback:
+                    progress_callback("starting codex")
+
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+
+                if proc.stdout:
+                    for line in proc.stdout:
+                        text = (line or "").strip()
+                        if not text:
+                            continue
+                        if progress_callback:
+                            progress_callback(f"codex: {text[:120]}")
+
+                return_code = proc.wait(timeout=300)
+                stderr = proc.stderr.read().strip() if proc.stderr else ""
+
+                if return_code != 0:
+                    return Response(content=f"Error: Codex exec failed: {stderr}", stop_reason="error")
 
                 out.seek(0)
                 content = out.read().decode("utf-8").strip()
-                if not content:
-                    # fallback to stdout
-                    content = result.stdout.strip()
-
                 return Response(content=content, model="codex-cli", stop_reason="end_turn")
             except FileNotFoundError:
                 return Response(content=f"Error: Codex CLI not found at {self._codex_path}", stop_reason="error")
             except Exception as e:
                 return Response(content=f"Error: {e}", stop_reason="error")
+
+    def complete(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        context: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Response:
+        return self.complete_with_progress(prompt, system_prompt=system_prompt, context=context)
 
     def chat(
         self,

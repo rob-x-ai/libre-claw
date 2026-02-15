@@ -19,6 +19,7 @@ from rich.text import Text
 from rich.theme import Theme
 
 from .agent import Agent, AgentMode
+from .backends import Message
 from .config import Config
 
 # Custom theme
@@ -405,10 +406,35 @@ class TUI:
                     # Display user message
                     self._message_count += 1
 
-                    # Get response with spinner
-                    with self.console.status("[dim]Thinking...[/dim]", spinner="dots"):
+                    # Get response with visible execution phases
+                    with self.console.status("[dim]Preparing request...[/dim]", spinner="dots") as status:
                         t0 = time.monotonic()
-                        response = self.agent.handle_message(user_input)
+                        backend_name = self.agent.backend.name
+                        status.update(f"[dim]Using backend: {backend_name}[/dim]")
+
+                        if backend_name == "codex-cli" and hasattr(self.agent.backend, "complete_with_progress"):
+                            context = self.agent.workspace.get_context(mode="direct")
+                            system_prompt = self.agent._build_system_prompt(context, is_heartbeat=False)
+
+                            self.agent.backend.add_message(Message(role="user", content=user_input))
+
+                            def _progress(msg: str) -> None:
+                                status.update(f"[dim]{msg}[/dim]")
+
+                            resp = self.agent.backend.complete_with_progress(
+                                prompt=user_input,
+                                system_prompt=system_prompt,
+                                context=context,
+                                progress_callback=_progress,
+                            )
+                            self.agent.backend.add_message(Message(role="assistant", content=resp.content))
+                            self.agent.state.message_count += 1
+                            self.agent.state.last_activity = datetime.now()
+                            response = resp.content
+                        else:
+                            status.update("[dim]Waiting for model response...[/dim]")
+                            response = self.agent.handle_message(user_input)
+
                         elapsed = time.monotonic() - t0
 
                     # Display response
