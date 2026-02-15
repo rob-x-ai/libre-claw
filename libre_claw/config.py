@@ -11,6 +11,17 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
 
+DEFAULT_CODEX_MODELS = [
+    "openai-codex/gpt-5.1",
+    "openai-codex/gpt-5.1-codex-max",
+    "openai-codex/gpt-5.1-codex-mini",
+    "openai-codex/gpt-5.2",
+    "openai-codex/gpt-5.2-codex",
+    "openai-codex/gpt-5.3-codex",
+    "openai-codex/gpt-5.3-codex-spark",
+]
+
+
 class BackendConfig(BaseModel):
     """Backend configuration."""
 

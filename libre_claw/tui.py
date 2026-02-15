@@ -20,7 +20,7 @@ from rich.theme import Theme
 
 from .agent import Agent, AgentMode
 from .backends import Message
-from .config import Config
+from .config import Config, DEFAULT_CODEX_MODELS
 
 # Custom theme
 THEME = Theme({
@@ -295,7 +295,22 @@ class TUI:
                 elif backend == "codex_cli":
                     model = self.config.backend.codex_model or "(codex default)"
                     self.console.print(f"  Current model: [bold]{model}[/bold] (codex_cli)")
-                    self.console.print("  [dim]Set explicit override with: /model <model-id>[/dim]")
+                    for i, m in enumerate(DEFAULT_CODEX_MODELS, 1):
+                        self.console.print(f"  [dim]{i:>2}.[/dim] {m}")
+                    pick = Prompt.ask("  Pick model number (or Enter to keep current)", default="").strip()
+                    if pick:
+                        try:
+                            idx = int(pick)
+                            if 1 <= idx <= len(DEFAULT_CODEX_MODELS):
+                                chosen = DEFAULT_CODEX_MODELS[idx - 1]
+                                self.config.backend.codex_model = chosen
+                                self._save_user_config()
+                                self.agent.switch_backend(backend)
+                                self.console.print(f"  [system]Saved model '{chosen}' for backend {backend}[/system]")
+                            else:
+                                self.console.print("  [error]Invalid model number[/error]")
+                        except ValueError:
+                            self.console.print("  [error]Please enter a number[/error]")
                 else:
                     self.console.print(f"  Backend [bold]{backend}[/bold] does not expose a model selector")
             else:
@@ -334,7 +349,10 @@ class TUI:
 
         elif cmd == "models":
             backend = self.config.backend.type
-            if hasattr(self.agent.backend, "list_models"):
+            if backend == "codex_cli":
+                for m in DEFAULT_CODEX_MODELS:
+                    self.console.print(f"  [dim]•[/dim] {m}")
+            elif hasattr(self.agent.backend, "list_models"):
                 models = self.agent.backend.list_models()
                 if models:
                     for m in models[:100]:
