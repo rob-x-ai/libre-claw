@@ -35,7 +35,7 @@ class BackendConfig(BaseModel):
 class WorkspaceConfig(BaseModel):
     """Workspace configuration."""
 
-    path: str = Field(default="~/.openclaw/workspace", description="Workspace directory path")
+    path: str = Field(default="~/.libre-claw/workspace", description="Workspace directory path")
 
 
 class HeartbeatConfig(BaseModel):
