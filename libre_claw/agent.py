@@ -4,6 +4,8 @@ Provides Agent class with handle_message, heartbeat_tick, and mode switching.
 """
 
 import threading
+import re
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass
@@ -127,8 +129,11 @@ class Agent:
     def handle_heartbeat(self, prompt: Optional[str] = None) -> str:
         """Handle a heartbeat poll in heartbeat mode."""
         self._set_mode(AgentMode.HEARTBEAT)
+        return self._run_heartbeat_cycle(prompt=prompt)
 
+    def _run_heartbeat_cycle(self, prompt: Optional[str] = None) -> str:
         context = self.workspace.get_context(mode="heartbeat")
+        system_prompt = self._build_system_prompt(context, is_heartbeat=True)
         hb_prompt = prompt or self.config.heartbeat.prompt
 
         # Include HEARTBEAT.md content in the prompt
@@ -136,45 +141,204 @@ class Agent:
         if hb_content:
             hb_prompt += f"\n\n# HEARTBEAT.md\n{hb_content}"
 
-        system_prompt = self._build_system_prompt(context, is_heartbeat=True)
+        max_steps = max(1, int(self.config.heartbeat.proactive_iterations))
+        last_prompt = hb_prompt
+        last_result = "NO_REPLY"
 
-        response = self.backend.complete(
-            prompt=hb_prompt,
-            system_prompt=system_prompt,
-            context=context,
-        )
+        for step in range(max_steps):
+            result = self._run_heartbeat_turn(
+                prompt=last_prompt,
+                context=context,
+                system_prompt=system_prompt,
+            )
+            if not result:
+                result = "NO_REPLY"
 
-        processed = self._process_heartbeat_response(response.content)
-        response.content = processed
+            last_result = result
+
+            action_summary = self._execute_heartbeat_actions(result)
+            if not self._should_continue_heartbeat(content=result, action_summary=action_summary):
+                break
+
+            if step + 1 < max_steps:
+                last_prompt = self._build_heartbeat_followup_prompt(
+                    previous_output=result,
+                    action_summary=action_summary,
+                )
+
         self.state.last_activity = datetime.now()
-        return response.content
+        return last_result
 
-    def _process_heartbeat_response(self, content: str) -> str:
+    def _run_heartbeat_turn(
+        self,
+        prompt: str,
+        context: Dict[str, str],
+        system_prompt: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        self.backend.add_message(Message(role="user", content=prompt))
+
+        history = self.backend.get_history()
+        messages = [Message(role="system", content=system_prompt)] + history
+
+        response_text = ""
+        try:
+            response = self.backend.chat(messages=messages, tools=tools)
+            response_text = response.content
+        except Exception:
+            response = self.backend.complete(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                context=context,
+                tools=tools,
+            )
+            response_text = response.content
+
+        if response_text is None:
+            response_text = ""
+
+        self.backend.add_message(Message(role="assistant", content=response_text))
+        return response_text
+
+    def _build_heartbeat_followup_prompt(self, previous_output: str, action_summary: str) -> str:
+        bits = [
+            "Continue from the previous heartbeat output and take the next required action.",
+            "Do not repeat the same step.",
+            "If no further action is needed, respond exactly: NO_REPLY.",
+        ]
+        if previous_output:
+            bits.append(f"Previous output:\n{previous_output}")
+        if action_summary:
+            bits.append(f"Actions taken:\n{action_summary}")
+
+        bits.append(
+            "When summarizing memory, keep using MEMORY_UPDATE: <text>. "
+            "For changes, include one ```diff``` block or one ```bash``` block."
+        )
+        return "\n\n".join(bits)
+
+    def _should_continue_heartbeat(self, content: str, action_summary: str) -> bool:
+        if self._is_no_more_action(content):
+            return bool(action_summary) or self._has_heartbeat_memory_hint(content)
+
+        return True
+
+    def _is_no_more_action(self, content: str) -> bool:
         if not content:
-            return content
+            return True
+        normalized = content.strip().upper()
+        if normalized in {"NO_REPLY", "DONE"}:
+            return True
+        if any(marker in normalized for marker in ("DONE", "TASK COMPLETE", "ALL_DONE")):
+            return True
+        if "NO_REPLY" in normalized and len(normalized) <= 20:
+            return True
+        return False
 
-        normalized = content.strip()
-        if normalized.upper() == "NO_REPLY":
-            return "NO_REPLY"
+    def _has_heartbeat_memory_hint(self, content: str) -> bool:
+        if not content:
+            return False
+        normalized = content.strip().upper()
+        return normalized.startswith(("MEMORY_UPDATE:", "MEMORY:", "CURATE_MEMORY:"))
 
-        lines = [line.strip() for line in normalized.splitlines() if line.strip()]
-        if not lines:
-            return content
+    def _extract_memory_updates(self, content: str) -> List[str]:
+        updates: List[str] = []
+        if not content:
+            return updates
 
-        first_line = lines[0]
-        directives = ("MEMORY_UPDATE:", "MEMORY:", "CURATE_MEMORY:")
-        for marker in directives:
-            marker_len = len(marker)
-            if first_line.upper().startswith(marker):
-                memory_text = first_line[marker_len:].strip()
-                if not memory_text and len(lines) > 1:
-                    memory_text = "\n".join(lines[1:]).strip()
-                if memory_text:
-                    self._remember_heartbeat_memory(memory_text)
-                # If only memory directive exists, keep response concise.
-                return "\n".join(lines[1:]).strip() if len(lines) > 1 else "MEMORY_UPDATE"
+        lines = content.splitlines()
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            upper = stripped.upper()
+            if upper.startswith("MEMORY_UPDATE:"):
+                body = stripped[len("MEMORY_UPDATE:"):].strip()
+                if not body:
+                    body_lines = []
+                    for follow_line in lines[idx + 1 :]:
+                        if not follow_line.strip():
+                            break
+                        body_lines.append(follow_line.strip())
+                    body = "\n".join(body_lines).strip()
+                if body:
+                    updates.append(body)
+            elif upper.startswith("MEMORY:"):
+                body = stripped[len("MEMORY:"):].strip()
+                if body:
+                    updates.append(body)
+            elif upper.startswith("CURATE_MEMORY:"):
+                body = stripped[len("CURATE_MEMORY:"):].strip()
+                if body:
+                    updates.append(body)
 
-        return content
+        return updates
+
+    def _extract_diff_blocks(self, text: str) -> List[str]:
+        return [match.strip() for match in re.findall(r"```diff\n([\s\S]*?)\n```", text)]
+
+    def _extract_bash_blocks(self, text: str) -> List[str]:
+        return [
+            match.strip()
+            for match in re.findall(r"```(?:bash|sh|shell)\n([\s\S]*?)\n```", text)
+        ]
+
+    def _apply_unified_diff(self, diff_text: str) -> str:
+        try:
+            p = subprocess.run(
+                ["git", "apply", "--whitespace=fix", "-"],
+                cwd=str(self.workspace.path),
+                input=diff_text,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if p.returncode == 0:
+                return "Applied unified diff successfully."
+            return f"Diff apply failed: {(p.stderr or p.stdout).strip()[:300]}"
+        except Exception as e:
+            return f"Diff apply error: {e}"
+
+    def _auto_apply_shell_script(self, script: str) -> str:
+        blocked = ["rm -rf /", "mkfs", "shutdown", "reboot", "diskutil erase"]
+        lowered = script.lower()
+        if any(blocked in lowered for blocked in blocked):
+            return "Auto-apply blocked: destructive command detected"
+
+        try:
+            result = subprocess.run(
+                ["bash", "-lc", script],
+                cwd=str(self.workspace.path),
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+            out = (result.stdout or "").strip()
+            err = (result.stderr or "").strip()
+            if result.returncode == 0:
+                return f"Auto-apply command succeeded. {(out or err)[:300]}".strip()
+            return f"Auto-apply command failed (exit {result.returncode}). {(err or out)[:300]}".strip()
+        except Exception as e:
+            return f"Auto-apply command error: {e}"
+
+    def _execute_heartbeat_actions(self, content: str) -> str:
+        outputs: List[str] = []
+
+        updates = self._extract_memory_updates(content)
+        for update in updates:
+            self._remember_heartbeat_memory(update)
+            outputs.append(f"MEMORY_UPDATE: {update}")
+
+        if not self.config.heartbeat.auto_apply_actions:
+            return "\n".join(outputs)
+
+        diff_blocks = self._extract_diff_blocks(content)
+        for diff_block in diff_blocks:
+            outputs.append(self._apply_unified_diff(diff_block))
+
+        shell_blocks = self._extract_bash_blocks(content)
+        for block in shell_blocks:
+            outputs.append(self._auto_apply_shell_script(block))
+
+        return "\n".join(outputs)
 
     def heartbeat_tick(self) -> str:
         return self.handle_heartbeat()

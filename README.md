@@ -107,7 +107,9 @@ workspace:
 
 heartbeat:
   enabled: true
-  interval_seconds: 15m  # supports seconds/minutes/hours, e.g. 30, 15m, 2h
+  interval_seconds: 30m  # supports seconds/minutes/hours, e.g. 30, 15m, 2h
+  proactive_iterations: 3  # max follow-up model turns per heartbeat
+  auto_apply_actions: true  # apply valid ```diff``` / ```bash``` heartbeat actions automatically
   prompt: |
     Read HEARTBEAT.md and follow it.
     If nothing needs action, reply NO_REPLY.

@@ -11,7 +11,7 @@ Add tasks here that should run periodically.
 
 ## Rules
 
-- Run one check per heartbeat to minimize token burn
+- Continue until no more work is found or the configured proactive limit is reached.
 - Report if actionable, otherwise reply NO_REPLY
 - If useful, update memory by including a MEMORY_UPDATE: entry in your output
 - Update timestamps in heartbeat-state.json after each check

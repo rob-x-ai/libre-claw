@@ -124,6 +124,14 @@ class HeartbeatConfig(BaseModel):
         default="30m",
         description="Heartbeat poll interval (supports seconds, minutes, hours, e.g. 30, 15m, 2h)",
     )
+    proactive_iterations: int = Field(
+        default=3,
+        description="Max autonomous heartbeat follow-up iterations per tick (closed-loop behavior).",
+    )
+    auto_apply_actions: bool = Field(
+        default=True,
+        description="Whether heartbeat action blocks (diff/script) are applied automatically.",
+    )
     prompt: str = Field(
         default="Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
         "Do not infer or repeat old tasks. If nothing needs attention, reply NO_REPLY. "
@@ -135,6 +143,16 @@ class HeartbeatConfig(BaseModel):
     @classmethod
     def _normalize_interval_seconds(cls, value: Any) -> int:
         return _parse_heartbeat_interval(value)
+
+    @field_validator("proactive_iterations", mode="before")
+    @classmethod
+    def _normalize_proactive_iterations(cls, value: Any) -> int:
+        if isinstance(value, bool):
+            raise ValueError("proactive_iterations cannot be a boolean")
+        n = int(value)
+        if n <= 0:
+            raise ValueError("proactive_iterations must be >= 1")
+        return n
 
 
 class MemoryConfig(BaseModel):

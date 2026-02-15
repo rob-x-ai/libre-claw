@@ -126,7 +126,7 @@ def test_agent_heartbeat_memory_update():
         agent = Agent(backend=backend, workspace=ws, config=config, memory=fake_memory)
         response = agent.handle_heartbeat()
 
-        assert response == "MEMORY_UPDATE"
+        assert response == "MEMORY_UPDATE: captured heartbeat note"
         assert fake_memory.calls
         assert fake_memory.calls[0][0] == "captured heartbeat note"
         memory_file = (ws.path / "MEMORY.md").read_text()
