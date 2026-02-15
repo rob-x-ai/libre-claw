@@ -192,6 +192,12 @@ class Agent:
                 "\n# MODE\nYou are in DIRECT MODE. Follow RULE #0: single task discipline. "
                 "Do only what the user asks. Nothing more."
             )
+            parts.append(
+                "\n# DIRECT MODE HARD RULES\n"
+                "- If user asks to update profile/context files and required fields are missing, ask concise targeted follow-up questions first.\n"
+                "- Never replace unknown user facts with 'Not provided' unless the user explicitly asked for placeholders.\n"
+                "- Never switch to jokes/sarcasm when the user asks for concrete updates."
+            )
 
         return "\n\n".join(parts)
 
