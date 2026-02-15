@@ -64,10 +64,11 @@ class OpenAICodexOAuthBackend(BaseBackend):
         for msg in messages:
             if msg.role not in ("user", "assistant", "system"):
                 continue
+            content_type = "output_text" if msg.role == "assistant" else "input_text"
             out.append(
                 {
                     "role": msg.role,
-                    "content": [{"type": "input_text", "text": msg.content}],
+                    "content": [{"type": content_type, "text": msg.content}],
                 }
             )
         return out
