@@ -216,11 +216,15 @@ class Agent:
             if not should_continue:
                 break
 
+            context = self._hydrate_heartbeat_bootstrap_context(self.workspace.get_context(mode="heartbeat"))
+            system_prompt = self._build_system_prompt(context, is_heartbeat=True)
+
             if should_continue and step + 1 < max_steps:
                 last_prompt = self._build_heartbeat_followup_prompt(
                     previous_output=result,
                     action_summary=action_summary,
                     plan=last_plan,
+                    context=context,
                     step=step + 1,
                     max_steps=max_steps,
                 )
@@ -243,8 +247,9 @@ class Agent:
         system_prompt: str,
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
+        heartbeat_timestamp = self._heartbeat_timestamp_line()
         self.backend.add_message(
-            Message(role="user", content=f"[HEARTBEAT] {prompt}")
+            Message(role="user", content=f"[HEARTBEAT] {heartbeat_timestamp}: {prompt}")
         )
 
         history = self.backend.get_history()
@@ -256,7 +261,7 @@ class Agent:
             response_text = response.content
         except Exception:
             response = self.backend.complete(
-                prompt=prompt,
+                prompt=f"[HEARTBEAT] {heartbeat_timestamp}: {prompt}",
                 system_prompt=system_prompt,
                 context=context,
                 tools=tools,
@@ -275,11 +280,16 @@ class Agent:
     def _is_heartbeat_history_message(content: str) -> bool:
         return bool(content) and content.startswith("[HEARTBEAT] ")
 
+    def _heartbeat_timestamp_line(self) -> str:
+        now = datetime.now().astimezone()
+        return f"{now.strftime('%Y-%m-%d %H:%M:%S %Z%z')}".strip()
+
     def _build_heartbeat_followup_prompt(
         self,
         previous_output: str,
         action_summary: str,
         plan: Optional[Dict[str, Any]] = None,
+        context: Optional[Dict[str, str]] = None,
         step: int = 1,
         max_steps: int = 1,
     ) -> str:
@@ -289,6 +299,7 @@ class Agent:
             "Return **only** a JSON object with keys: "
             "next_step, expected_state_change, verification_check, done.",
         ]
+        bits.append(f"Current local timestamp: {self._heartbeat_timestamp_line()}")
         if previous_output:
             bits.append(f"Previous output:\n{previous_output}")
         if action_summary:
@@ -298,6 +309,10 @@ class Agent:
                 "Observed plan:\n"
                 f"{json.dumps(plan, indent=2)}"
             )
+        if context:
+            reflection = self._build_heartbeat_memory_reflection(context)
+            if reflection:
+                bits.append(reflection)
 
         bits.append(f"Heartbeat loop progress: step {step} of {max_steps}.")
 
@@ -309,6 +324,85 @@ class Agent:
         )
 
         return "\n\n".join(bits)
+
+    def _build_heartbeat_memory_reflection(self, context: Optional[Dict[str, str]]) -> str:
+        if not context:
+            return ""
+
+        user_facts, memory_facts = self._extract_heartbeat_memory_facts(context)
+        active_focus = self._build_heartbeat_active_focus_line(user_facts, memory_facts)
+
+        reflection_parts: List[str] = ["## HEARTBEAT SELF REFLECTION"]
+        reflection_parts.append(f"- ACTIVE_FOCUS: {active_focus}")
+        if user_facts:
+            reflection_parts.append("Known user profile facts:")
+            reflection_parts.extend(f"- {fact}" for fact in user_facts)
+
+        # Keep only recent memory entries to minimize prompt drift.
+        if memory_facts:
+            reflection_parts.append("Recent memories:")
+            reflection_parts.extend(f"- {fact}" for fact in memory_facts)
+
+        if len(reflection_parts) == 1:
+            return ""
+
+        reflection_parts.append("Before next action, re-anchor against these facts and only continue when your next state change is concrete.")
+        return "\n".join(reflection_parts)
+
+    def _extract_heartbeat_memory_facts(self, context: Optional[Dict[str, str]]) -> tuple[List[str], List[str]]:
+        if not context:
+            return [], []
+
+        user_facts: List[str] = []
+        user_section = (context.get("USER.md") or "").strip()
+        for line in user_section.splitlines():
+            clean = line.strip()
+            if clean.startswith("- **") and ":" in clean:
+                body = clean[3:].rstrip("*").strip()
+                if ":" in body:
+                    key, _, value = body.partition(":")
+                    key = key.strip().strip("*").strip()
+                    value = value.strip()
+                    if value and value.lower() not in {"not specified", "not provided", "n/a", ""}:
+                        user_facts.append(f"{key}: {value}")
+
+        memory_facts: List[str] = []
+        memory_section = (context.get("MEMORY.md") or "").strip()
+        for line in memory_section.splitlines():
+            clean = line.strip()
+            if not clean or clean.startswith("#") or clean.startswith("---") or clean.startswith("_") or clean.startswith("```"):
+                continue
+            if clean.startswith("- "):
+                fact = clean[2:].strip()
+                if fact and not fact.startswith("_"):
+                    memory_facts.append(fact)
+
+        user_facts = user_facts[:5]
+        memory_facts = memory_facts[-5:]
+        return user_facts, memory_facts
+
+    @staticmethod
+    def _build_heartbeat_active_focus_line(
+        user_facts: List[str],
+        memory_facts: List[str],
+    ) -> str:
+        parsed = {}
+        for fact in user_facts:
+            if ":" in fact:
+                key, _, value = fact.partition(":")
+                parsed[key.strip().lower()] = value.strip()
+
+        parts: List[str] = []
+        if "name" in parsed:
+            parts.append(f"name={parsed['name']}")
+        if "timezone" in parsed:
+            parts.append(f"timezone={parsed['timezone']}")
+        if "technical level" in parsed:
+            parts.append(f"tech={parsed['technical level']}")
+        parts.append(f"recent_memories={len(memory_facts)}")
+        if memory_facts:
+            parts.append(f"last_memory={memory_facts[-1][:80]}")
+        return "; ".join(parts) if parts else "no_stable_facts"
 
     def _build_heartbeat_step_log(
         self,
@@ -1667,6 +1761,7 @@ class Agent:
                 "Treat this workspace as your home. Alive means continue the loop until the task is complete and verifiable. "
                 "Follow HEARTBEAT.md checklist. Do not infer or repeat old tasks."
             )
+            parts.append(f"\n# HEARTBEAT TIMING\nCurrent local timestamp: {self._heartbeat_timestamp_line()}")
         else:
             parts.append(
                 "\n# MODE\nYou are in DIRECT MODE. Follow RULE #0: single task discipline. "
@@ -1695,6 +1790,17 @@ class Agent:
             else:
                 lines.append(f"- {filename}: not present in workspace")
 
+        user_facts, memory_facts = self._extract_heartbeat_memory_facts(context)
+        lines.append("")
+        lines.append("## MEMORY SNAPSHOT")
+        lines.append(f"- ACTIVE_FOCUS: {self._build_heartbeat_active_focus_line(user_facts, memory_facts)}")
+        if user_facts:
+            lines.append("Known user profile facts:")
+            lines.extend(f"- {fact}" for fact in user_facts)
+        if memory_facts:
+            lines.append("Recent memories:")
+            lines.extend(f"- {fact}" for fact in memory_facts)
+
         return "\n".join(lines)
 
     def _append_heartbeat_bootstrap_log(self) -> None:
@@ -1711,6 +1817,17 @@ class Agent:
                     manifest_lines.append(f"- {filename}: {status}")
                 else:
                     manifest_lines.append(f"- {filename}: missing")
+
+            user_facts, memory_facts = self._extract_heartbeat_memory_facts(context)
+            manifest_lines.append("")
+            manifest_lines.append("# MEMORY SNAPSHOT")
+            manifest_lines.append(f"- ACTIVE_FOCUS: {self._build_heartbeat_active_focus_line(user_facts, memory_facts)}")
+            if user_facts:
+                manifest_lines.append("Known user profile facts:")
+                manifest_lines.extend(f"- {fact}" for fact in user_facts)
+            if memory_facts:
+                manifest_lines.append("Recent memories:")
+                manifest_lines.extend(f"- {fact}" for fact in memory_facts)
 
             entry = "\n".join(manifest_lines)
             self.workspace.append(self.HEARTBEAT_BOOTSTRAP_LOG, f"\n## {datetime.now().isoformat()}\n{entry}\n")
