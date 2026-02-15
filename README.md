@@ -69,7 +69,7 @@ my-workspace/
 | `/heartbeat` | Trigger manual heartbeat |
 | `/proactive [start\|stop\|status]` | Control background proactive loop |
 | `/mode [direct\|heartbeat]` | Show/switch mode |
-| `/backend [claude_code\|anthropic\|openai\|ollama]` | Show/switch model provider |
+| `/backend [claude_code\|codex_cli\|anthropic\|openai\|ollama]` | Show/switch model provider |
 | `/login openai` | Import Codex/OpenAI auth or paste token, then switch backend |
 | `/context` | Show loaded context files |
 | `/daily <text>` | Append to today's daily note |
@@ -83,7 +83,7 @@ my-workspace/
 ```yaml
 # config.yaml
 backend:
-  type: openai                # claude_code, anthropic, openai, ollama
+  type: openai                # claude_code, codex_cli, anthropic, openai, ollama
   claude_path: /opt/homebrew/bin/claude
 
   # Anthropic backend

@@ -5,6 +5,7 @@ from typing import Optional
 from .anthropic_api import AnthropicBackend
 from .base import BackendConfig, BaseBackend, Message, Response
 from .claude_code import ClaudeCodeBackend
+from .codex_cli import CodexCLIBackend
 from .ollama import OllamaBackend
 from .openai_api import OpenAIBackend
 
@@ -13,7 +14,7 @@ def get_backend(backend_type: str, config: Optional[BackendConfig] = None) -> Ba
     """Get a backend instance by type.
 
     Args:
-        backend_type: Type of backend ("claude_code", "ollama", "anthropic", "openai")
+        backend_type: Type of backend ("claude_code", "codex_cli", "ollama", "anthropic", "openai")
         config: Backend configuration
 
     Returns:
@@ -21,6 +22,8 @@ def get_backend(backend_type: str, config: Optional[BackendConfig] = None) -> Ba
     """
     if backend_type == "claude_code":
         return ClaudeCodeBackend(config)
+    elif backend_type == "codex_cli":
+        return CodexCLIBackend(config)
     elif backend_type == "ollama":
         return OllamaBackend(config)
     elif backend_type == "anthropic":
@@ -37,6 +40,7 @@ __all__ = [
     "Message",
     "Response",
     "ClaudeCodeBackend",
+    "CodexCLIBackend",
     "OllamaBackend",
     "AnthropicBackend",
     "OpenAIBackend",

@@ -14,8 +14,9 @@ from pydantic_settings import BaseSettings
 class BackendConfig(BaseModel):
     """Backend configuration."""
 
-    type: str = Field(default="claude_code", description="Backend type: claude_code, anthropic, openai, ollama")
+    type: str = Field(default="claude_code", description="Backend type: claude_code, codex_cli, anthropic, openai, ollama")
     claude_path: str = Field(default="/opt/homebrew/bin/claude", description="Path to Claude Code CLI")
+    codex_path: str = Field(default="/opt/homebrew/bin/codex", description="Path to Codex CLI")
 
     anthropic_api_key: Optional[str] = Field(default=None, description="Anthropic API key (sk-ant-*)")
     anthropic_auth_file: Optional[str] = Field(default="~/.config/libre-claw/auth/anthropic.json", description="Path to Anthropic auth JSON")

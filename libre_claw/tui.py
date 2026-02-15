@@ -4,6 +4,7 @@ Rich-based TUI with slash commands, streaming output, and a polished experience.
 """
 
 import json
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -43,7 +44,7 @@ class TUI:
         "heartbeat": "Trigger a manual heartbeat tick",
         "proactive": "Show/start/stop proactive loop (usage: /proactive [start|stop|status])",
         "mode": "Show or switch mode (usage: /mode [direct|heartbeat])",
-        "backend": "Show or switch backend (usage: /backend [claude_code|anthropic|openai|ollama])",
+        "backend": "Show or switch backend (usage: /backend [claude_code|codex_cli|anthropic|openai|ollama])",
         "login": "Import/login provider auth (usage: /login openai)",
         "context": "Show loaded workspace context files",
         "daily": "Append to today's daily note (usage: /daily <text>)",
@@ -216,9 +217,9 @@ class TUI:
         elif cmd == "backend":
             if args:
                 backend = args.lower().strip()
-                allowed = {"claude_code", "anthropic", "openai", "ollama"}
+                allowed = {"claude_code", "codex_cli", "anthropic", "openai", "ollama"}
                 if backend not in allowed:
-                    self.console.print("  [error]Invalid backend. Use: claude_code, anthropic, openai, ollama[/error]")
+                    self.console.print("  [error]Invalid backend. Use: claude_code, codex_cli, anthropic, openai, ollama[/error]")
                 else:
                     try:
                         self.agent.switch_backend(backend)
@@ -233,11 +234,21 @@ class TUI:
             if provider != "openai":
                 self.console.print("  [error]Usage: /login openai[/error]")
             else:
+                # First: if Codex OAuth session exists, use codex_cli backend directly
+                try:
+                    status = subprocess.run(["codex", "login", "status"], capture_output=True, text=True, timeout=10)
+                    if status.returncode == 0 and "Logged in" in status.stdout:
+                        self.agent.switch_backend("codex_cli")
+                        self.console.print("  [system]Detected Codex OAuth login. Backend switched to: codex_cli[/system]")
+                        return True
+                except Exception:
+                    pass
+
                 imported_from = self._import_openai_auth_from_codex()
                 if imported_from:
                     self.console.print(f"  [system]Imported OpenAI token from: {imported_from}[/system]")
                 else:
-                    self.console.print("  [system]No Codex auth file found. Please paste your OpenAI token.[/system]")
+                    self.console.print("  [system]No exportable Codex auth file found. Paste OpenAI API token.[/system]")
                     token = Prompt.ask("  [cyan]OpenAI token[/cyan]", password=True).strip()
                     if token:
                         target = self._openai_auth_target_path()

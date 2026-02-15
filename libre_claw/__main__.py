@@ -54,7 +54,7 @@ def main():
 
     parser.add_argument(
         "--backend",
-        choices=["claude_code", "ollama", "anthropic", "openai"],
+        choices=["claude_code", "codex_cli", "ollama", "anthropic", "openai"],
         help="Backend to use",
     )
 
@@ -122,6 +122,7 @@ def main():
             config.backend.type,
             BackendConfig(
                 claude_path=config.backend.claude_path,
+                codex_path=config.backend.codex_path,
                 anthropic_api_key=config.backend.anthropic_api_key,
                 anthropic_auth_file=config.backend.anthropic_auth_file,
                 anthropic_model=config.backend.anthropic_model,

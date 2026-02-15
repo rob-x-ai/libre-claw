@@ -31,6 +31,7 @@ class BackendConfig:
     """Configuration for a backend."""
 
     claude_path: str = "/opt/homebrew/bin/claude"
+    codex_path: str = "/opt/homebrew/bin/codex"
 
     anthropic_api_key: Optional[str] = None
     anthropic_auth_file: Optional[str] = None
