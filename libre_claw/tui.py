@@ -526,6 +526,24 @@ class TUI:
                             self.agent.state.message_count += 1
                             self.agent.state.last_activity = datetime.now()
                             response = resp.content
+                        elif backend_name == "openai-codex-oauth" and hasattr(self.agent.backend, "complete_with_progress"):
+                            context = self.agent.workspace.get_context(mode="direct")
+                            system_prompt = self.agent._build_system_prompt(context, is_heartbeat=False)
+                            self.agent.backend.add_message(Message(role="user", content=effective_input))
+
+                            def _progress(msg: str) -> None:
+                                status.update(f"[dim]{msg}[/dim]")
+
+                            resp = self.agent.backend.complete_with_progress(
+                                prompt=effective_input,
+                                system_prompt=system_prompt,
+                                context=context,
+                                progress_callback=_progress,
+                            )
+                            self.agent.backend.add_message(Message(role="assistant", content=resp.content))
+                            self.agent.state.message_count += 1
+                            self.agent.state.last_activity = datetime.now()
+                            response = resp.content
                         else:
                             status.update("[dim]Waiting for model response...[/dim]")
                             response = self.agent.handle_message(effective_input)

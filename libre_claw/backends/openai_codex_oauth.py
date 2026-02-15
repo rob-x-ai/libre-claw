@@ -6,7 +6,7 @@ Uses OAuth access token from auth-profiles.json and calls ChatGPT Codex Response
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
@@ -73,6 +73,21 @@ class OpenAICodexOAuthBackend(BaseBackend):
             )
         return out
 
+    def complete_with_progress(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        context: Optional[Dict[str, str]] = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> Response:
+        full_prompt = prompt
+        if context:
+            ctx = "\n\n".join(f"# {k}\n{v}" for k, v in context.items())
+            full_prompt = f"{ctx}\n\n# Current Request\n{prompt}"
+
+        messages = [Message(role="user", content=full_prompt)]
+        return self.chat(messages, progress_callback=progress_callback)
+
     def complete(
         self,
         prompt: str,
@@ -80,13 +95,14 @@ class OpenAICodexOAuthBackend(BaseBackend):
         context: Optional[Dict[str, str]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Response:
-        full_prompt = prompt
-        if context:
-            ctx = "\n\n".join(f"# {k}\n{v}" for k, v in context.items())
-            full_prompt = f"{ctx}\n\n# Current Request\n{prompt}"
-        return self.chat([Message(role="user", content=full_prompt)], tools=tools)
+        return self.complete_with_progress(prompt, system_prompt=system_prompt, context=context)
 
-    def chat(self, messages: List[Message], tools: Optional[List[Dict[str, Any]]] = None) -> Response:
+    def chat(
+        self,
+        messages: List[Message],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> Response:
         if not self._access:
             return Response(
                 content=(
@@ -122,6 +138,9 @@ class OpenAICodexOAuthBackend(BaseBackend):
                     body = res.read().decode("utf-8", errors="replace")
                     return Response(content=f"Error: OpenAI Codex HTTP {res.status_code}: {body}", stop_reason="error")
 
+                if progress_callback:
+                    progress_callback("warming up model ✨")
+
                 for line in res.iter_lines():
                     if not line:
                         continue
@@ -133,7 +152,18 @@ class OpenAICodexOAuthBackend(BaseBackend):
                             continue
 
                         et = event.get("type")
-                        if et == "response.output_text.delta":
+                        if et == "response.in_progress" and progress_callback:
+                            progress_callback("thinking 🧠")
+                        elif et == "response.output_item.added" and progress_callback:
+                            item = event.get("item") or {}
+                            item_type = item.get("type")
+                            if item_type == "reasoning":
+                                progress_callback("reasoning through it 🤓")
+                            elif item_type == "message":
+                                progress_callback("writing answer ✍️")
+                            else:
+                                progress_callback(f"working: {item_type}")
+                        elif et == "response.output_text.delta":
                             delta = event.get("delta")
                             if delta:
                                 content_parts.append(str(delta))
