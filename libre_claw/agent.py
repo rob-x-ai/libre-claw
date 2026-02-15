@@ -39,6 +39,20 @@ class AgentState:
 class Agent:
     """Main agent class for Libre Claw."""
 
+    HEARTBEAT_BOOTSTRAP_CONTEXT_FILES = [
+        "SOUL.md",
+        "USER.md",
+        "IDENTITY.md",
+        "AGENTS.md",
+        "HEARTBEAT.md",
+        "MEMORY.md",
+    ]
+    HEARTBEAT_BOOTSTRAP_LINK_FILES = [
+        "README.md",
+        "HEARTBEAT-AUDIT.md",
+    ]
+    HEARTBEAT_BOOTSTRAP_LOG = "HEARTBEAT-BOOTSTRAP.md"
+
     def __init__(
         self,
         backend: Optional[BaseBackend] = None,
@@ -98,6 +112,8 @@ class Agent:
         self._proactive_thread: Optional[threading.Thread] = None
         self._proactive_stop = threading.Event()
 
+        self._append_heartbeat_bootstrap_log()
+
     def handle_message(
         self,
         message: str,
@@ -148,14 +164,9 @@ class Agent:
         return result
 
     def _run_heartbeat_cycle(self, prompt: Optional[str] = None) -> str:
-        context = self.workspace.get_context(mode="heartbeat")
+        context = self._hydrate_heartbeat_bootstrap_context(self.workspace.get_context(mode="heartbeat"))
         system_prompt = self._build_system_prompt(context, is_heartbeat=True)
         hb_prompt = prompt or self.config.heartbeat.prompt
-
-        # Include HEARTBEAT.md content in the prompt
-        hb_content = self.workspace.read("HEARTBEAT.md")
-        if hb_content:
-            hb_prompt += f"\n\n# HEARTBEAT.md\n{hb_content}"
 
         max_steps = max(1, int(self.config.heartbeat.proactive_iterations))
         last_prompt = hb_prompt
@@ -967,6 +978,9 @@ class Agent:
                 parts.append(f"# {key}\n{val}")
 
         if is_heartbeat:
+            bootstrap = self._build_heartbeat_bootstrap_manifest(context)
+            if bootstrap:
+                parts.append(bootstrap)
             parts.append(
                 "\n# MODE\nYou are in HEARTBEAT MODE. Be proactive. Maintain systems. "
                 "You are the same model as the user-facing assistant inside this project. "
@@ -986,6 +1000,54 @@ class Agent:
             )
 
         return "\n\n".join(parts)
+
+    def _build_heartbeat_bootstrap_manifest(self, context: Dict[str, str]) -> str:
+        lines: List[str] = [
+            "# HEARTBEAT INITIALIZATION",
+            "The following workspace files are linked for this heartbeat session:",
+        ]
+
+        for filename in self.HEARTBEAT_BOOTSTRAP_CONTEXT_FILES + self.HEARTBEAT_BOOTSTRAP_LINK_FILES:
+            path = self.workspace.path / filename
+            if path.exists():
+                status = "loaded" if filename in context else "linked"
+                lines.append(f"- {filename}: {path} [{status}]")
+            else:
+                lines.append(f"- {filename}: not present in workspace")
+
+        return "\n".join(lines)
+
+    def _append_heartbeat_bootstrap_log(self) -> None:
+        try:
+            context = self._hydrate_heartbeat_bootstrap_context(self.workspace.get_context(mode="heartbeat"))
+            manifest_lines = [
+                "# HEARTBEAT BOOTSTRAP",
+                f"Workspace: {self.workspace.path}",
+            ]
+            for filename in self.HEARTBEAT_BOOTSTRAP_CONTEXT_FILES + self.HEARTBEAT_BOOTSTRAP_LINK_FILES:
+                path = self.workspace.path / filename
+                if path.exists():
+                    status = "loaded" if filename in context else "linked"
+                    manifest_lines.append(f"- {filename}: {status}")
+                else:
+                    manifest_lines.append(f"- {filename}: missing")
+
+            entry = "\n".join(manifest_lines)
+            self.workspace.append(self.HEARTBEAT_BOOTSTRAP_LOG, f"\n## {datetime.now().isoformat()}\n{entry}\n")
+        except Exception:
+            # Bootstrap logging must never break agent startup.
+            pass
+
+    def _hydrate_heartbeat_bootstrap_context(self, context: Dict[str, str]) -> Dict[str, str]:
+        hydrated = dict(context or {})
+        for filename in self.HEARTBEAT_BOOTSTRAP_CONTEXT_FILES:
+            if filename in hydrated:
+                continue
+            content = self.workspace.read(filename)
+            if content:
+                hydrated[filename] = content
+
+        return hydrated
 
     async def start_heartbeat(self) -> None:
         await self.heartbeat.start()
