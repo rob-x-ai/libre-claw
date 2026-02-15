@@ -330,10 +330,26 @@ class TUI:
                         timeout=45,
                     )
                     if check.returncode != 0:
-                        err = (check.stderr or "").strip().splitlines()
-                        tail = err[-1] if err else "model check failed"
-                        self.console.print(f"  [error]Codex model rejected: {tail}[/error]")
-                        self.console.print("  [system]Model not saved. Try /model openai-codex/gpt-5.3-codex[/system]")
+                        detail = "model check failed"
+                        for line in (check.stdout or "").splitlines()[::-1]:
+                            try:
+                                event = json.loads(line)
+                            except Exception:
+                                continue
+                            if event.get("type") == "error" and event.get("message"):
+                                detail = str(event.get("message"))
+                                break
+                            if event.get("type") == "turn.failed":
+                                err = event.get("error") or {}
+                                if err.get("message"):
+                                    detail = str(err.get("message"))
+                                    break
+                        if detail == "model check failed":
+                            err = (check.stderr or "").strip().splitlines()
+                            if err:
+                                detail = err[-1]
+                        self.console.print(f"  [error]Codex model rejected: {detail}[/error]")
+                        self.console.print("  [system]Model not saved. For ChatGPT OAuth, use /model openai-codex/gpt-5.3-codex[/system]")
                         return True
                     self.config.backend.codex_model = model
                 else:

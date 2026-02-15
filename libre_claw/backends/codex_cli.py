@@ -101,11 +101,29 @@ class CodexCLIBackend(BaseBackend):
                                 content = str(item.get("text"))
                                 break
 
+                codex_event_error = ""
+                if stdout_lines:
+                    for line in reversed(stdout_lines):
+                        try:
+                            event = json.loads(line)
+                        except Exception:
+                            continue
+                        if event.get("type") == "error" and event.get("message"):
+                            codex_event_error = str(event.get("message"))
+                            break
+                        if event.get("type") == "turn.failed":
+                            err = event.get("error") or {}
+                            if err.get("message"):
+                                codex_event_error = str(err.get("message"))
+                                break
+
                 if return_code != 0 and not content:
-                    return Response(content=f"Error: Codex exec failed: {stderr}", stop_reason="error")
+                    details = codex_event_error or stderr
+                    return Response(content=f"Error: Codex exec failed: {details}", stop_reason="error")
 
                 if not content:
-                    return Response(content="Error: Codex returned no assistant message", stop_reason="error")
+                    details = codex_event_error or "Codex returned no assistant message"
+                    return Response(content=f"Error: {details}", stop_reason="error")
 
                 return Response(content=content, model="codex-cli", stop_reason="end_turn")
             except FileNotFoundError:
