@@ -42,7 +42,7 @@ class BackendConfig(BaseModel):
     openai_codex_auth_profiles_file: str = Field(default="~/.openclaw/agents/main/agent/auth-profiles.json", description="Path to auth-profiles.json containing openai-codex oauth profile")
     openai_codex_profile: str = Field(default="openai-codex:default", description="OAuth profile name in auth-profiles.json")
     openai_codex_model: str = Field(default="openai-codex/gpt-5.3-codex", description="OpenAI Codex model id")
-    openai_codex_base_url: str = Field(default="https://api.openai.com/v1", description="OpenAI Codex API base URL")
+    openai_codex_base_url: str = Field(default="https://chatgpt.com/backend-api", description="OpenAI Codex OAuth API base URL")
 
     ollama_url: str = Field(default="http://localhost:11434", description="Ollama API URL")
     ollama_model: str = Field(default="llama2", description="Default Ollama model")

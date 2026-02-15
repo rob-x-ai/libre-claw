@@ -1,7 +1,7 @@
 """Standalone OpenAI Codex OAuth backend.
 
-Reads OAuth access token from auth-profiles.json (OpenClaw-compatible format),
-then calls OpenAI Chat Completions directly.
+Uses OAuth access token from auth-profiles.json and calls ChatGPT Codex Responses API
+(`https://chatgpt.com/backend-api/codex/responses`) directly.
 """
 
 import json
@@ -48,13 +48,24 @@ class OpenAICodexOAuthBackend(BaseBackend):
         except Exception:
             return None
 
-    def _build_messages(self, messages: List[Message], system_prompt: Optional[str] = None) -> List[Dict[str, str]]:
-        out: List[Dict[str, str]] = []
+    def _build_input(self, messages: List[Message], system_prompt: Optional[str] = None) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
         if system_prompt:
-            out.append({"role": "system", "content": system_prompt})
+            out.append(
+                {
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": system_prompt}],
+                }
+            )
         for msg in messages:
-            if msg.role in ("user", "assistant", "system"):
-                out.append({"role": msg.role, "content": msg.content})
+            if msg.role not in ("user", "assistant", "system"):
+                continue
+            out.append(
+                {
+                    "role": msg.role,
+                    "content": [{"type": "input_text", "text": msg.content}],
+                }
+            )
         return out
 
     def complete(
@@ -68,7 +79,7 @@ class OpenAICodexOAuthBackend(BaseBackend):
         if context:
             ctx = "\n\n".join(f"# {k}\n{v}" for k, v in context.items())
             full_prompt = f"{ctx}\n\n# Current Request\n{prompt}"
-        return self.chat([Message(role="user", content=full_prompt)])
+        return self.chat([Message(role="user", content=full_prompt)], tools=tools)
 
     def chat(self, messages: List[Message], tools: Optional[List[Dict[str, Any]]] = None) -> Response:
         if not self._access:
@@ -80,39 +91,68 @@ class OpenAICodexOAuthBackend(BaseBackend):
                 stop_reason="auth_missing",
             )
 
+        # OpenClaw-compatible codex endpoint semantics
+        endpoint = f"{self._base_url}/codex/responses"
+        model_id = self._model.split("/", 1)[1] if self._model.startswith("openai-codex/") else self._model
         payload = {
-            "model": self._model,
-            "messages": self._build_messages(messages),
-            "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
+            "model": model_id,
+            "store": False,
+            "stream": True,
+            "instructions": "You are helpful and concise.",
+            "input": self._build_input(messages),
         }
 
         try:
-            res = self._client.post(
-                f"{self._base_url}/chat/completions",
+            content_parts: List[str] = []
+            with self._client.stream(
+                "POST",
+                endpoint,
                 headers={
                     "Authorization": f"Bearer {self._access}",
                     "Content-Type": "application/json",
                 },
                 json=payload,
-            )
-            if res.status_code >= 400:
-                return Response(content=f"Error: OpenAI Codex HTTP {res.status_code}: {res.text}", stop_reason="error")
+            ) as res:
+                if res.status_code >= 400:
+                    body = res.read().decode("utf-8", errors="replace")
+                    return Response(content=f"Error: OpenAI Codex HTTP {res.status_code}: {body}", stop_reason="error")
 
-            data = res.json()
-            choice = (data.get("choices") or [{}])[0]
-            message = choice.get("message") or {}
+                for line in res.iter_lines():
+                    if not line:
+                        continue
+                    if line.startswith("data: "):
+                        data_line = line[6:]
+                        try:
+                            event = json.loads(data_line)
+                        except Exception:
+                            continue
+
+                        et = event.get("type")
+                        if et == "response.output_text.delta":
+                            delta = event.get("delta")
+                            if delta:
+                                content_parts.append(str(delta))
+                        elif et == "response.output_text.done" and not content_parts:
+                            txt = event.get("text")
+                            if txt:
+                                content_parts.append(str(txt))
+                        elif et in ("error", "response.failed"):
+                            msg = event.get("message") or event.get("error") or event
+                            return Response(content=f"Error: {msg}", stop_reason="error")
+
+            content = "".join(content_parts).strip()
+            if not content:
+                return Response(content="Error: Codex returned no assistant text", stop_reason="error")
+
             return Response(
-                content=message.get("content", ""),
-                usage=data.get("usage"),
-                model=data.get("model", self._model),
-                stop_reason=choice.get("finish_reason"),
+                content=content,
+                model=self._model,
+                stop_reason="stop",
             )
         except Exception as e:
             return Response(content=f"Error: {e}", stop_reason="error")
 
     def list_models(self) -> List[str]:
-        # Curated known codex model ids for picker UX.
         return [
             "openai-codex/gpt-5.1",
             "openai-codex/gpt-5.1-codex-max",
