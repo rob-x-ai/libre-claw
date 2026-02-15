@@ -95,9 +95,13 @@ def main():
         print(f"Initialized workspace at: {workspace.path}")
         return
 
-    # Determine workspace path first (default: current repo root)
+    # Determine workspace path first (default: repo-local .workspace)
     cwd = Path.cwd().resolve()
-    selected_workspace = args.workspace or str(cwd)
+    if cwd.name == ".workspace":
+        default_workspace = str(cwd)
+    else:
+        default_workspace = str((cwd / ".workspace").resolve())
+    selected_workspace = args.workspace or default_workspace
 
     # Load configuration (workspace config takes precedence over global)
     config = Config.load(args.config, workspace_path=selected_workspace)
