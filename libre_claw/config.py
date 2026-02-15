@@ -134,7 +134,8 @@ class HeartbeatConfig(BaseModel):
     )
     prompt: str = Field(
         default="Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
-        "Do not infer or repeat old tasks. If nothing needs attention, reply NO_REPLY. "
+        "If nothing needs attention, respond with a JSON plan: "
+        "{\"done\": true, \"next_step\": \"\", \"expected_state_change\": \"\", \"verification_check\": \"\"}. "
         "You can also update memory by prefixing a line with MEMORY_UPDATE:",
         description="Heartbeat poll prompt"
     )

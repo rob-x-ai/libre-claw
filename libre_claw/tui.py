@@ -421,6 +421,36 @@ class TUI:
             return None
         return match.group(1).strip()
 
+    @staticmethod
+    def _extract_raw_unified_diff_block(text: str) -> Optional[str]:
+        if not text:
+            return None
+
+        marker = text.find("diff --git")
+        if marker < 0:
+            return None
+
+        candidate = text[marker:].strip()
+        if not candidate:
+            return None
+
+        next_marker = candidate.find("\n\ndiff --git", 1)
+        if next_marker > 0:
+            candidate = candidate[:next_marker]
+        return candidate
+
+    @staticmethod
+    def _strip_json_command_prefix(text: str) -> str:
+        if not text:
+            return text
+
+        stripped = text.strip()
+        if stripped.startswith("{") and "\"cmd\"" in stripped[:80]:
+            close = stripped.find("}")
+            if close != -1 and close + 1 < len(stripped):
+                return stripped[close + 1 :].strip()
+        return text.strip()
+
     def _extract_diff_block(self, text: str) -> Optional[str]:
         if not text:
             return None
@@ -437,16 +467,28 @@ class TUI:
         if match:
             return match.group(0).strip()
 
+        raw = self._extract_raw_unified_diff_block(text)
+        if raw:
+            return raw
+
         return None
 
     def _apply_unified_diff(self, diff_text: str) -> str:
-        if diff_text.strip().startswith("*** Begin Patch"):
-            return self._apply_apply_patch_block(diff_text)
+        candidate = self._normalize_unified_diff(diff_text)
+        if not candidate:
+            return "Auto-apply: no valid diff content found."
+
+        embedded = self._extract_embedded_apply_patch(candidate)
+        if embedded:
+            return self._apply_apply_patch_block(embedded)
+
+        if candidate.strip().startswith("*** Begin Patch"):
+            return self._apply_apply_patch_block(candidate)
         try:
             p = subprocess.run(
                 ["git", "apply", "--whitespace=fix", "-"],
                 cwd=str(self.agent.workspace.path),
-                input=diff_text,
+                input=candidate,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -456,6 +498,23 @@ class TUI:
             return f"Diff apply failed: {(p.stderr or p.stdout).strip()[:300]}"
         except Exception as e:
             return f"Diff apply error: {e}"
+
+    @staticmethod
+    def _normalize_unified_diff(diff_text: str) -> str:
+        candidate = (diff_text or "").strip()
+        if not candidate:
+            return ""
+
+        if candidate.startswith("{") and "\"cmd\"" in candidate[:80]:
+            close = candidate.find("}")
+            if close != -1 and close + 1 < len(candidate):
+                candidate = candidate[close + 1 :].strip()
+
+        marker = candidate.find("diff --git")
+        if marker > 0:
+            candidate = candidate[marker:]
+
+        return candidate
 
     def _sanitize_apply_patch(self, patch_text: str) -> str:
         candidate = (patch_text or "").strip()
@@ -479,7 +538,7 @@ class TUI:
         if not text:
             return None
 
-        match = re.search(r"\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch", text)
+        match = re.search(r"\*\*\* Begin Patch[\s\S]*?\*\*\* End Patch", text)
         if match:
             return match.group(0).strip()
         return None
@@ -721,14 +780,19 @@ class TUI:
 
                     # Optional auto-apply for coding-assistant style file actions.
                     if self._should_auto_apply(user_input) and not (response or "").startswith("Error:"):
+                        response = self._strip_json_command_prefix(response)
+                        auto_steps = ["Auto-apply pipeline: analyzing assistant output."]
+                        self.console.print("  [dim]Auto-apply: analyzing assistant output for editable actions...[/dim]")
                         script = self._extract_bash_block(response)
                         diff_block = self._extract_diff_block(response)
 
                         # Always require actionable patch/script for edit intents.
                         if not diff_block and not script:
+                            auto_steps.append("No direct diff/script found; requesting a clean patch from the model.")
                             diff_req = self.agent.handle_message(
                                 "Provide only an actionable patch for the requested edit. Prefer a single ```diff``` block. No prose."
                             )
+                            diff_req = self._strip_json_command_prefix(diff_req)
                             diff_block = self._extract_diff_block(diff_req)
                             if not diff_block:
                                 script = self._extract_bash_block(diff_req)
@@ -758,23 +822,33 @@ class TUI:
                                     decision = "never"
 
                             if decision in {"once", "always"}:
+                                auto_steps.append(
+                                    "Applying proposed changes now."
+                                    if diff_block
+                                    else "Applying proposed shell command now."
+                                )
+                                self.console.print(f"  [system]{auto_steps[-1]}[/system]")
                                 if diff_block:
                                     apply_result = self._apply_unified_diff(diff_block)
                                 else:
                                     apply_result = self._auto_apply_shell_script(script or "")
-                                response = f"{response}\n\n---\n**Auto-apply:** {apply_result}"
+                                auto_steps.append(f"Auto-apply result: {apply_result}")
+                                response = f"{response}\n\n---\n" + "\n".join(auto_steps)
                             else:
-                                response = f"{response}\n\n---\n**Auto-apply:** denied by user preference"
+                                auto_steps.append("Auto-apply skipped: user denied edits.")
+                                response = f"{response}\n\n---\n" + "\n".join(auto_steps)
                                 alt = self.agent.handle_message(
                                     "User denied the proposed file edits. Provide next best steps without modifying files."
                                 )
+                                alt = self._strip_json_command_prefix(alt)
                                 response = f"{response}\n\n**Alternative plan:**\n{alt}"
                         else:
                             # Prevent fake "done" claims when no patch exists.
                             if self._looks_like_done_claim(response):
+                                auto_steps.append("NOT_APPLIED: no actionable patch/script produced.")
                                 response = (
                                     f"{response}\n\n---\n"
-                                    "**Auto-apply:** NOT_APPLIED (no actionable diff/script produced)."
+                                    "\n".join(auto_steps)
                                 )
 
                     response = f"{response}\n\n{self._workspace_changes_summary()}"

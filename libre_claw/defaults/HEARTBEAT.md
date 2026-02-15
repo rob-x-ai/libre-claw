@@ -12,6 +12,6 @@ Add tasks here that should run periodically.
 ## Rules
 
 - Continue until no more work is found or the configured proactive limit is reached.
-- Report if actionable, otherwise reply NO_REPLY
+- Report actions through structured JSON plan; when complete and verified, set done: true.
 - If useful, update memory by including a MEMORY_UPDATE: entry in your output
 - Update timestamps in heartbeat-state.json after each check

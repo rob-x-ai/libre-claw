@@ -7,6 +7,7 @@ import threading
 import re
 import subprocess
 import shutil
+import json
 import time
 import uuid
 from dataclasses import dataclass
@@ -153,6 +154,13 @@ class Agent:
         max_steps = max(1, int(self.config.heartbeat.proactive_iterations))
         last_prompt = hb_prompt
         last_result = "NO_REPLY"
+        step_logs: List[str] = []
+        last_plan: Dict[str, Any] = {
+            "done": False,
+            "next_step": "",
+            "expected_state_change": "",
+            "verification_check": "",
+        }
 
         for step in range(max_steps):
             result = self._run_heartbeat_turn(
@@ -163,19 +171,50 @@ class Agent:
             if not result:
                 result = "NO_REPLY"
 
+            parsed_plan = self._parse_heartbeat_plan(result)
+            if not parsed_plan:
+                parsed_plan = {"done": False, "next_step": "", "expected_state_change": "", "verification_check": ""}
+            last_plan = parsed_plan
             last_result = result
 
             action_summary = self._execute_heartbeat_actions(result)
-            if not self._should_continue_heartbeat(content=result, action_summary=action_summary):
+            should_continue = self._should_continue_heartbeat(
+                plan=last_plan,
+                action_summary=action_summary,
+                raw_content=result,
+            )
+            step_logs.append(
+                self._build_heartbeat_step_log(
+                    step=step + 1,
+                    max_steps=max_steps,
+                    plan=last_plan,
+                    model_output=result,
+                    action_summary=action_summary,
+                    continue_after=should_continue,
+                )
+            )
+
+            if not should_continue:
                 break
 
-            if step + 1 < max_steps:
+            if should_continue and step + 1 < max_steps:
                 last_prompt = self._build_heartbeat_followup_prompt(
                     previous_output=result,
                     action_summary=action_summary,
+                    plan=last_plan,
+                    step=step + 1,
+                    max_steps=max_steps,
                 )
 
         self.state.last_activity = datetime.now()
+        if step_logs:
+            trace = "\n\n".join(step_logs)
+            if last_result.strip().upper() == "NO_REPLY":
+                return "\n".join(["NO_REPLY", "", "### Heartbeat execution trace", trace]).strip()
+            return "\n".join([last_result, "", "### Heartbeat execution trace", trace]).strip()
+
+        if self._is_heartbeat_plan_complete(last_plan) and action_summary == "":
+            return "NO_REPLY"
         return last_result
 
     def _run_heartbeat_turn(
@@ -217,40 +256,264 @@ class Agent:
     def _is_heartbeat_history_message(content: str) -> bool:
         return bool(content) and content.startswith("[HEARTBEAT] ")
 
-    def _build_heartbeat_followup_prompt(self, previous_output: str, action_summary: str) -> str:
+    def _build_heartbeat_followup_prompt(
+        self,
+        previous_output: str,
+        action_summary: str,
+        plan: Optional[Dict[str, Any]] = None,
+        step: int = 1,
+        max_steps: int = 1,
+    ) -> str:
         bits = [
             "Continue from the previous heartbeat output and take the next required action.",
             "Do not repeat the same step.",
-            "If no further action is needed, respond exactly: NO_REPLY.",
+            "Return **only** a JSON object with keys: "
+            "next_step, expected_state_change, verification_check, done.",
         ]
         if previous_output:
             bits.append(f"Previous output:\n{previous_output}")
         if action_summary:
             bits.append(f"Actions taken:\n{action_summary}")
+        if plan:
+            bits.append(
+                "Observed plan:\n"
+                f"{json.dumps(plan, indent=2)}"
+            )
+
+        bits.append(f"Heartbeat loop progress: step {step} of {max_steps}.")
 
         bits.append(
-            "When summarizing memory, keep using MEMORY_UPDATE: <text>. "
-            "For changes, include one ```diff``` block or one ```bash``` block."
+            "If the task is complete and verified, set done: true. "
+            "If work remains, set done: false and set next_step with the next action. "
+            "Expected_state_change should describe concrete workspace/state impact. "
+            "Verification_check should describe exactly what to verify before moving on."
         )
+
         return "\n\n".join(bits)
 
-    def _should_continue_heartbeat(self, content: str, action_summary: str) -> bool:
-        if self._is_no_more_action(content):
-            return bool(action_summary) or self._has_heartbeat_memory_hint(content)
+    def _build_heartbeat_step_log(
+        self,
+        step: int,
+        max_steps: int,
+        plan: Dict[str, Any],
+        model_output: str,
+        action_summary: str,
+        continue_after: bool,
+    ) -> str:
+        done = self._is_heartbeat_plan_complete(plan)
+        next_step = str(plan.get("next_step", "") or "").strip() or "(none)"
+        expected_state_change = str(plan.get("expected_state_change", "") or "").strip() or "(none)"
+        verification_check = str(plan.get("verification_check", "") or "").strip() or "(none)"
 
+        apply_status, apply_next_action, apply_details = self._parse_heartbeat_action_contract(action_summary)
+        model_output_snippet = (model_output or "").strip().replace("\n", " ")[:180]
+        if not model_output_snippet:
+            model_output_snippet = "(no model output text)"
+        if not apply_next_action:
+            apply_next_action = "(none)"
+        if apply_details:
+            apply_details = f"; details={apply_details}"
+
+        execute_lines = [line for line in action_summary.splitlines() if line.strip()]
+        if execute_lines:
+            execute_block = "\n".join(f"  - {line}" for line in execute_lines)
+            execute_line = f"- EXECUTE:\n{execute_block}"
+        else:
+            execute_line = "- EXECUTE: (no actions)"
+
+        return (
+            f"#### Step {step}/{max_steps}\n"
+            f"- PLAN: done={done}, next_step={next_step}, expected_state_change={expected_state_change}, verification_check={verification_check}\n"
+            f"{execute_line}\n"
+            f"- VERIFY: contract={apply_status}, next_action={apply_next_action}{apply_details}, continue={continue_after}, "
+            f"model_output_snippet={model_output_snippet}"
+        )
+
+    @staticmethod
+    def _parse_heartbeat_action_contract(action_summary: str) -> tuple[str, str, str]:
+        """
+        Parse the highest-priority action contract from a heartbeat action summary.
+        Returns (status, next_action, details).
+        """
+        if not action_summary:
+            return "NO_ACTION", "", ""
+
+        lines = [line.strip() for line in action_summary.splitlines() if line.strip()]
+        status_precedence = {"FAILED_PERM": 3, "RETRYABLE": 2, "APPLIED": 1, "MEMORY_UPDATE": 1, "NO_ACTION": 0}
+        best_status = "NO_ACTION"
+        best_score = 0
+        best_next_action = ""
+        best_details = ""
+
+        def parse_contract_parts(line: str) -> tuple[str, str]:
+            next_action = ""
+            details = ""
+            next_match = re.search(r"next_action\s*=\s*([^;]+)", line, flags=re.IGNORECASE)
+            if next_match:
+                next_action = next_match.group(1).strip()
+            details_match = re.search(r"details\s*=\s*(.+)", line, flags=re.IGNORECASE)
+            if details_match:
+                details = details_match.group(1).strip()
+            return next_action, details
+
+        for line in lines:
+            if line.upper().startswith("MEMORY_UPDATE:"):
+                status = "MEMORY_UPDATE"
+                next_action = "No write action required."
+                details = line[len("MEMORY_UPDATE:"):].strip()
+            else:
+                upper = line.upper()
+                if "FAILED_PERM" in upper:
+                    status = "FAILED_PERM"
+                elif "RETRYABLE" in upper:
+                    status = "RETRYABLE"
+                elif "APPLIED" in upper:
+                    status = "APPLIED"
+                elif "AUTO-APPLY COMMAND SUCCEEDED" in upper:
+                    status = "APPLIED"
+                elif "AUTO-APPLY COMMAND FAILED" in upper:
+                    status = "RETRYABLE"
+                else:
+                    status = "UNKNOWN"
+
+                next_action, details = parse_contract_parts(line)
+
+            score = status_precedence.get(status, 0)
+            if score > best_score:
+                best_status = status
+                best_score = score
+                best_next_action = next_action
+                best_details = details
+
+            # Keep last-known context for equal score if richer than current.
+            elif score == best_score and score > 0 and (not best_details and details):
+                best_next_action = next_action
+                best_details = details
+
+        return best_status, best_next_action.strip(), best_details.strip()
+
+    @staticmethod
+    def _extract_action_contract_status(action_summary: str) -> str:
+        return Agent._parse_heartbeat_action_contract(action_summary)[0]
+
+    def _should_continue_heartbeat(
+        self,
+        plan: Dict[str, Any],
+        action_summary: str,
+        raw_content: str,
+    ) -> bool:
+        if self._is_heartbeat_plan_complete(plan):
+            return False
+
+        if self._has_heartbeat_memory_hint(raw_content):
+            return True
+
+        if action_summary:
+            return True
+
+        # Keep running until explicit done is returned or MAX_STEPS is hit.
+        # If structured output is missing/incomplete, do another follow-up
+        # attempt instead of failing early.
         return True
 
-    def _is_no_more_action(self, content: str) -> bool:
-        if not content:
-            return True
-        normalized = content.strip().upper()
-        if normalized in {"NO_REPLY", "DONE"}:
-            return True
-        if any(marker in normalized for marker in ("DONE", "TASK COMPLETE", "ALL_DONE")):
-            return True
-        if "NO_REPLY" in normalized and len(normalized) <= 20:
-            return True
+    def _is_heartbeat_plan_complete(self, plan: Dict[str, Any]) -> bool:
+        done = plan.get("done")
+        if isinstance(done, bool):
+            return bool(done)
+        if isinstance(done, str):
+            return done.strip().lower() in {"true", "yes", "1", "complete", "done"}
         return False
+
+    def _parse_heartbeat_plan(self, content: str) -> Dict[str, Any]:
+        if not content:
+            return {"done": False, "next_step": "", "expected_state_change": "", "verification_check": ""}
+
+        parsed = self._extract_heartbeat_json_plan(content)
+        if not parsed:
+            return {
+                "done": False,
+                "next_step": "",
+                "expected_state_change": "",
+                "verification_check": "",
+            }
+
+        done = parsed.get("done")
+        return {
+            "done": bool(done) if isinstance(done, bool) else str(done).strip().lower() in {"true", "yes", "1", "done", "complete", "completed"}
+            if done is not None
+            else False,
+            "next_step": (parsed.get("next_step", "") or "").strip() if isinstance(parsed, dict) else "",
+            "expected_state_change": (parsed.get("expected_state_change", "") or "").strip()
+            if isinstance(parsed, dict)
+            else "",
+            "verification_check": (parsed.get("verification_check", "") or "").strip() if isinstance(parsed, dict) else "",
+        }
+
+    def _extract_heartbeat_json_plan(self, content: str) -> Optional[Dict[str, Any]]:
+        if not content:
+            return None
+
+        for match in re.finditer(r"```(?:json)?\s*\n([\s\S]*?)\n```", content, flags=re.IGNORECASE):
+            payload = (match.group(1) or "").strip()
+            plan = self._try_parse_json(payload)
+            if plan is not None:
+                return plan
+
+        text = content
+        start = 0
+        while True:
+            idx = text.find("{", start)
+            if idx == -1:
+                return None
+
+            depth = 0
+            in_string = False
+            escaped = False
+            close_idx = -1
+            for i in range(idx, len(text)):
+                ch = text[i]
+                if in_string:
+                    if escaped:
+                        escaped = False
+                        continue
+                    if ch == "\\":
+                        escaped = True
+                        continue
+                    if ch == '"':
+                        in_string = False
+                    continue
+
+                if ch == '"':
+                    in_string = True
+                    continue
+
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        close_idx = i + 1
+                        break
+
+            if close_idx > idx:
+                payload = text[idx:close_idx]
+                plan = self._try_parse_json(payload)
+                if plan is not None:
+                    return plan
+
+            start = idx + 1
+
+        return None
+
+    @staticmethod
+    def _try_parse_json(payload: str) -> Optional[Dict[str, Any]]:
+        try:
+            parsed = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        return parsed
 
     def _has_heartbeat_memory_hint(self, content: str) -> bool:
         if not content:
@@ -315,6 +578,12 @@ class Agent:
             seen.add(candidate)
             blocks.append(candidate)
 
+        raw_diff = self._extract_raw_unified_diff_block(text)
+        if raw_diff:
+            if raw_diff not in seen:
+                seen.add(raw_diff)
+                blocks.append(raw_diff)
+
         return blocks
 
     def _extract_bash_blocks(self, text: str) -> List[str]:
@@ -328,29 +597,225 @@ class Agent:
                 blocks.append(candidate)
         return blocks
 
+    @staticmethod
+    def _extract_raw_unified_diff_block(text: str) -> Optional[str]:
+        if not text:
+            return None
+
+        marker = text.find("diff --git")
+        if marker < 0:
+            return None
+
+        candidate = text[marker:].strip()
+        if not candidate:
+            return None
+        # If there are multiple patch blocks, keep the first one only.
+        next_marker = candidate.find("\n\ndiff --git", 1)
+        if next_marker > 0:
+            candidate = candidate[:next_marker]
+        return candidate
+
     def _apply_unified_diff(self, diff_text: str) -> str:
-        if self._extract_embedded_apply_patch(diff_text) or diff_text.strip().startswith("*** Begin Patch"):
-            return self._apply_apply_patch_block(diff_text)
+        normalized = self._normalize_unified_diff(diff_text or "")
+        if not normalized:
+            return self._heartbeat_apply_contract(
+                "FAILED_PERM",
+                "No valid diff content found.",
+                "Return a clean unified diff or apply_patch block.",
+            )
+
+        target_files = self._extract_patch_target_files(normalized)
+        before_snapshot = self._snapshot_files(target_files)
+        repaired = self._repair_unified_diff(normalized)
+        embedded = self._extract_embedded_apply_patch(normalized)
+
+        attempts: List[tuple[str, List[str], str, str]] = []
+        if embedded:
+            attempts.append(("apply_patch", [], embedded, "Apply the provided OpenAI-style patch block directly."))
+        attempts.extend(
+            [
+                ("git_apply_whitespace", ["--whitespace=fix", "-"], normalized, "Re-run with whitespace normalization."),
+                (
+                    "git_apply_repaired",
+                    ["--whitespace=fix", "-"],
+                    repaired,
+                    "Apply a repaired unified diff (normalized headers/paths).",
+                ),
+                (
+                    "git_apply_tolerant",
+                    ["--ignore-whitespace", "--ignore-space-change", "-"],
+                    repaired,
+                    "Retry with whitespace-tolerant matching.",
+                ),
+                ("git_apply_p0", ["-p0", "--whitespace=fix", "-"], repaired, "Retry with patch-path prefix 0 fallback."),
+            ]
+        )
+
+        last_status: Optional[str] = None
+        last_message: Optional[str] = None
+        for idx, (strategy, options, payload, action_hint) in enumerate(attempts):
+            if strategy == "apply_patch":
+                status, message = self._run_apply_patch_block(payload)
+            else:
+                status, message = self._run_git_apply(payload, options)
+
+            if status == "FAILED_PERM":
+                return self._heartbeat_apply_contract("FAILED_PERM", message, action_hint)
+
+            if status == "APPLIED":
+                verified, verify_msg = self._verify_patch_application(before_snapshot, target_files)
+                if verified:
+                    return self._heartbeat_apply_contract(
+                        "APPLIED",
+                        f"{message}. {verify_msg}".strip(". "),
+                        "Continue heartbeat execution and verify any follow-up checks.",
+                    )
+
+                status = "RETRYABLE"
+                message = f"Patch apply did not change the expected file content. {verify_msg}"
+
+            last_status = status
+            last_message = message
+            if idx + 1 < len(attempts):
+                continue
+
+            return self._heartbeat_apply_contract(
+                "RETRYABLE",
+                last_message or "All patch strategies failed.",
+                "Re-read target file context and generate a fresh patch from current state.",
+            )
+
+        if last_status:
+            return self._heartbeat_apply_contract(last_status, last_message or "", "Re-read target file context.")
+        return self._heartbeat_apply_contract(
+            "FAILED_PERM",
+            "No patch application strategy was available.",
+            "Return a valid patch format.",
+        )
+
+    def _normalize_unified_diff(self, diff_text: str) -> str:
+        candidate = (diff_text or "").strip()
+        if not candidate:
+            return ""
+
+        # Drop accidental JSON-style command wrappers.
+        if candidate.startswith("{") and "\"cmd\"" in candidate[:80]:
+            close = candidate.find("}")
+            if close != -1 and close + 1 < len(candidate):
+                candidate = candidate[close + 1 :].strip()
+
+        # If this includes a raw unified diff, keep just the diff section.
+        marker = candidate.find("diff --git")
+        if marker > 0:
+            candidate = candidate[marker:]
+
+        return candidate
+
+    @staticmethod
+    def _repair_unified_diff(diff_text: str) -> str:
+        if not diff_text:
+            return ""
+
+        repaired_lines = []
+        for line in diff_text.splitlines():
+            if line.startswith("--- ") or line.startswith("+++ "):
+                prefix, path = line.split(" ", 1)
+                path = path.split("\t", 1)[0].strip()
+                if path and path != "/dev/null" and not path.startswith(("a/", "b/")):
+                    path = f"a/{path}"
+                repaired_lines.append(f"{prefix} {path}")
+            else:
+                repaired_lines.append(line)
+
+        return "\n".join(repaired_lines).strip()
+
+    @staticmethod
+    def _extract_patch_target_files(diff_text: str) -> List[str]:
+        if not diff_text:
+            return []
+
+        targets: List[str] = []
+        for line in diff_text.splitlines():
+            if not (line.startswith("--- ") or line.startswith("+++ ")):
+                continue
+
+            path = line[4:].split("\t", 1)[0].strip()
+            if not path or path == "/dev/null":
+                continue
+            if path.startswith(("a/", "b/")):
+                path = path[2:]
+            if path not in targets:
+                targets.append(path)
+
+        return targets
+
+    def _snapshot_files(self, paths: List[str]) -> Dict[str, str]:
+        snapshot: Dict[str, str] = {}
+        for path in paths:
+            snapshot[path] = self.workspace.read(path) or ""
+        return snapshot
+
+    def _verify_patch_application(
+        self,
+        before_snapshot: Dict[str, str],
+        target_files: List[str],
+    ) -> tuple[bool, str]:
+        if not target_files:
+            return True, "No target files could be parsed from patch; assuming success from tool output."
+
+        changed: List[str] = []
+        for path in target_files:
+            before = before_snapshot.get(path, "")
+            after = self.workspace.read(path) or ""
+            if after != before:
+                changed.append(path)
+
+        if changed:
+            return True, f"Verified content changed for: {', '.join(changed)}"
+        return False, "No target file content changed after patch apply."
+
+    def _run_apply_patch_block(self, patch_text: str) -> tuple[str, str]:
+        result = self._apply_apply_patch_block(patch_text)
+        normalized = (result or "").lower()
+        if "applied openai-style patch successfully" in normalized:
+            return "APPLIED", result
+        if "auto-apply failed: apply_patch utility not found" in normalized:
+            return "RETRYABLE", result
+        return "RETRYABLE", result
+
+    def _run_git_apply(self, patch_text: str, options: List[str]) -> tuple[str, str]:
         try:
             p = subprocess.run(
-                ["git", "apply", "--whitespace=fix", "-"],
+                ["git", "apply", *options],
                 cwd=str(self.workspace.path),
-                input=diff_text,
+                input=patch_text,
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
             if p.returncode == 0:
-                return "Applied unified diff successfully."
-            return f"Diff apply failed: {(p.stderr or p.stdout).strip()[:300]}"
+                return "APPLIED", "git apply succeeded."
+            return "RETRYABLE", (p.stderr or p.stdout or "").strip()[:500]
+        except FileNotFoundError:
+            return "FAILED_PERM", "git executable not found in environment."
         except Exception as e:
-            return f"Diff apply error: {e}"
+            return "FAILED_PERM", f"git apply invocation error: {e}"
+
+    @staticmethod
+    def _heartbeat_apply_contract(status: str, details: str, next_action: str) -> str:
+        normalized = (status or "").strip().upper()
+        if normalized not in {"APPLIED", "RETRYABLE", "FAILED_PERM"}:
+            normalized = "RETRYABLE"
+
+        action = (next_action or "none").strip()
+        detail = (details or "").strip()
+        return f"{normalized}; next_action={action}" + (f"; details={detail}" if detail else "")
 
     def _extract_embedded_apply_patch(self, patch_text: str) -> Optional[str]:
         if not patch_text:
             return None
 
-        match = re.search(r"\*\*\* Begin Patch[\s\S]*?\n\*\*\* End Patch", patch_text)
+        match = re.search(r"\*\*\* Begin Patch[\s\S]*?\*\*\* End Patch", patch_text)
         if match:
             return match.group(0).strip()
         return None
@@ -571,7 +1036,8 @@ class Agent:
                         continue
 
                 result = self.handle_heartbeat()
-                status = "NO_REPLY" if (result or "").strip().upper() == "NO_REPLY" else "SUCCESS"
+                top_line = ((result or "").strip().splitlines() or [""])[0]
+                status = "NO_REPLY" if top_line.upper() == "NO_REPLY" else "SUCCESS"
                 self.workspace.update_heartbeat_audit(status, f"proactive tick: {result or status}")
                 self._record_heartbeat_state(status=status, details=str(result or status))
             except Exception as e:
