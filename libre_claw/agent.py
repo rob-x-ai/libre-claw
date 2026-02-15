@@ -113,18 +113,26 @@ class Agent:
         self.backend.add_message(Message(role="user", content=message))
 
         # Use chat history so context window actually accumulates across turns.
-        history = self.backend.get_history()
+        history = [
+            msg
+            for msg in self.backend.get_history()
+            if not self._is_heartbeat_history_message(msg.content)
+        ]
         messages = [Message(role="system", content=system_prompt)] + history
         response = self.backend.chat(
             messages=messages,
             tools=tools,
         )
 
-        self.backend.add_message(Message(role="assistant", content=response.content))
+        response_text = response.content or "NO_REPLY"
+        if response_text.strip().upper() == "NO_REPLY":
+            response_text = "Hi—I'm here. What can I help with?"
+
+        self.backend.add_message(Message(role="assistant", content=response_text))
         self.state.message_count += 1
         self.state.last_activity = datetime.now()
 
-        return response.content
+        return response_text
 
     def handle_heartbeat(self, prompt: Optional[str] = None) -> str:
         """Handle a heartbeat poll in heartbeat mode."""
@@ -176,7 +184,9 @@ class Agent:
         system_prompt: str,
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
-        self.backend.add_message(Message(role="user", content=prompt))
+        self.backend.add_message(
+            Message(role="user", content=f"[HEARTBEAT] {prompt}")
+        )
 
         history = self.backend.get_history()
         messages = [Message(role="system", content=system_prompt)] + history
@@ -197,8 +207,14 @@ class Agent:
         if response_text is None:
             response_text = ""
 
-        self.backend.add_message(Message(role="assistant", content=response_text))
+        self.backend.add_message(
+            Message(role="assistant", content=f"[HEARTBEAT] {response_text}")
+        )
         return response_text
+
+    @staticmethod
+    def _is_heartbeat_history_message(content: str) -> bool:
+        return bool(content) and content.startswith("[HEARTBEAT] ")
 
     def _build_heartbeat_followup_prompt(self, previous_output: str, action_summary: str) -> str:
         bits = [
