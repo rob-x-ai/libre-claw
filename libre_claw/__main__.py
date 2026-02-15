@@ -1,7 +1,6 @@
 """Entry point for Libre Claw."""
 
 import argparse
-import asyncio
 from pathlib import Path
 
 import uvicorn
@@ -148,9 +147,9 @@ def main():
             memory=memory,
         )
 
-        # Start heartbeat if enabled
+        # Start proactive heartbeat loop if enabled
         if args.heartbeat or config.heartbeat.enabled:
-            asyncio.run(agent.start_heartbeat())
+            agent.start_proactive()
 
         start_tui(agent, config)
 

@@ -3,8 +3,10 @@
 Rich-based TUI with slash commands, streaming output, and a polished experience.
 """
 
+import json
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from rich.console import Console
@@ -39,8 +41,10 @@ class TUI:
         "info": "Show session information",
         "memory": "Search long-term memory (usage: /memory <query>)",
         "heartbeat": "Trigger a manual heartbeat tick",
+        "proactive": "Show/start/stop proactive loop (usage: /proactive [start|stop|status])",
         "mode": "Show or switch mode (usage: /mode [direct|heartbeat])",
         "backend": "Show or switch backend (usage: /backend [claude_code|anthropic|openai|ollama])",
+        "login": "Import/login provider auth (usage: /login openai)",
         "context": "Show loaded workspace context files",
         "daily": "Append to today's daily note (usage: /daily <text>)",
         "files": "List workspace files",
@@ -56,6 +60,36 @@ class TUI:
         self._running = False
         self._start_time = datetime.now()
         self._message_count = 0
+
+    def _openai_auth_target_path(self) -> Path:
+        configured = self.config.backend.openai_auth_file or "~/.config/libre-claw/auth/openai.json"
+        return Path(configured).expanduser()
+
+    def _import_openai_auth_from_codex(self) -> Optional[str]:
+        """Try importing OpenAI/Codex auth from common local locations."""
+        candidates = [
+            Path("~/.codex/auth.json").expanduser(),
+            Path("~/.config/codex/auth.json").expanduser(),
+            Path("~/.local/share/codex/auth.json").expanduser(),
+            Path("~/.config/openai/auth.json").expanduser(),
+            Path("~/.openai/auth.json").expanduser(),
+        ]
+
+        for path in candidates:
+            if not path.exists():
+                continue
+            try:
+                data = json.loads(path.read_text())
+                token = data.get("access_token") or data.get("api_key")
+                if token:
+                    target = self._openai_auth_target_path()
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(json.dumps({"access_token": token}, indent=2) + "\n")
+                    return str(path)
+            except Exception:
+                continue
+
+        return None
 
     def _render_banner(self) -> None:
         """Render the startup banner."""
@@ -167,6 +201,18 @@ class TUI:
             else:
                 self.console.print(f"  Current mode: [bold]{self.agent.state.mode.value}[/bold]")
 
+        elif cmd == "proactive":
+            action = (args or "status").strip().lower()
+            if action == "start":
+                self.agent.start_proactive()
+                self.console.print("  [system]Proactive loop started[/system]")
+            elif action == "stop":
+                self.agent.stop_proactive()
+                self.console.print("  [system]Proactive loop stopped[/system]")
+            else:
+                status = "running" if self.agent.proactive_running else "stopped"
+                self.console.print(f"  Proactive loop: [bold]{status}[/bold]")
+
         elif cmd == "backend":
             if args:
                 backend = args.lower().strip()
@@ -181,6 +227,32 @@ class TUI:
                         self.console.print(f"  [error]Failed to switch backend: {e}[/error]")
             else:
                 self.console.print(f"  Current backend: [bold]{self.agent.backend.name}[/bold]")
+
+        elif cmd == "login":
+            provider = (args or "").strip().lower()
+            if provider != "openai":
+                self.console.print("  [error]Usage: /login openai[/error]")
+            else:
+                imported_from = self._import_openai_auth_from_codex()
+                if imported_from:
+                    self.console.print(f"  [system]Imported OpenAI token from: {imported_from}[/system]")
+                else:
+                    self.console.print("  [system]No Codex auth file found. Please paste your OpenAI token.[/system]")
+                    token = Prompt.ask("  [cyan]OpenAI token[/cyan]", password=True).strip()
+                    if token:
+                        target = self._openai_auth_target_path()
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(json.dumps({"access_token": token}, indent=2) + "\n")
+                        self.console.print(f"  [system]Saved token to: {target}[/system]")
+                    else:
+                        self.console.print("  [error]No token provided[/error]")
+                        return True
+
+                try:
+                    self.agent.switch_backend("openai")
+                    self.console.print("  [system]Backend switched to: openai[/system]")
+                except Exception as e:
+                    self.console.print(f"  [error]OpenAI backend switch failed: {e}[/error]")
 
         elif cmd == "context":
             ctx = self.agent.workspace.get_context(self.agent.state.mode.value)
@@ -254,45 +326,48 @@ class TUI:
         self._running = True
         self._render_banner()
 
-        while self._running:
-            try:
-                # Prompt
-                user_input = Prompt.ask("\n [user]>[/user]")
+        try:
+            while self._running:
+                try:
+                    # Prompt
+                    user_input = Prompt.ask("\n [user]>[/user]")
 
-                if not user_input.strip():
-                    continue
+                    if not user_input.strip():
+                        continue
 
-                # Handle commands
-                if user_input.startswith("/"):
-                    if not self._handle_command(user_input[1:]):
-                        break
-                    continue
+                    # Handle commands
+                    if user_input.startswith("/"):
+                        if not self._handle_command(user_input[1:]):
+                            break
+                        continue
 
-                # Display user message
-                self._message_count += 1
+                    # Display user message
+                    self._message_count += 1
 
-                # Get response with spinner
-                with self.console.status("[dim]Thinking...[/dim]", spinner="dots"):
-                    t0 = time.monotonic()
-                    response = self.agent.handle_message(user_input)
-                    elapsed = time.monotonic() - t0
+                    # Get response with spinner
+                    with self.console.status("[dim]Thinking...[/dim]", spinner="dots"):
+                        t0 = time.monotonic()
+                        response = self.agent.handle_message(user_input)
+                        elapsed = time.monotonic() - t0
 
-                # Display response
-                self.console.print()
-                self.console.print(Panel(
-                    Markdown(response),
-                    title=f"[assistant]Assistant[/assistant] [dim]({elapsed:.1f}s)[/dim]",
-                    border_style="green",
-                    padding=(1, 2),
-                ))
+                    # Display response
+                    self.console.print()
+                    self.console.print(Panel(
+                        Markdown(response),
+                        title=f"[assistant]Assistant[/assistant] [dim]({elapsed:.1f}s)[/dim]",
+                        border_style="green",
+                        padding=(1, 2),
+                    ))
 
-            except KeyboardInterrupt:
-                self.console.print("\n  [system]Use /quit to exit[/system]")
-            except EOFError:
-                self._running = False
-                self.console.print("\n  [system]Goodbye![/system]")
-            except Exception as e:
-                self.console.print(f"  [error]Error: {e}[/error]")
+                except KeyboardInterrupt:
+                    self.console.print("\n  [system]Use /quit to exit[/system]")
+                except EOFError:
+                    self._running = False
+                    self.console.print("\n  [system]Goodbye![/system]")
+                except Exception as e:
+                    self.console.print(f"  [error]Error: {e}[/error]")
+        finally:
+            self.agent.stop_proactive()
 
 
 def start_tui(agent: Agent, config: Optional[Config] = None) -> None:

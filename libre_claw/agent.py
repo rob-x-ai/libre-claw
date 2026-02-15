@@ -3,6 +3,8 @@
 Provides Agent class with handle_message, heartbeat_tick, and mode switching.
 """
 
+import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -82,6 +84,9 @@ class Agent:
             session_id=str(uuid.uuid4()),
             started_at=datetime.now(),
         )
+
+        self._proactive_thread: Optional[threading.Thread] = None
+        self._proactive_stop = threading.Event()
 
     def handle_message(
         self,
@@ -189,6 +194,47 @@ class Agent:
 
     async def stop_heartbeat(self) -> None:
         await self.heartbeat.stop()
+
+    @property
+    def proactive_running(self) -> bool:
+        return self._proactive_thread is not None and self._proactive_thread.is_alive()
+
+    def start_proactive(self) -> None:
+        """Start proactive heartbeat loop in background thread."""
+        if self.proactive_running:
+            return
+
+        self._proactive_stop.clear()
+        self._proactive_thread = threading.Thread(target=self._proactive_loop, daemon=True)
+        self._proactive_thread.start()
+
+    def stop_proactive(self) -> None:
+        """Stop proactive background loop."""
+        self._proactive_stop.set()
+        if self._proactive_thread and self._proactive_thread.is_alive():
+            self._proactive_thread.join(timeout=2.0)
+
+    def _proactive_loop(self) -> None:
+        interval = max(5, int(self.config.heartbeat.interval_seconds))
+        while not self._proactive_stop.is_set():
+            try:
+                # Run only when idle for at least one interval
+                if self.state.last_activity:
+                    idle_for = (datetime.now() - self.state.last_activity).total_seconds()
+                    if idle_for < interval:
+                        time.sleep(1)
+                        continue
+
+                self.handle_heartbeat()
+                self.workspace.update_heartbeat_audit("SUCCESS", "proactive tick")
+            except Exception as e:
+                self.workspace.update_heartbeat_audit("FAILED", f"proactive tick error: {e}")
+
+            # Sleep in short chunks for responsive stop
+            slept = 0
+            while slept < interval and not self._proactive_stop.is_set():
+                time.sleep(1)
+                slept += 1
 
     def search_memory(
         self,

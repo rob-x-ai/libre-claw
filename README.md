@@ -67,8 +67,10 @@ my-workspace/
 | `/info` | Show session information |
 | `/memory <query>` | Search long-term memory |
 | `/heartbeat` | Trigger manual heartbeat |
+| `/proactive [start\|stop\|status]` | Control background proactive loop |
 | `/mode [direct\|heartbeat]` | Show/switch mode |
 | `/backend [claude_code\|anthropic\|openai\|ollama]` | Show/switch model provider |
+| `/login openai` | Import Codex/OpenAI auth or paste token, then switch backend |
 | `/context` | Show loaded context files |
 | `/daily <text>` | Append to today's daily note |
 | `/files` | List workspace files |
@@ -132,11 +134,20 @@ export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ### OpenAI API / OAuth token
-Set either env or auth file:
+Recommended flow:
+```bash
+codex login
+libre-claw
+# inside TUI:
+/login openai
+```
+`/login openai` tries to import token from common Codex/OpenAI auth locations,
+or lets you paste a token and stores it in `~/.config/libre-claw/auth/openai.json`.
+
+Alternative env setup:
 ```bash
 export LIBRE_CLAW_BACKEND__TYPE=openai
 export OPENAI_API_KEY=sk-...
-# or use ~/.config/libre-claw/auth/openai.json with {"access_token":"..."}
 ```
 
 ### Ollama (local)
