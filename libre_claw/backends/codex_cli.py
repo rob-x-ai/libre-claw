@@ -48,6 +48,7 @@ class CodexCLIBackend(BaseBackend):
             cmd = [
                 self._codex_path,
                 "exec",
+                "--ephemeral",
                 "--skip-git-repo-check",
                 "--output-last-message",
                 out.name,

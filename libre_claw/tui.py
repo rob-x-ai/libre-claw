@@ -309,7 +309,7 @@ class TUI:
                 elif backend == "codex_cli":
                     codex_bin = self.config.backend.codex_path or "codex"
                     check = subprocess.run(
-                        [codex_bin, "exec", "--skip-git-repo-check", "--json", "-m", model, "Reply with exactly: ok"],
+                        [codex_bin, "exec", "--ephemeral", "--skip-git-repo-check", "--json", "-m", model, "Reply with exactly: ok"],
                         capture_output=True,
                         text=True,
                         timeout=45,
