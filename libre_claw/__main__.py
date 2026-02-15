@@ -55,7 +55,7 @@ def main():
 
     parser.add_argument(
         "--backend",
-        choices=["claude_code", "codex_cli", "ollama", "anthropic", "openai"],
+        choices=["claude_code", "codex_cli", "openai_codex", "ollama", "anthropic", "openai"],
         help="Backend to use",
     )
 
@@ -118,7 +118,7 @@ def main():
             codex_bin = config.backend.codex_path or "codex"
             status = subprocess.run([codex_bin, "login", "status"], capture_output=True, text=True, timeout=10)
             if status.returncode == 0:
-                config.backend.type = "codex_cli"
+                config.backend.type = "openai_codex"
         except Exception:
             pass
 
@@ -147,6 +147,9 @@ def main():
                 claude_path=config.backend.claude_path,
                 codex_path=config.backend.codex_path,
                 codex_model=config.backend.codex_model,
+                openclaw_gateway_url=config.backend.openclaw_gateway_url,
+                openclaw_gateway_token=config.backend.openclaw_gateway_token,
+                openai_codex_model=config.backend.openai_codex_model,
                 anthropic_api_key=config.backend.anthropic_api_key,
                 anthropic_auth_file=config.backend.anthropic_auth_file,
                 anthropic_model=config.backend.anthropic_model,
