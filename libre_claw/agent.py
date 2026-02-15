@@ -48,6 +48,13 @@ class Agent:
                 BackendConfig(
                     claude_path=self.config.backend.claude_path,
                     anthropic_api_key=self.config.backend.anthropic_api_key,
+                    anthropic_auth_file=self.config.backend.anthropic_auth_file,
+                    anthropic_model=self.config.backend.anthropic_model,
+                    anthropic_base_url=self.config.backend.anthropic_base_url,
+                    openai_api_key=self.config.backend.openai_api_key,
+                    openai_auth_file=self.config.backend.openai_auth_file,
+                    openai_model=self.config.backend.openai_model,
+                    openai_base_url=self.config.backend.openai_base_url,
                     ollama_url=self.config.backend.ollama_url,
                     ollama_model=self.config.backend.ollama_model,
                 ),
@@ -205,6 +212,26 @@ class Agent:
         return self.memory.remember(
             content=content, memory_type=memory_type, importance=importance, tags=tags,
         )
+
+    def switch_backend(self, backend_type: str) -> None:
+        """Switch active backend at runtime."""
+        self.backend = get_backend(
+            backend_type,
+            BackendConfig(
+                claude_path=self.config.backend.claude_path,
+                anthropic_api_key=self.config.backend.anthropic_api_key,
+                anthropic_auth_file=self.config.backend.anthropic_auth_file,
+                anthropic_model=self.config.backend.anthropic_model,
+                anthropic_base_url=self.config.backend.anthropic_base_url,
+                openai_api_key=self.config.backend.openai_api_key,
+                openai_auth_file=self.config.backend.openai_auth_file,
+                openai_model=self.config.backend.openai_model,
+                openai_base_url=self.config.backend.openai_base_url,
+                ollama_url=self.config.backend.ollama_url,
+                ollama_model=self.config.backend.ollama_model,
+            ),
+        )
+        self.config.backend.type = backend_type
 
     def get_session_info(self) -> Dict[str, Any]:
         return {

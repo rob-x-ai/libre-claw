@@ -3,6 +3,8 @@
 from libre_claw.backends.base import BaseBackend, BackendConfig, Message, Response
 from libre_claw.backends.claude_code import ClaudeCodeBackend
 from libre_claw.backends.ollama import OllamaBackend
+from libre_claw.backends.openai_api import OpenAIBackend
+from libre_claw.backends.anthropic_api import AnthropicBackend
 from libre_claw.backends import get_backend
 
 
@@ -45,6 +47,16 @@ def test_get_backend_claude():
 def test_get_backend_ollama():
     backend = get_backend("ollama")
     assert isinstance(backend, OllamaBackend)
+
+
+def test_get_backend_openai():
+    backend = get_backend("openai")
+    assert isinstance(backend, OpenAIBackend)
+
+
+def test_get_backend_anthropic():
+    backend = get_backend("anthropic")
+    assert isinstance(backend, AnthropicBackend)
 
 
 def test_get_backend_unknown():

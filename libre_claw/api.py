@@ -85,6 +85,13 @@ def get_agent() -> Agent:
             BackendConfig(
                 claude_path=config.backend.claude_path,
                 anthropic_api_key=config.backend.anthropic_api_key,
+                anthropic_auth_file=config.backend.anthropic_auth_file,
+                anthropic_model=config.backend.anthropic_model,
+                anthropic_base_url=config.backend.anthropic_base_url,
+                openai_api_key=config.backend.openai_api_key,
+                openai_auth_file=config.backend.openai_auth_file,
+                openai_model=config.backend.openai_model,
+                openai_base_url=config.backend.openai_base_url,
                 ollama_url=config.backend.ollama_url,
                 ollama_model=config.backend.ollama_model,
             ),

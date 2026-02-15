@@ -2,16 +2,18 @@
 
 from typing import Optional
 
+from .anthropic_api import AnthropicBackend
 from .base import BackendConfig, BaseBackend, Message, Response
 from .claude_code import ClaudeCodeBackend
 from .ollama import OllamaBackend
+from .openai_api import OpenAIBackend
 
 
 def get_backend(backend_type: str, config: Optional[BackendConfig] = None) -> BaseBackend:
     """Get a backend instance by type.
 
     Args:
-        backend_type: Type of backend ("claude_code", "ollama", "anthropic")
+        backend_type: Type of backend ("claude_code", "ollama", "anthropic", "openai")
         config: Backend configuration
 
     Returns:
@@ -22,8 +24,9 @@ def get_backend(backend_type: str, config: Optional[BackendConfig] = None) -> Ba
     elif backend_type == "ollama":
         return OllamaBackend(config)
     elif backend_type == "anthropic":
-        # Placeholder for future Anthropic API backend
-        raise NotImplementedError("Anthropic API backend not yet implemented")
+        return AnthropicBackend(config)
+    elif backend_type == "openai":
+        return OpenAIBackend(config)
     else:
         raise ValueError(f"Unknown backend type: {backend_type}")
 
@@ -35,5 +38,7 @@ __all__ = [
     "Response",
     "ClaudeCodeBackend",
     "OllamaBackend",
+    "AnthropicBackend",
+    "OpenAIBackend",
     "get_backend",
 ]

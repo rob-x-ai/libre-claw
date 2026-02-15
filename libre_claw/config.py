@@ -14,9 +14,19 @@ from pydantic_settings import BaseSettings
 class BackendConfig(BaseModel):
     """Backend configuration."""
 
-    type: str = Field(default="claude_code", description="Backend type: claude_code, anthropic, ollama")
+    type: str = Field(default="claude_code", description="Backend type: claude_code, anthropic, openai, ollama")
     claude_path: str = Field(default="/opt/homebrew/bin/claude", description="Path to Claude Code CLI")
+
     anthropic_api_key: Optional[str] = Field(default=None, description="Anthropic API key (sk-ant-*)")
+    anthropic_auth_file: Optional[str] = Field(default="~/.config/libre-claw/auth/anthropic.json", description="Path to Anthropic auth JSON")
+    anthropic_model: str = Field(default="claude-3-7-sonnet-latest", description="Anthropic model id")
+    anthropic_base_url: str = Field(default="https://api.anthropic.com/v1", description="Anthropic API base URL")
+
+    openai_api_key: Optional[str] = Field(default=None, description="OpenAI API key")
+    openai_auth_file: Optional[str] = Field(default="~/.config/libre-claw/auth/openai.json", description="Path to OpenAI auth JSON with access_token")
+    openai_model: str = Field(default="gpt-4.1", description="OpenAI model id")
+    openai_base_url: str = Field(default="https://api.openai.com/v1", description="OpenAI API base URL")
+
     ollama_url: str = Field(default="http://localhost:11434", description="Ollama API URL")
     ollama_model: str = Field(default="llama2", description="Default Ollama model")
 

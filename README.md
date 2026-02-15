@@ -6,7 +6,7 @@ Libre Claw wraps AI backends (Claude Code CLI, Ollama, Anthropic API) into a per
 
 ## Features
 
-- **Multiple backends** — Claude Code CLI, Ollama (local), Anthropic API (planned)
+- **Multiple backends** — Claude Code CLI, Anthropic API, OpenAI API/OAuth token, Ollama (local)
 - **Workspace system** — Markdown-based context files (SOUL.md, USER.md, AGENTS.md, etc.)
 - **Mode-aware context** — Direct mode loads MEMORY.md, heartbeat mode loads HEARTBEAT.md
 - **Heartbeat autonomy** — Async heartbeat loop for autonomous task execution
@@ -68,6 +68,7 @@ my-workspace/
 | `/memory <query>` | Search long-term memory |
 | `/heartbeat` | Trigger manual heartbeat |
 | `/mode [direct\|heartbeat]` | Show/switch mode |
+| `/backend [claude_code\|anthropic\|openai\|ollama]` | Show/switch model provider |
 | `/context` | Show loaded context files |
 | `/daily <text>` | Append to today's daily note |
 | `/files` | List workspace files |
@@ -80,8 +81,18 @@ my-workspace/
 ```yaml
 # config.yaml
 backend:
-  type: claude_code           # claude_code, ollama, anthropic
+  type: openai                # claude_code, anthropic, openai, ollama
   claude_path: /opt/homebrew/bin/claude
+
+  # Anthropic backend
+  anthropic_auth_file: ~/.config/libre-claw/auth/anthropic.json
+  anthropic_model: claude-3-7-sonnet-latest
+
+  # OpenAI backend (API key or OAuth access_token JSON)
+  openai_auth_file: ~/.config/libre-claw/auth/openai.json
+  openai_model: gpt-4.1
+
+  # Ollama backend
   ollama_url: http://localhost:11434
   ollama_model: llama3
 
@@ -112,6 +123,22 @@ Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed
 npm install -g @anthropic-ai/claude-code
 ```
 
+### Anthropic API
+Set either env or auth file:
+```bash
+export LIBRE_CLAW_BACKEND__TYPE=anthropic
+export ANTHROPIC_API_KEY=sk-ant-...
+# or use ~/.config/libre-claw/auth/anthropic.json with {"api_key":"..."}
+```
+
+### OpenAI API / OAuth token
+Set either env or auth file:
+```bash
+export LIBRE_CLAW_BACKEND__TYPE=openai
+export OPENAI_API_KEY=sk-...
+# or use ~/.config/libre-claw/auth/openai.json with {"access_token":"..."}
+```
+
 ### Ollama (local)
 Requires [Ollama](https://ollama.ai) running:
 ```bash
@@ -119,9 +146,6 @@ ollama serve
 ollama pull llama3
 libre-claw --backend ollama
 ```
-
-### Anthropic API (planned)
-Direct API access — coming in v0.2.
 
 ## Development
 

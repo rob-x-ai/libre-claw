@@ -31,7 +31,17 @@ class BackendConfig:
     """Configuration for a backend."""
 
     claude_path: str = "/opt/homebrew/bin/claude"
+
     anthropic_api_key: Optional[str] = None
+    anthropic_auth_file: Optional[str] = None
+    anthropic_model: str = "claude-3-7-sonnet-latest"
+    anthropic_base_url: str = "https://api.anthropic.com/v1"
+
+    openai_api_key: Optional[str] = None
+    openai_auth_file: Optional[str] = None
+    openai_model: str = "gpt-4.1"
+    openai_base_url: str = "https://api.openai.com/v1"
+
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "llama2"
     max_tokens: int = 4096

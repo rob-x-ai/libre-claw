@@ -40,6 +40,7 @@ class TUI:
         "memory": "Search long-term memory (usage: /memory <query>)",
         "heartbeat": "Trigger a manual heartbeat tick",
         "mode": "Show or switch mode (usage: /mode [direct|heartbeat])",
+        "backend": "Show or switch backend (usage: /backend [claude_code|anthropic|openai|ollama])",
         "context": "Show loaded workspace context files",
         "daily": "Append to today's daily note (usage: /daily <text>)",
         "files": "List workspace files",
@@ -165,6 +166,21 @@ class TUI:
                     self.console.print("  [error]Invalid mode. Use: direct or heartbeat[/error]")
             else:
                 self.console.print(f"  Current mode: [bold]{self.agent.state.mode.value}[/bold]")
+
+        elif cmd == "backend":
+            if args:
+                backend = args.lower().strip()
+                allowed = {"claude_code", "anthropic", "openai", "ollama"}
+                if backend not in allowed:
+                    self.console.print("  [error]Invalid backend. Use: claude_code, anthropic, openai, ollama[/error]")
+                else:
+                    try:
+                        self.agent.switch_backend(backend)
+                        self.console.print(f"  [system]Backend switched to: {backend}[/system]")
+                    except Exception as e:
+                        self.console.print(f"  [error]Failed to switch backend: {e}[/error]")
+            else:
+                self.console.print(f"  Current backend: [bold]{self.agent.backend.name}[/bold]")
 
         elif cmd == "context":
             ctx = self.agent.workspace.get_context(self.agent.state.mode.value)

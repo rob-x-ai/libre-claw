@@ -106,6 +106,19 @@ def test_agent_session_info():
     assert info["message_count"] == 0
 
 
+def test_agent_switch_backend():
+    config = Config()
+    config.memory.enabled = False
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ws = Workspace(tmpdir, config)
+        ws.init()
+
+        agent = Agent(backend=MockBackend(), workspace=ws, config=config)
+        agent.switch_backend("ollama")
+        assert agent.backend.name == "ollama"
+
+
 def test_agent_system_prompt_direct():
     backend = MockBackend()
     config = Config()
