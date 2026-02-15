@@ -110,10 +110,11 @@ class Agent:
         system_prompt = self._build_system_prompt(context, is_heartbeat=False)
         self.backend.add_message(Message(role="user", content=message))
 
-        response = self.backend.complete(
-            prompt=message,
-            system_prompt=system_prompt,
-            context=context,
+        # Use chat history so context window actually accumulates across turns.
+        history = self.backend.get_history()
+        messages = [Message(role="system", content=system_prompt)] + history
+        response = self.backend.chat(
+            messages=messages,
             tools=tools,
         )
 

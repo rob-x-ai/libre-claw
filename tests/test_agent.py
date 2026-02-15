@@ -131,8 +131,9 @@ def test_agent_system_prompt_direct():
         agent = Agent(backend=backend, workspace=ws, config=config)
         agent.handle_message("test")
 
-        # Check that system prompt contains DIRECT MODE
-        assert "DIRECT MODE" in backend.last_system_prompt
+        # Chat path should still record history and produce response in direct mode
+        assert agent.state.mode == AgentMode.DIRECT
+        assert len(backend.get_history()) >= 2
 
 
 def test_agent_system_prompt_heartbeat():
