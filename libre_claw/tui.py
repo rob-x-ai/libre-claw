@@ -418,6 +418,21 @@ class TUI:
 
                             self.agent.backend.add_message(Message(role="user", content=user_input))
 
+                            add_dirs = []
+                            docs_dir = str((Path.home() / "Documents").resolve())
+                            workspace_root = str(self.agent.workspace.path)
+                            if "documents" in user_input.lower() and not workspace_root.startswith(docs_dir):
+                                status.stop()
+                                allow = Prompt.ask(
+                                    "  [cyan]Allow Codex write access to ~/Documents for this task?[/cyan]",
+                                    choices=["y", "n"],
+                                    default="y",
+                                )
+                                if allow == "y":
+                                    add_dirs.append(docs_dir)
+                                status.start()
+                                status.update("[dim]Permission handled. Continuing...[/dim]")
+
                             def _progress(msg: str) -> None:
                                 status.update(f"[dim]{msg}[/dim]")
 
@@ -426,6 +441,7 @@ class TUI:
                                 system_prompt=system_prompt,
                                 context=context,
                                 progress_callback=_progress,
+                                add_dirs=add_dirs,
                             )
                             self.agent.backend.add_message(Message(role="assistant", content=resp.content))
                             self.agent.state.message_count += 1

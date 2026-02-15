@@ -39,6 +39,7 @@ class CodexCLIBackend(BaseBackend):
         system_prompt: Optional[str] = None,
         context: Optional[Dict[str, str]] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
+        add_dirs: Optional[List[str]] = None,
     ) -> Response:
         full_prompt = self._build_prompt(prompt, system_prompt, context)
 
@@ -53,6 +54,9 @@ class CodexCLIBackend(BaseBackend):
             ]
             if self.config.codex_model:
                 cmd.extend(["-m", self.config.codex_model])
+            if add_dirs:
+                for d in add_dirs:
+                    cmd.extend(["--add-dir", d])
             cmd.append(full_prompt)
 
             try:
