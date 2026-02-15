@@ -1416,6 +1416,22 @@ class TUI:
             return data
         return sys.stdin.buffer.read(1)
 
+    def _read_bracketed_paste(self) -> str:
+        end = b"\x1b[201~"
+        payload = bytearray()
+        while True:
+            ch = self._read_stdin(0)
+            if ch is None:
+                break
+            if not ch:
+                break
+            payload.extend(ch)
+            if payload.endswith(end):
+                break
+        if payload.endswith(end):
+            payload = payload[:-len(end)]
+        return payload.decode("utf-8", "replace")
+
     def _unread_stdin(self, data: bytes) -> None:
         if data:
             self._stdin_buffer = data + self._stdin_buffer
@@ -1427,18 +1443,25 @@ class TUI:
         if first in {b"\r", b"\n"}:
             tail = bytearray()
             while True:
-                nxt = self._read_with_timeout(fd, 0.03)
+                nxt = self._read_with_timeout(fd, 0.12)
                 if nxt is None:
                     break
                 tail.extend(nxt)
-            # Treat a single CR/LF as normal Enter, not soft-enter.
+                if self._stdin_buffer:
+                    break
+            # If immediate follow-up data is buffered, this is paste/flow text.
             if tail.startswith(b"\r\n") or tail.startswith(b"\n\r"):
                 tail = tail[2:]
             elif tail.startswith((b"\r", b"\n")):
                 tail = tail[1:]
             if not tail:
-                return "ENTER"
-            self._unread_stdin(bytes(tail))
+                return "SOFT_ENTER" if self._stdin_buffer else "ENTER"
+            buffered = self._stdin_buffer
+            self._stdin_buffer = b""
+            if buffered:
+                self._unread_stdin(buffered + bytes(tail))
+            else:
+                self._unread_stdin(bytes(tail))
             return "SOFT_ENTER"
         if first in {b"\x03"}:
             raise KeyboardInterrupt
@@ -1454,7 +1477,7 @@ class TUI:
 
         seq = bytearray(first)
         while True:
-            nxt = TUI._read_with_timeout(fd, 0.002)
+            nxt = TUI._read_with_timeout(fd, 0.004)
             if nxt is None:
                 break
             seq.extend(nxt)
@@ -1464,6 +1487,8 @@ class TUI:
                 break
 
         esc = seq.decode("utf-8", "ignore")
+        if esc == "\x1b[200~":
+            return f"\x00PASTE::{self._read_bracketed_paste()}"
         if re.fullmatch(r"\x1b\[[0-9]+;2u", esc):
             return "SHIFT_ENTER"
         if esc in {"\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D"}:
@@ -1493,6 +1518,24 @@ class TUI:
 
                 if key == "ENTER":
                     return "\n".join(lines).strip("\n")
+
+                if key.startswith("\x00PASTE::"):
+                    paste = key[len("\x00PASTE::"):]
+                    paste = paste.replace("\r\n", "\n").replace("\r", "\n")
+                    if not paste:
+                        continue
+                    paste_lines = paste.split("\n")
+                    for idx, paste_line in enumerate(paste_lines):
+                        if idx == 0:
+                            lines[-1] += paste_line
+                            if paste_line:
+                                sys.stdout.write(paste_line)
+                                sys.stdout.flush()
+                        else:
+                            lines.append(paste_line)
+                            sys.stdout.write("\n")
+                            sys.stdout.write(self._format_input_line_prefix() + paste_line)
+                    continue
 
                 if key in {"SHIFT_ENTER", "SOFT_ENTER"}:
                     lines.append("")
