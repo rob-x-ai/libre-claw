@@ -646,9 +646,23 @@ class Agent:
         target_files = self._extract_patch_target_files(normalized)
         before_snapshot = self._snapshot_files(target_files)
         repaired = self._repair_unified_diff(normalized)
+        repaired = self._repair_bare_hunk_headers(repaired, before_snapshot)
         embedded = self._extract_embedded_apply_patch(normalized)
         repaired_openai = self._repair_openai_patch_context(embedded or normalized)
         normalized_embedded = self._normalize_patch_text(embedded) if embedded else None
+        converted_from_openai = None
+        normalized_converted_from_openai = None
+        if embedded:
+            converted_from_openai = self._convert_openai_patch_to_unified(
+                embedded,
+                before_snapshot,
+            )
+            normalized_converted_from_openai = self._normalize_patch_text(converted_from_openai) if converted_from_openai else None
+            if normalized_converted_from_openai:
+                normalized_converted_from_openai = self._repair_bare_hunk_headers(
+                    normalized_converted_from_openai,
+                    before_snapshot,
+                )
 
         attempts: List[tuple[str, List[str], str, str]] = []
         if embedded:
@@ -672,6 +686,23 @@ class Agent:
                         [],
                         normalized_repaired_openai,
                         "Retry with file-context-normalized OpenAI patch lines.",
+                    )
+                )
+            if normalized_converted_from_openai:
+                attempts.append(
+                    (
+                        "git_apply_from_openai",
+                        ["--whitespace=fix", "-"],
+                        normalized_converted_from_openai,
+                        "Retry with OpenAI patch converted to unified diff.",
+                    )
+                )
+                attempts.append(
+                    (
+                        "git_apply_from_openai_tolerant",
+                        ["--ignore-whitespace", "--ignore-space-change", "-"],
+                        normalized_converted_from_openai,
+                        "Retry converted unified diff with whitespace-tolerant matching.",
                     )
                 )
         else:
@@ -773,8 +804,7 @@ class Agent:
 
         return candidate
 
-    @staticmethod
-    def _repair_unified_diff(diff_text: str) -> str:
+    def _repair_unified_diff(self, diff_text: str) -> str:
         if not diff_text:
             return ""
 
@@ -840,6 +870,235 @@ class Agent:
             repaired_lines.extend(lines)
 
         return "\n".join(repaired_lines).strip()
+
+    def _repair_bare_hunk_headers(
+        self,
+        diff_text: str,
+        snapshots: Dict[str, str],
+    ) -> str:
+        if not diff_text:
+            return ""
+
+        lines = textwrap.dedent(diff_text).splitlines()
+        if not lines:
+            return diff_text
+
+        patch_lines: List[str] = []
+        current_file: Optional[str] = None
+        current_snapshot: List[str] = []
+        snapshot_by_file: Dict[str, List[str]] = {}
+
+        def normalize_hunk_path(path: str) -> str:
+            cleaned = (path or "").split("\t", 1)[0].strip()
+            if not cleaned or cleaned == "/dev/null":
+                return ""
+            if cleaned.startswith(("a/", "b/")):
+                cleaned = cleaned[2:]
+            return cleaned
+
+        def _is_hunk_line(line: str) -> bool:
+            stripped = line.strip()
+            if not stripped.startswith("@@"):
+                return False
+            return bool(re.match(r"^@@\s+[-+]\d", stripped))
+
+        def _normalize_line_candidate(line: str) -> str:
+            return line.replace("`", "").rstrip()
+
+        def _normalize_for_fuzzy_match(line: str) -> str:
+            return re.sub(r"[^A-Za-z0-9]+", "", line).lower()
+
+        def _match_line_by_relaxed_content(candidate: str, snapshot: List[str]) -> Optional[str]:
+            if not snapshot:
+                return None
+
+            if any(line == candidate for line in snapshot):
+                return candidate
+
+            normalized_candidate = _normalize_line_candidate(candidate)
+            if any(_normalize_line_candidate(line) == normalized_candidate for line in snapshot):
+                for line in snapshot:
+                    if _normalize_line_candidate(line) == normalized_candidate:
+                        return line
+
+            loose_candidate = _normalize_for_fuzzy_match(candidate)
+            if loose_candidate:
+                for line in snapshot:
+                    if _normalize_for_fuzzy_match(line) == loose_candidate:
+                        return line
+
+            normalized_candidate = candidate.rstrip()
+            for line in snapshot:
+                if line.rstrip() == normalized_candidate:
+                    return line
+
+            return None
+
+        def _is_content_line(line: str) -> bool:
+            return line.startswith((" ", "+", "-", "\\"))
+
+        def _find_relaxed_subsequence(haystack: List[str], needle: List[str]) -> Optional[int]:
+            if not needle:
+                return None
+            if len(needle) > len(haystack):
+                return None
+            norm_needle = [_normalize_line_candidate(line) for line in needle]
+            for idx in range(len(haystack) - len(needle) + 1):
+                if [
+                    _normalize_line_candidate(line)
+                    for line in haystack[idx : idx + len(needle)]
+                ] == norm_needle:
+                    return idx
+            return None
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+
+            if stripped.startswith("diff --git "):
+                parts = stripped.split()
+                if len(parts) >= 4:
+                    path = normalize_hunk_path(parts[3])
+                    if path:
+                        current_file = path
+                        current_snapshot = snapshot_by_file.setdefault(path, (snapshots.get(path, "")).splitlines())
+                patch_lines.append(line)
+                i += 1
+                continue
+
+            if stripped.startswith("--- ") or stripped.startswith("+++ "):
+                if stripped.startswith("+++ "):
+                    path = normalize_hunk_path(stripped[4:])
+                    if path:
+                        current_file = path
+                        current_snapshot = snapshot_by_file.setdefault(path, (snapshots.get(path, "")).splitlines())
+                patch_lines.append(line)
+                i += 1
+                continue
+
+            if stripped.startswith("@@") and not _is_hunk_line(stripped):
+                # Replace bare hunk header (like just "@@" without line numbers).
+                hunk_start = len(patch_lines)
+                patch_lines.append(line)
+                hunk_body = []
+                repaired_hunk: List[str] = []
+                j = i + 1
+                while j < len(lines):
+                    next_line = lines[j]
+                    nstripped = next_line.strip()
+                    if nstripped.startswith("diff --git "):
+                        break
+                    if nstripped.startswith("@@") and _is_hunk_line(nstripped):
+                        break
+                    if nstripped.startswith("@@"):
+                        j += 1
+                        continue
+                    if not next_line.startswith((" ", "-", "+", "\\")):
+                        break
+                    hunk_body.append(next_line)
+                    j += 1
+
+                if current_file and current_snapshot is not None and hunk_body:
+                    old_segment: List[str] = []
+                    new_segment: List[str] = []
+                    for body_line in hunk_body:
+                        marker = body_line[:1] if body_line else ""
+                        payload = body_line[1:] if len(body_line) > 1 else ""
+                        if marker in {" ", "-"}:
+                            replacement = _match_line_by_relaxed_content(payload, current_snapshot)
+                            if replacement is not None:
+                                payload = replacement
+                            repaired_body_line = f"{marker}{payload}"
+                            old_segment.append(payload)
+                        elif marker in {"+"}:
+                            repaired_body_line = body_line
+                        else:
+                            repaired_body_line = body_line
+
+                        if marker in {" ", "+"}:
+                            new_segment.append(payload)
+                        repaired_hunk.append(repaired_body_line)
+
+                    old_index = _find_relaxed_subsequence(current_snapshot, old_segment) if old_segment else None
+                    old_count = len(old_segment)
+                    new_count = len(new_segment)
+                    if old_index is not None:
+                        start_line = old_index + 1
+                    else:
+                        start_line = len(current_snapshot) + 1 if current_snapshot else 1
+                    patch_lines[hunk_start] = f"@@ -{start_line},{old_count} +{start_line},{new_count} @@"
+                elif current_file and not current_snapshot:
+                    repaired_hunk = hunk_body
+                elif not repaired_hunk:
+                    repaired_hunk = hunk_body
+
+                # Keep the hunk body as repaired content when possible.
+                patch_lines.extend(repaired_hunk or hunk_body)
+
+                i = j
+                continue
+
+            if current_file and _is_content_line(line):
+                hunk_start = len(patch_lines)
+                hunk_body = []
+                j = i
+                while j < len(lines):
+                    next_line = lines[j]
+                    nstripped = next_line.strip()
+                    if j > i and (
+                        nstripped.startswith("diff --git ")
+                        or (nstripped.startswith("@@") and _is_hunk_line(nstripped))
+                        or nstripped.startswith("*** End Patch")
+                    ):
+                        break
+                    if not _is_content_line(next_line):
+                        break
+                    hunk_body.append(next_line)
+                    j += 1
+
+                repaired_hunk: List[str] = []
+                old_segment: List[str] = []
+                new_segment: List[str] = []
+
+                if hunk_body and current_snapshot is not None:
+                    for body_line in hunk_body:
+                        marker = body_line[:1] if body_line else ""
+                        payload = body_line[1:] if len(body_line) > 1 else ""
+                        if marker in {" ", "-"}:
+                            replacement = _match_line_by_relaxed_content(payload, current_snapshot)
+                            if replacement is not None:
+                                payload = replacement
+                            old_segment.append(payload)
+                            repaired_hunk.append(f"{marker}{payload}")
+                        elif marker in {"+"}:
+                            replacement = _match_line_by_relaxed_content(payload, current_snapshot)
+                            if replacement is not None and not payload:
+                                payload = replacement
+                            new_segment.append(payload)
+                            repaired_hunk.append(f"{marker}{payload}")
+                        else:
+                            repaired_hunk.append(body_line)
+
+                    old_count = len(old_segment)
+                    new_count = len(new_segment)
+                    old_index = _find_relaxed_subsequence(current_snapshot, old_segment) if old_segment else None
+                    if old_index is not None:
+                        start_line = old_index + 1
+                    else:
+                        start_line = len(current_snapshot) + 1
+                    patch_lines.append(f"@@ -{start_line},{old_count} +{start_line},{new_count} @@")
+                    patch_lines.extend(repaired_hunk)
+                else:
+                    patch_lines.extend(hunk_body)
+
+                i = j
+                continue
+
+            patch_lines.append(line)
+            i += 1
+
+        return "\n".join(patch_lines).strip()
 
     def _repair_openai_patch_context(self, patch_text: str) -> str:
         if not patch_text:
@@ -908,6 +1167,66 @@ class Agent:
 
         repaired = "\n".join(patched).strip()
         return repaired if repaired else patch_text
+
+    def _convert_openai_patch_to_unified(
+        self,
+        patch_text: str,
+        snapshots: Dict[str, str],
+    ) -> str:
+        if not patch_text:
+            return ""
+
+        lines = textwrap.dedent(patch_text).splitlines()
+        if not lines:
+            return ""
+
+        blocks: List[str] = []
+        current_file: Optional[str] = None
+        hunk_lines: List[str] = []
+
+        def flush() -> None:
+            nonlocal current_file, hunk_lines
+            if not current_file or not hunk_lines:
+                current_file = None
+                hunk_lines = []
+                return
+
+            block = "\n".join(
+                [
+                    f"diff --git a/{current_file} b/{current_file}",
+                    f"--- a/{current_file}",
+                    f"+++ b/{current_file}",
+                    *hunk_lines,
+                ]
+            )
+            repaired = self._repair_bare_hunk_headers(
+                block,
+                snapshots,
+            )
+            if repaired:
+                blocks.append(repaired)
+
+            current_file = None
+            hunk_lines = []
+
+        for raw_line in lines:
+            stripped = raw_line.strip()
+            if stripped.startswith("*** Update File:"):
+                flush()
+                current_file = stripped[len("*** Update File:"):].strip()
+                continue
+            if stripped.startswith("*** End Patch"):
+                flush()
+                continue
+            if not current_file:
+                continue
+            if stripped.startswith("@@"):
+                continue
+            if raw_line.startswith((" ", "+", "-", "\\")):
+                hunk_lines.append(raw_line)
+
+        flush()
+        return "\n\n".join(blocks)
 
     @staticmethod
     def _extract_patch_target_files(diff_text: str) -> List[str]:
