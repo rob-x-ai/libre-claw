@@ -121,7 +121,7 @@ class HeartbeatConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="Enable heartbeat system")
     interval_seconds: int = Field(
-        default=30,
+        default="30m",
         description="Heartbeat poll interval (supports seconds, minutes, hours, e.g. 30, 15m, 2h)",
     )
     prompt: str = Field(
