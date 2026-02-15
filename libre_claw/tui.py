@@ -52,6 +52,7 @@ class TUI:
         "models": "List available models for current backend",
         "context": "Show loaded workspace context files + estimated context usage",
         "compact": "Compact conversation history (keeps recent turns)",
+        "approval": "Edit approval mode (usage: /approval [ask|always|never|status])",
         "daily": "Append to today's daily note (usage: /daily <text>)",
         "files": "List workspace files",
         "read": "Read a workspace file (usage: /read <filename>)",
@@ -66,6 +67,7 @@ class TUI:
         self._running = False
         self._start_time = datetime.now()
         self._message_count = 0
+        self._approval_mode = "ask"  # ask | always | never
 
     def _openai_auth_target_path(self) -> Path:
         configured = self.config.backend.openai_auth_file or "~/.config/libre-claw/auth/openai.json"
@@ -379,6 +381,15 @@ class TUI:
                 self.agent.backend._conversation_history = history[-keep:]
                 self.console.print(f"  [system]Compacted history: dropped {dropped} messages, kept {keep}[/system]")
 
+        elif cmd == "approval":
+            mode = (args or "status").strip().lower()
+            if mode in {"ask", "always", "never"}:
+                self._approval_mode = mode
+                self.console.print(f"  [system]Approval mode set to: {mode}[/system]")
+            else:
+                self.console.print(f"  Current approval mode: [bold]{self._approval_mode}[/bold]")
+                self.console.print("  [dim]Modes: ask (default), always (danger), never[/dim]")
+
         elif cmd == "daily":
             if args:
                 self.agent.workspace.write_daily_note(f"- {args}")
@@ -625,8 +636,32 @@ class TUI:
                     if self._should_auto_apply(user_input):
                         script = self._extract_bash_block(response)
                         if script:
-                            apply_result = self._auto_apply_shell_script(script)
-                            response = f"{response}\n\n---\n**Auto-apply:** {apply_result}"
+                            decision = self._approval_mode
+                            if self._approval_mode == "ask":
+                                self.console.print("\n  [command]Edit proposal detected.[/command]")
+                                choice = Prompt.ask(
+                                    "  Approve edits?",
+                                    choices=["once", "always", "never"],
+                                    default="once",
+                                )
+                                if choice == "once":
+                                    decision = "once"
+                                elif choice == "always":
+                                    self._approval_mode = "always"
+                                    decision = "always"
+                                else:
+                                    self._approval_mode = "never"
+                                    decision = "never"
+
+                            if decision in {"once", "always"}:
+                                apply_result = self._auto_apply_shell_script(script)
+                                response = f"{response}\n\n---\n**Auto-apply:** {apply_result}"
+                            else:
+                                response = f"{response}\n\n---\n**Auto-apply:** denied by user preference"
+                                alt = self.agent.handle_message(
+                                    "User denied the proposed file edits. Provide next best steps without modifying files."
+                                )
+                                response = f"{response}\n\n**Alternative plan:**\n{alt}"
 
                     response = f"{response}\n\n{self._workspace_changes_summary()}"
 
