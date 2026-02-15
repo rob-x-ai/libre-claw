@@ -25,7 +25,7 @@ DEFAULT_CODEX_MODELS = [
 class BackendConfig(BaseModel):
     """Backend configuration."""
 
-    type: str = Field(default="claude_code", description="Backend type: claude_code, codex_cli, anthropic, openai, ollama")
+    type: str = Field(default="claude_code", description="Backend type: claude_code, codex_cli, openai_codex, anthropic, openai, ollama")
     claude_path: str = Field(default="/opt/homebrew/bin/claude", description="Path to Claude Code CLI")
     codex_path: str = Field(default="codex", description="Path to Codex CLI")
     codex_model: Optional[str] = Field(default=None, description="Codex CLI model override")
@@ -38,6 +38,11 @@ class BackendConfig(BaseModel):
     openai_auth_file: Optional[str] = Field(default="~/.config/libre-claw/auth/openai.json", description="Path to OpenAI auth JSON with access_token")
     openai_model: str = Field(default="gpt-4.1", description="OpenAI model id")
     openai_base_url: str = Field(default="https://api.openai.com/v1", description="OpenAI API base URL")
+
+    openai_codex_auth_profiles_file: str = Field(default="~/.openclaw/agents/main/agent/auth-profiles.json", description="Path to auth-profiles.json containing openai-codex oauth profile")
+    openai_codex_profile: str = Field(default="openai-codex:default", description="OAuth profile name in auth-profiles.json")
+    openai_codex_model: str = Field(default="openai-codex/gpt-5.3-codex", description="OpenAI Codex model id")
+    openai_codex_base_url: str = Field(default="https://api.openai.com/v1", description="OpenAI Codex API base URL")
 
     ollama_url: str = Field(default="http://localhost:11434", description="Ollama API URL")
     ollama_model: str = Field(default="llama2", description="Default Ollama model")

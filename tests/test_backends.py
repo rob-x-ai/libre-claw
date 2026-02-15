@@ -6,6 +6,7 @@ from libre_claw.backends.ollama import OllamaBackend
 from libre_claw.backends.openai_api import OpenAIBackend
 from libre_claw.backends.anthropic_api import AnthropicBackend
 from libre_claw.backends.codex_cli import CodexCLIBackend
+from libre_claw.backends.openai_codex_oauth import OpenAICodexOAuthBackend
 from libre_claw.backends import get_backend
 
 
@@ -58,6 +59,11 @@ def test_get_backend_codex_cli():
 def test_get_backend_openai():
     backend = get_backend("openai")
     assert isinstance(backend, OpenAIBackend)
+
+
+def test_get_backend_openai_codex():
+    backend = get_backend("openai_codex")
+    assert isinstance(backend, OpenAICodexOAuthBackend)
 
 
 def test_get_backend_anthropic():

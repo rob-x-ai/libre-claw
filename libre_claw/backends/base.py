@@ -44,6 +44,11 @@ class BackendConfig:
     openai_model: str = "gpt-4.1"
     openai_base_url: str = "https://api.openai.com/v1"
 
+    openai_codex_auth_profiles_file: Optional[str] = None
+    openai_codex_profile: str = "openai-codex:default"
+    openai_codex_model: str = "openai-codex/gpt-5.3-codex"
+    openai_codex_base_url: str = "https://api.openai.com/v1"
+
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "llama2"
     max_tokens: int = 4096

@@ -45,7 +45,7 @@ class TUI:
         "heartbeat": "Trigger a manual heartbeat tick",
         "proactive": "Show/start/stop proactive loop (usage: /proactive [start|stop|status])",
         "mode": "Show or switch mode (usage: /mode [direct|heartbeat])",
-        "backend": "Show or switch backend (usage: /backend [claude_code|codex_cli|anthropic|openai|ollama])",
+        "backend": "Show or switch backend (usage: /backend [claude_code|codex_cli|openai_codex|anthropic|openai|ollama])",
         "login": "Import/login provider auth (usage: /login openai)",
         "model": "Show/set model for current backend (usage: /model [model-id])",
         "models": "List available models for current backend",
@@ -227,9 +227,9 @@ class TUI:
         elif cmd == "backend":
             if args:
                 backend = args.lower().strip()
-                allowed = {"claude_code", "codex_cli", "anthropic", "openai", "ollama"}
+                allowed = {"claude_code", "codex_cli", "openai_codex", "anthropic", "openai", "ollama"}
                 if backend not in allowed:
-                    self.console.print("  [error]Invalid backend. Use: claude_code, codex_cli, anthropic, openai, ollama[/error]")
+                    self.console.print("  [error]Invalid backend. Use: claude_code, codex_cli, openai_codex, anthropic, openai, ollama[/error]")
                 else:
                     try:
                         self.config.backend.type = backend
@@ -254,10 +254,10 @@ class TUI:
                         self.console.print("  [error]Codex OAuth not active. Run: codex login[/error]")
                         return True
 
-                    self.config.backend.type = "codex_cli"
+                    self.config.backend.type = "openai_codex"
                     self._save_user_config()
-                    self.agent.switch_backend("codex_cli")
-                    self.console.print("  [system]Codex OAuth active. Backend set to: codex_cli[/system]")
+                    self.agent.switch_backend("openai_codex")
+                    self.console.print("  [system]Codex OAuth active. Backend set to: openai_codex[/system]")
                 except Exception as e:
                     self.console.print(f"  [error]Codex login check failed: {e}[/error]")
         elif cmd == "model":
@@ -295,6 +295,10 @@ class TUI:
                 elif backend == "codex_cli":
                     model = self.config.backend.codex_model or "(codex default)"
                     self.console.print(f"  Current model: [bold]{model}[/bold] (codex_cli)")
+                    self.console.print("  [dim]Set explicit override with: /model <model-id>[/dim]")
+                elif backend == "openai_codex":
+                    model = self.config.backend.openai_codex_model
+                    self.console.print(f"  Current model: [bold]{model}[/bold] (openai_codex)")
                     for i, m in enumerate(DEFAULT_CODEX_MODELS, 1):
                         self.console.print(f"  [dim]{i:>2}.[/dim] {m}")
                     pick = Prompt.ask("  Pick model number (or Enter to keep current)", default="").strip()
@@ -303,7 +307,7 @@ class TUI:
                             idx = int(pick)
                             if 1 <= idx <= len(DEFAULT_CODEX_MODELS):
                                 chosen = DEFAULT_CODEX_MODELS[idx - 1]
-                                self.config.backend.codex_model = chosen
+                                self.config.backend.openai_codex_model = chosen
                                 self._save_user_config()
                                 self.agent.switch_backend(backend)
                                 self.console.print(f"  [system]Saved model '{chosen}' for backend {backend}[/system]")
@@ -322,36 +326,9 @@ class TUI:
                 elif backend == "ollama":
                     self.config.backend.ollama_model = model
                 elif backend == "codex_cli":
-                    codex_bin = self.config.backend.codex_path or "codex"
-                    check = subprocess.run(
-                        [codex_bin, "exec", "--ephemeral", "--skip-git-repo-check", "--json", "-m", model, "Reply with exactly: ok"],
-                        capture_output=True,
-                        text=True,
-                        timeout=45,
-                    )
-                    if check.returncode != 0:
-                        detail = "model check failed"
-                        for line in (check.stdout or "").splitlines()[::-1]:
-                            try:
-                                event = json.loads(line)
-                            except Exception:
-                                continue
-                            if event.get("type") == "error" and event.get("message"):
-                                detail = str(event.get("message"))
-                                break
-                            if event.get("type") == "turn.failed":
-                                err = event.get("error") or {}
-                                if err.get("message"):
-                                    detail = str(err.get("message"))
-                                    break
-                        if detail == "model check failed":
-                            err = (check.stderr or "").strip().splitlines()
-                            if err:
-                                detail = err[-1]
-                        self.console.print(f"  [error]Codex model rejected: {detail}[/error]")
-                        self.console.print("  [system]Model not saved. For ChatGPT OAuth, use /model openai-codex/gpt-5.3-codex[/system]")
-                        return True
                     self.config.backend.codex_model = model
+                elif backend == "openai_codex":
+                    self.config.backend.openai_codex_model = model
                 else:
                     self.console.print(f"  [error]Cannot set model for backend: {backend}[/error]")
                     return True
@@ -365,7 +342,7 @@ class TUI:
 
         elif cmd == "models":
             backend = self.config.backend.type
-            if backend == "codex_cli":
+            if backend in {"codex_cli", "openai_codex"}:
                 for m in DEFAULT_CODEX_MODELS:
                     self.console.print(f"  [dim]•[/dim] {m}")
             elif hasattr(self.agent.backend, "list_models"):
