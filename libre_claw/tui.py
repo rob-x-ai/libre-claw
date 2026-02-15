@@ -412,32 +412,41 @@ class TUI:
                         backend_name = self.agent.backend.name
                         status.update(f"[dim]Using backend: {backend_name}[/dim]")
 
+                        add_dirs = []
+                        docs_dir = str((Path.home() / "Documents").resolve())
+                        workspace_root = str(self.agent.workspace.path)
+                        permission_granted = False
+                        if "documents" in user_input.lower() and not workspace_root.startswith(docs_dir):
+                            status.stop()
+                            allow = Prompt.ask(
+                                "  [cyan]Allow write access to ~/Documents for this task?[/cyan]",
+                                choices=["y", "n"],
+                                default="y",
+                            )
+                            if allow == "y":
+                                permission_granted = True
+                                add_dirs.append(docs_dir)
+                            status.start()
+                            status.update("[dim]Permission handled. Continuing...[/dim]")
+
+                        effective_input = user_input
+                        if permission_granted:
+                            effective_input = (
+                                "Permission granted: you may create/modify files under ~/Documents for this task.\n\n"
+                                + user_input
+                            )
+
                         if backend_name == "codex-cli" and hasattr(self.agent.backend, "complete_with_progress"):
                             context = self.agent.workspace.get_context(mode="direct")
                             system_prompt = self.agent._build_system_prompt(context, is_heartbeat=False)
 
-                            self.agent.backend.add_message(Message(role="user", content=user_input))
-
-                            add_dirs = []
-                            docs_dir = str((Path.home() / "Documents").resolve())
-                            workspace_root = str(self.agent.workspace.path)
-                            if "documents" in user_input.lower() and not workspace_root.startswith(docs_dir):
-                                status.stop()
-                                allow = Prompt.ask(
-                                    "  [cyan]Allow Codex write access to ~/Documents for this task?[/cyan]",
-                                    choices=["y", "n"],
-                                    default="y",
-                                )
-                                if allow == "y":
-                                    add_dirs.append(docs_dir)
-                                status.start()
-                                status.update("[dim]Permission handled. Continuing...[/dim]")
+                            self.agent.backend.add_message(Message(role="user", content=effective_input))
 
                             def _progress(msg: str) -> None:
                                 status.update(f"[dim]{msg}[/dim]")
 
                             resp = self.agent.backend.complete_with_progress(
-                                prompt=user_input,
+                                prompt=effective_input,
                                 system_prompt=system_prompt,
                                 context=context,
                                 progress_callback=_progress,
@@ -449,7 +458,7 @@ class TUI:
                             response = resp.content
                         else:
                             status.update("[dim]Waiting for model response...[/dim]")
-                            response = self.agent.handle_message(user_input)
+                            response = self.agent.handle_message(effective_input)
 
                         elapsed = time.monotonic() - t0
 
