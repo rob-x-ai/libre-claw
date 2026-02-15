@@ -1431,12 +1431,13 @@ class TUI:
                 if nxt is None:
                     break
                 tail.extend(nxt)
+            # Treat a single CR/LF as normal Enter, not soft-enter.
+            if tail.startswith(b"\r\n") or tail.startswith(b"\n\r"):
+                tail = tail[2:]
+            elif tail.startswith((b"\r", b"\n")):
+                tail = tail[1:]
             if not tail:
                 return "ENTER"
-            if tail.startswith(b"\n"):
-                tail = tail[1:]
-                if not tail:
-                    return "ENTER"
             self._unread_stdin(bytes(tail))
             return "SOFT_ENTER"
         if first in {b"\x03"}:
@@ -1469,8 +1470,8 @@ class TUI:
             return "ARROW"
         return "ESC"
 
-    def _format_input_line_prefix(self, line_no: int) -> str:
-        return f"{line_no:>3}| "
+    def _format_input_line_prefix(self, line_no: int = 0) -> str:
+        return " > "
 
     def _read_multiline_input(self) -> str:
         if not sys.stdin.isatty():
@@ -1479,11 +1480,10 @@ class TUI:
         fd = sys.stdin.fileno()
         old_attrs = termios.tcgetattr(fd)
         lines: list[str] = [""]
-        line_no = 1
 
         try:
             tty.setraw(fd)
-            sys.stdout.write(f"\n{self._format_input_line_prefix(line_no)}")
+            sys.stdout.write(f"\n{self._format_input_line_prefix()}")
             sys.stdout.flush()
 
             while True:
@@ -1496,9 +1496,8 @@ class TUI:
 
                 if key in {"SHIFT_ENTER", "SOFT_ENTER"}:
                     lines.append("")
-                    line_no += 1
                     sys.stdout.write("\n")
-                    sys.stdout.write(self._format_input_line_prefix(line_no))
+                    sys.stdout.write(self._format_input_line_prefix())
                     continue
 
                 if key == "BACKSPACE":
@@ -1513,7 +1512,7 @@ class TUI:
                 if key == "CTRL_U":
                     lines[-1] = ""
                     sys.stdout.write("\r\033[K")
-                    sys.stdout.write(self._format_input_line_prefix(line_no))
+                    sys.stdout.write(self._format_input_line_prefix())
                     sys.stdout.flush()
                     continue
 
@@ -1547,9 +1546,12 @@ class TUI:
 
                     # Handle commands
                     if user_input.startswith("/"):
-                        if not self._handle_command(user_input[1:]):
-                            break
-                        continue
+                        command_text = user_input[1:].strip()
+                        command_name = command_text.split(maxsplit=1)[0].lower() if command_text else ""
+                        if command_name in self.COMMANDS:
+                            if not self._handle_command(command_text):
+                                break
+                            continue
 
                     # Display user message
                     self._message_count += 1
