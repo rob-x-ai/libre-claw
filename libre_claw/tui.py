@@ -633,13 +633,22 @@ class TUI:
                         elif backend_name == "openai-codex-oauth" and hasattr(self.agent.backend, "complete_with_progress"):
                             context = self.agent.workspace.get_context(mode="direct")
                             system_prompt = self.agent._build_system_prompt(context, is_heartbeat=False)
+
+                            prior = self.agent.backend.get_history()[-12:]
                             self.agent.backend.add_message(Message(role="user", content=effective_input))
+
+                            transcript_parts = []
+                            for m in prior:
+                                who = "User" if m.role == "user" else "Assistant"
+                                transcript_parts.append(f"{who}: {m.content}")
+                            transcript = "\n".join(transcript_parts)
+                            oauth_prompt = effective_input if not transcript else f"Previous conversation:\n{transcript}\n\nCurrent user message:\n{effective_input}"
 
                             def _progress(msg: str) -> None:
                                 status.update(f"[dim]{msg}[/dim]")
 
                             resp = self.agent.backend.complete_with_progress(
-                                prompt=effective_input,
+                                prompt=oauth_prompt,
                                 system_prompt=system_prompt,
                                 context=context,
                                 progress_callback=_progress,
