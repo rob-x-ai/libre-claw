@@ -47,6 +47,7 @@ class Agent:
         "AGENTS.md",
         "HEARTBEAT.md",
         "MEMORY.md",
+        "CONVERSATION_SUMMARY.md",
     ]
     HEARTBEAT_BOOTSTRAP_LINK_FILES = [
         "README.md",
@@ -1646,6 +1647,8 @@ class Agent:
             parts.append(f"# IDENTITY\n{context['IDENTITY.md']}")
         if "MEMORY.md" in context:
             parts.append(f"# MEMORY\n{context['MEMORY.md']}")
+        if "CONVERSATION_SUMMARY.md" in context:
+            parts.append(f"# CONVERSATION_SUMMARY\n{context['CONVERSATION_SUMMARY.md']}")
         if "HEARTBEAT.md" in context:
             parts.append(f"# HEARTBEAT\n{context['HEARTBEAT.md']}")
 

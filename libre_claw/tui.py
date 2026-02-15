@@ -51,14 +51,50 @@ class TUI:
         "login": "Bind OpenAI via Codex OAuth (usage: /login openai)",
         "model": "Show/set model for current backend (usage: /model [model-id])",
         "models": "List available models for current backend",
-        "context": "Show loaded workspace context files + estimated context usage",
+        "context": "Show loaded workspace context files + context window usage",
         "compact": "Compact conversation history (keeps recent turns)",
         "approval": "Edit approval mode (usage: /approval [ask|always|never|status])",
+        "verbose": "Show detailed auto-apply logs (usage: /verbose [on|off|status])",
+        "quiet": "Silence auto-apply logs (usage: /quiet [on|off|status])",
         "daily": "Append to today's daily note (usage: /daily <text>)",
         "files": "List workspace files",
         "read": "Read a workspace file (usage: /read <filename>)",
         "cost": "Show token usage and cost estimate",
         "quit": "Exit Libre Claw",
+    }
+
+    CONTEXT_WINDOW_FALLBACK_TOKENS = 32768
+    CONTEXT_WARNING_RATIO = 0.75
+    CONTEXT_CRITICAL_RATIO = 0.9
+    AUTO_APPLY_MAX_ATTEMPTS = 3
+    CONTEXT_HINT_MODEL_WINDOWS = [
+        ("gpt-5", 200000),
+        ("gpt-4.1", 200000),
+        ("gpt-4o", 128000),
+        ("gpt-4", 128000),
+        ("gpt-3.5", 16384),
+        ("claude-3", 200000),
+        ("claude", 200000),
+        ("llama3", 32768),
+        ("llama-3", 32768),
+        ("llama2", 4096),
+        ("gemma", 8192),
+        ("mistral", 32768),
+        ("qwen", 32768),
+        ("mixtral", 32768),
+        ("deepseek", 64000),
+        ("codex", 200000),
+        ("o1", 200000),
+    ]
+
+    GIT_STATUS_LABELS = {
+        "??": "untracked",
+        "A": "added",
+        "M": "modified",
+        "D": "deleted",
+        "R": "renamed",
+        "C": "copied",
+        "U": "merge_conflict",
     }
 
     def __init__(self, agent: Agent, config: Optional[Config] = None):
@@ -69,6 +105,7 @@ class TUI:
         self._start_time = datetime.now()
         self._message_count = 0
         self._approval_mode = "ask"  # ask | always | never
+        self._auto_apply_verbose = bool(self.config.heartbeat.auto_apply_verbose)
 
     def _workspace_config_path(self) -> Path:
         return self.agent.workspace.path / "config.yaml"
@@ -102,6 +139,8 @@ class TUI:
         bar.append(f"Backend: {info['backend']}", style="info")
         bar.append("  │  ", style="dim")
         bar.append(f"Mode: {info['mode']}", style="info")
+        bar.append("  │  ", style="dim")
+        bar.append(f"{self._format_context_usage()}", style="info")
         bar.append("  │  ", style="dim")
         bar.append(f"Workspace: {info['workspace']}", style="info")
         self.console.print(bar)
@@ -339,8 +378,10 @@ class TUI:
                     self.console.print(f"  [dim]●[/dim] {filename} ({size:,} chars)")
             else:
                 self.console.print("  [system]No context files loaded[/system]")
-            est = self._estimate_context_tokens()
-            self.console.print(f"  [system]Estimated context: ~{est:,} tokens[/system]")
+            self.console.print(f"  [system]{self._format_context_usage()}[/system]")
+            usage = self._parse_context_usage()
+            if usage["level"] in {"warn", "critical"}:
+                self.console.print("  [error]Context window is getting tight. Consider compacting history soon.[/error]")
 
         elif cmd == "compact":
             history = self.agent.backend.get_history()
@@ -349,8 +390,21 @@ class TUI:
                 self.console.print("  [system]Nothing to compact[/system]")
             else:
                 dropped = len(history) - keep
-                self.agent.backend._conversation_history = history[-keep:]
-                self.console.print(f"  [system]Compacted history: dropped {dropped} messages, kept {keep}[/system]")
+                kept = history[-keep:]
+                summary_text = self._build_compaction_summary(history[:-keep])
+                summary_entry = Message(
+                    role="assistant",
+                    content=f"[Conversation summary]\n{summary_text}",
+                )
+                self.agent.workspace.write(
+                    "CONVERSATION_SUMMARY.md",
+                    summary_text,
+                )
+                self.agent.backend._conversation_history = [summary_entry] + kept
+                self.console.print(
+                    f"  [system]Compacted history: dropped {dropped} messages, kept {keep} + continuity summary[/system]"
+                )
+                self.console.print("  [system]Added continuity summary at start of retained history.[/system]")
 
         elif cmd == "approval":
             mode = (args or "status").strip().lower()
@@ -360,6 +414,40 @@ class TUI:
             else:
                 self.console.print(f"  Current approval mode: [bold]{self._approval_mode}[/bold]")
                 self.console.print("  [dim]Modes: ask (default), always (danger), never[/dim]")
+
+        elif cmd == "verbose":
+            mode = (args or "status").strip().lower()
+            if mode in {"on", "true", "1", "yes"}:
+                self._auto_apply_verbose = True
+                self.config.heartbeat.auto_apply_verbose = True
+                self._save_user_config()
+                self.console.print("  [system]Auto-apply verbose logging: [bold]on[/bold][/system]")
+            elif mode in {"off", "false", "0", "no"}:
+                self._auto_apply_verbose = False
+                self.config.heartbeat.auto_apply_verbose = False
+                self._save_user_config()
+                self.console.print("  [system]Auto-apply verbose logging: [bold]off[/bold][/system]")
+            else:
+                current = "on" if self._auto_apply_verbose else "off"
+                self.console.print(f"  Auto-apply verbose logging: [bold]{current}[/bold]")
+                self.console.print("  [dim]Use: /verbose on | /verbose off[/dim]")
+
+        elif cmd == "quiet":
+            mode = (args or "status").strip().lower()
+            if mode in {"on", "true", "1", "yes"}:
+                self._auto_apply_verbose = False
+                self.config.heartbeat.auto_apply_verbose = False
+                self._save_user_config()
+                self.console.print("  [system]Auto-apply verbose logging: [bold]off[/bold] (quiet mode enabled)[/system]")
+            elif mode in {"off", "false", "0", "no"}:
+                self._auto_apply_verbose = True
+                self.config.heartbeat.auto_apply_verbose = True
+                self._save_user_config()
+                self.console.print("  [system]Auto-apply verbose logging: [bold]on[/bold] (quiet mode disabled)[/system]")
+            else:
+                current = "off" if not self._auto_apply_verbose else "on"
+                self.console.print(f"  Quiet mode: [bold]{current}[/bold] for auto-apply logs")
+                self.console.print("  [dim]Use: /quiet on | /quiet off[/dim]")
 
         elif cmd == "daily":
             if args:
@@ -413,6 +501,87 @@ class TUI:
         history_text = "\n".join(m.content for m in self.agent.backend.get_history())
         text = "\n".join(ctx.values()) + "\n" + history_text
         return max(1, len(text) // 4)
+
+    def _resolve_current_model_id(self) -> str:
+        backend_name = (self.agent.backend.name or "").lower()
+        cfg = self.config.backend
+        if not cfg:
+            return ""
+
+        candidates = {
+            "openai_codex": ["openai_codex_model"],
+            "openai-codex": ["openai_codex_model"],
+            "openai": ["openai_model"],
+            "anthropic": ["anthropic_model"],
+            "ollama": ["ollama_model"],
+            "codex_cli": ["codex_model"],
+            "codex-cli": ["codex_model"],
+            "codex": ["codex_model"],
+            "claude_code": [],
+            "claude-code": [],
+        }
+
+        for key, attrs in candidates.items():
+            if key == backend_name:
+                for attr in attrs:
+                    value = getattr(cfg, attr, "")
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+                return ""
+
+        # Fallback for custom/legacy backend names.
+        for attr in (
+            "openai_model",
+            "anthropic_model",
+            "ollama_model",
+            "codex_model",
+            "openai_codex_model",
+        ):
+            value = getattr(cfg, attr, "")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    def _estimate_context_window_tokens(self) -> int:
+        model_id = self._resolve_current_model_id().lower()
+        if model_id:
+            for marker, size in self.CONTEXT_HINT_MODEL_WINDOWS:
+                if marker in model_id:
+                    return size
+
+        max_tokens = getattr(getattr(self.agent.backend, "config", None), "max_tokens", 4096)
+        try:
+            max_tokens = int(max_tokens)
+        except Exception:
+            max_tokens = 4096
+        return max(self.CONTEXT_WINDOW_FALLBACK_TOKENS, max_tokens * 8)
+
+    def _parse_context_usage(self) -> dict:
+        used = self._estimate_context_tokens()
+        budget = self._estimate_context_window_tokens()
+        ratio = used / max(1, budget)
+        level = "ok"
+        if ratio >= self.CONTEXT_CRITICAL_RATIO:
+            level = "critical"
+        elif ratio >= self.CONTEXT_WARNING_RATIO:
+            level = "warn"
+        return {
+            "used": used,
+            "budget": budget,
+            "ratio": ratio,
+            "level": level,
+        }
+
+    def _format_context_usage(self) -> str:
+        usage = self._parse_context_usage()
+        used = usage["used"]
+        budget = usage["budget"]
+        pct = int(usage["ratio"] * 100)
+        if usage["level"] == "critical":
+            return f"Context: {used:,}/{budget:,} tokens ({pct}%) — compact now"
+        if usage["level"] == "warn":
+            return f"Context: {used:,}/{budget:,} tokens ({pct}%) — nearing limit"
+        return f"Context: {used:,}/{budget:,} tokens ({pct}%)"
 
     def _extract_bash_block(self, text: str) -> Optional[str]:
         if not text:
@@ -476,19 +645,32 @@ class TUI:
         return None
 
     def _apply_unified_diff(self, diff_text: str) -> str:
-        if hasattr(self.agent, "_apply_unified_diff"):
-            return self.agent._apply_unified_diff(diff_text)
-
         candidate = textwrap.dedent(self._normalize_unified_diff(diff_text)).strip()
         if not candidate:
-            return "Auto-apply: no valid diff content found."
+            return "FAILED_PERM; next_action=no valid diff; details=No valid diff content found."
 
         embedded = self._extract_embedded_apply_patch(candidate)
         if embedded:
-            return self._apply_apply_patch_block(embedded)
+            result = self._apply_apply_patch_block(embedded)
+            status, next_action, details = self._parse_apply_contract(result)
+            if status != "RETRYABLE":
+                return result
+
+            repaired = self._repair_patch_with_file_context(candidate)
+            if repaired:
+                return repaired
+            return result
 
         if candidate.lstrip().startswith("*** Begin Patch"):
-            return self._apply_apply_patch_block(candidate)
+            result = self._apply_apply_patch_block(candidate)
+            status, next_action, details = self._parse_apply_contract(result)
+            if status != "RETRYABLE":
+                return result
+
+            repaired = self._repair_patch_with_file_context(candidate)
+            if repaired:
+                return repaired
+            return result
         try:
             p = subprocess.run(
                 ["git", "apply", "--whitespace=fix", "-"],
@@ -499,10 +681,313 @@ class TUI:
                 timeout=30,
             )
             if p.returncode == 0:
-                return "Applied unified diff successfully."
-            return f"Diff apply failed: {(p.stderr or p.stdout).strip()[:300]}"
+                return "APPLIED; next_action=none; details=Applied unified diff successfully."
+            repaired = self._repair_patch_with_file_context(candidate)
+            if repaired:
+                return repaired
+            return (
+                "RETRYABLE; next_action=re-read target file context and regenerate patch; "
+                f"details={(p.stderr or p.stdout).strip()[:300]}"
+            )
         except Exception as e:
-            return f"Diff apply error: {e}"
+            return f"FAILED_PERM; next_action=retry with a valid patch; details=Diff apply error: {e}"
+
+    def _repair_patch_with_file_context(self, diff_text: str) -> Optional[str]:
+        operations = self._extract_patch_line_ops(diff_text)
+        if not operations:
+            return None
+
+        applied_files = []
+        no_change_files = []
+
+        for filename, hunks in operations.items():
+            filepath = self.agent.workspace.path / filename
+            if not filepath.exists():
+                return (
+                    "RETRYABLE; next_action=retry with valid patch; "
+                    f"details=Target file not found for fallback patch: {filename}"
+                )
+
+            current = filepath.read_text()
+            next_content = current
+            file_changed = False
+            file_noop = False
+
+            for removed_lines, added_lines in hunks:
+                old_block = "\n".join(removed_lines).strip()
+                new_block = "\n".join(added_lines).strip()
+
+                if not removed_lines and not added_lines:
+                    continue
+
+                if removed_lines and not added_lines:
+                    if old_block in next_content:
+                        next_content = next_content.replace(old_block, "", 1)
+                        file_changed = True
+                    else:
+                        return None
+                    continue
+
+                if added_lines and not removed_lines:
+                    if new_block in next_content:
+                        file_noop = True
+                        continue
+                    if next_content and not next_content.endswith("\n"):
+                        next_content += "\n"
+                    next_content += new_block + "\n"
+                    file_changed = True
+                    continue
+
+                if removed_lines and added_lines:
+                    if old_block in next_content and (
+                        next_content.count(old_block) == 1
+                        or (
+                            len(removed_lines) == 1
+                            and len(added_lines) == 1
+                            and next_content.count(removed_lines[0]) == 1
+                        )
+                    ):
+                        next_content = next_content.replace(old_block, new_block, 1)
+                        file_changed = True
+                        continue
+
+                    if new_block in next_content and old_block not in next_content:
+                        file_noop = True
+                        continue
+
+                    return None
+
+            if file_changed:
+                filepath.write_text(next_content)
+                applied_files.append(filename)
+            elif file_noop:
+                no_change_files.append(filename)
+
+        if applied_files or no_change_files:
+            detail_parts = []
+            if applied_files:
+                detail_parts.append(f"patched: {', '.join(sorted(applied_files))}")
+            if no_change_files:
+                detail_parts.append(
+                    f"no-op (already up-to-date): {', '.join(sorted(no_change_files))}"
+                )
+            detail = "; ".join(detail_parts)
+            return (
+                "APPLIED; next_action=none; details=Deterministic fallback patch applied. "
+                + detail
+            )
+
+        return None
+
+    def _extract_patch_line_ops(self, patch_text: str) -> Dict[str, list[tuple[list[str], list[str]]]]:
+        text = self._normalize_unified_diff((patch_text or "").strip())
+        if not text:
+            return {}
+
+        lines = text.splitlines()
+        operations: Dict[str, list[tuple[list[str], list[str]]]] = {}
+
+        current_file: Optional[str] = None
+        removed: list[str] = []
+        added: list[str] = []
+        in_patch = False
+
+        def flush() -> None:
+            nonlocal removed, added
+            if not current_file:
+                removed, added = [], []
+                return
+            if removed or added:
+                operations.setdefault(current_file, []).append((removed, added))
+            removed, added = [], []
+
+        for line in lines:
+            if line.startswith("*** Begin Patch"):
+                flush()
+                in_patch = True
+                continue
+
+            if line.startswith("*** End Patch"):
+                flush()
+                in_patch = False
+                continue
+
+            if line.startswith("diff --git"):
+                flush()
+                in_patch = True
+                continue
+
+            if line.startswith("*** Update File:"):
+                flush()
+                current_file = line[len("*** Update File:"):].strip()
+                continue
+
+            if line.startswith("---"):
+                in_patch = True
+                continue
+
+            if line.startswith("+++"):
+                path = line[3:].strip()
+                if path.startswith("b/"):
+                    path = path[2:]
+                if path and path != "/dev/null":
+                    current_file = path
+                continue
+
+            if line.startswith("@@"):
+                flush()
+                continue
+
+            if not in_patch:
+                continue
+
+            if line.startswith("+") and not line.startswith("+++"):
+                added.append(line[1:])
+                continue
+
+            if line.startswith("-") and not line.startswith("---"):
+                removed.append(line[1:])
+                continue
+
+            if line.startswith(" ") or line.strip() == "":
+                flush()
+                continue
+
+        flush()
+
+        cleaned: Dict[str, list[tuple[list[str], list[str]]]] = {}
+        for filename, hunks in operations.items():
+            filtered = [pair for pair in hunks if pair[0] or pair[1]]
+            if filtered:
+                cleaned[filename] = filtered
+
+        return cleaned
+
+    def _build_patch_retry_prompt(
+        self,
+        failure_details: str,
+        attempt: int,
+    ) -> str:
+        return (
+            "A prior patch failed to apply during this turn.\n"
+            f"Failure reason: {failure_details}\n"
+            f"This is retry attempt {attempt}.\n\n"
+            "Read the current workspace file contents and return a corrected, single patch for the same goal.\n"
+            "Use a clean patch only:\n"
+            "- unified diff (```diff```), or\n"
+            "- OpenAI apply patch block (*** Begin Patch ... *** End Patch).\n"
+            "No extra explanation, no command wrappers."
+        )
+
+    @staticmethod
+    def _looks_retryable_due_context_loss(next_action: str) -> bool:
+        return "re-read target file context" in (next_action or "").lower()
+
+    def _apply_unified_diff_with_retries(self, diff_text: str) -> str:
+        """
+        Apply a unified/OpenAI-style patch with one bounded retry path.
+
+        If the first attempt returns RETRYABLE with a context refresh request, it requests
+        a fresh patch from the model and immediately retries.
+        """
+        current_patch = diff_text
+        last_result = ""
+        max_attempts = max(1, self.AUTO_APPLY_MAX_ATTEMPTS)
+
+        for attempt in range(1, max_attempts + 1):
+            result = self._apply_unified_diff(current_patch)
+            status, next_action, details = self._parse_apply_contract(result)
+            last_result = result
+
+            # Success or hard-failure stop immediately.
+            if status != "RETRYABLE":
+                break
+
+            # If there's no contract reason to retry, stop.
+            if not self._looks_retryable_due_context_loss(next_action):
+                break
+
+            # Last allowed attempt: report actionable status without another model call.
+            if attempt >= max_attempts:
+                break
+
+            retry_prompt = self._build_patch_retry_prompt(details, attempt + 1)
+            retry_raw = self.agent.handle_message(retry_prompt)
+            retry_raw = self._strip_json_command_prefix(retry_raw)
+            refreshed_diff = self._extract_diff_block(retry_raw)
+            if refreshed_diff:
+                current_patch = refreshed_diff
+                continue
+
+            refreshed_script = self._extract_bash_block(retry_raw)
+            if refreshed_script:
+                script_result = self._apply_shell_script_with_retries(refreshed_script, attempt + 1)
+                return script_result
+
+            last_result = (
+                "RETRYABLE; next_action=manual retry with edited patch; "
+                f"details=Could not extract a valid patch from model retry response after failure: {details}"
+            )
+            break
+
+        return last_result
+
+    def _apply_shell_script_with_retries(self, script: str, attempt: int) -> str:
+        result = self._auto_apply_shell_script(script)
+        status, next_action, details = self._parse_apply_contract(result)
+        if status != "RETRYABLE":
+            return result
+
+        if not self._looks_retryable_due_context_loss(next_action):
+            return result
+
+        if attempt >= self.AUTO_APPLY_MAX_ATTEMPTS:
+            return result
+
+        retry_prompt = self._build_patch_retry_prompt(details, attempt + 1)
+        retry_raw = self.agent.handle_message(retry_prompt)
+        retry_raw = self._strip_json_command_prefix(retry_raw)
+        refreshed_script = self._extract_bash_block(retry_raw)
+        if not refreshed_script:
+            refreshed_diff = self._extract_diff_block(retry_raw)
+            if refreshed_diff:
+                return self._apply_unified_diff_with_retries(refreshed_diff)
+            return "RETRYABLE; next_action=manual retry with corrected command; details=Could not extract a valid rerun command."
+
+        return self._auto_apply_shell_script(refreshed_script)
+
+    def _parse_apply_contract(self, output: str) -> tuple[str, str, str]:
+        if hasattr(self.agent, "_parse_heartbeat_action_contract"):
+            try:
+                status, next_action, details = self.agent._parse_heartbeat_action_contract(output)
+                if status not in {"APPLIED", "RETRYABLE", "FAILED_PERM"}:
+                    status = "RETRYABLE"
+                return status, next_action, details
+            except Exception:
+                pass
+
+        if not output:
+            return "FAILED_PERM", "no output", "No output from apply step."
+
+        upper = output.upper()
+        if "APPLIED" in upper:
+            status = "APPLIED"
+        elif "FAILED_PERM" in upper:
+            status = "FAILED_PERM"
+        elif "RETRYABLE" in upper:
+            status = "RETRYABLE"
+        else:
+            status = "RETRYABLE"
+
+        details = output
+        next_action = ""
+        match = re.search(r"next_action\s*=\s*([^;]+)", output, flags=re.IGNORECASE)
+        if match:
+            next_action = match.group(1).strip()
+        match = re.search(r"details\s*=\s*(.+)", output, flags=re.IGNORECASE)
+        if match:
+            details = match.group(1).strip()
+        return status, next_action, details
 
     @staticmethod
     def _normalize_unified_diff(diff_text: str) -> str:
@@ -551,11 +1036,14 @@ class TUI:
     def _apply_apply_patch_block(self, patch_text: str) -> str:
         apply_patch_path = shutil.which("apply_patch")
         if not apply_patch_path:
-            return "Auto-apply failed: apply_patch utility not found"
+            return (
+                "FAILED_PERM; next_action=fallback to git apply; "
+                "details=apply_patch utility not found"
+            )
 
         candidate = self._sanitize_apply_patch(patch_text)
         if not candidate:
-            return "Auto-apply failed: not an apply_patch block"
+            return "FAILED_PERM; next_action=convert to unified diff; details=not an apply_patch block"
 
         try:
             p = subprocess.run(
@@ -567,10 +1055,13 @@ class TUI:
                 timeout=90,
             )
             if p.returncode == 0:
-                return "Applied OpenAI-style patch successfully."
-            return f"Patch apply failed: {(p.stderr or p.stdout).strip()[:300]}"
+                return "APPLIED; next_action=none; details=Applied OpenAI-style patch successfully."
+            return (
+                "RETRYABLE; next_action=re-read target file context and regenerate patch; "
+                f"details={(p.stderr or p.stdout).strip()[:300]}"
+            )
         except Exception as e:
-            return f"Patch apply error: {e}"
+            return f"FAILED_PERM; next_action=retry with a valid patch; details=Patch apply error: {e}"
 
     def _should_auto_apply(self, user_input: str) -> bool:
         lowered = user_input.lower()
@@ -598,7 +1089,7 @@ class TUI:
         blocked = ["rm -rf /", "mkfs", "shutdown", "reboot", "diskutil erase"]
         s = script.lower()
         if any(b in s for b in blocked):
-            return "Auto-apply blocked: destructive command detected"
+            return "FAILED_PERM; next_action=adjust command; details=Auto-apply blocked: destructive command detected"
 
         try:
             result = subprocess.run(
@@ -611,10 +1102,70 @@ class TUI:
             out = (result.stdout or "").strip()
             err = (result.stderr or "").strip()
             if result.returncode == 0:
-                return f"Auto-applied changes successfully. {out[:300]}".strip()
-            return f"Auto-apply failed (exit {result.returncode}). {err[:300]}".strip()
+                return f"APPLIED; next_action=none; details=Command output: {(out or 'success').strip()}"
+            return f"RETRYABLE; next_action=retry with corrected script; details=Auto-apply failed (exit {result.returncode}). {err[:300]}".strip()
         except Exception as e:
-            return f"Auto-apply error: {e}"
+            return f"FAILED_PERM; next_action=retry with corrected script; details=Auto-apply error: {e}"
+
+    @staticmethod
+    def _format_git_status_label(status_code: str) -> str:
+        if status_code == "??":
+            return TUI.GIT_STATUS_LABELS["??"]
+
+        if not status_code:
+            return "changed"
+
+        flags = set(status_code)
+        for key in ("U", "D", "R", "C", "A", "M"):
+            if key in flags:
+                return TUI.GIT_STATUS_LABELS[key]
+        return "changed"
+
+    @staticmethod
+    def _parse_git_status_line(line: str) -> tuple[str, str]:
+        trimmed = (line or "").rstrip()
+        if not trimmed:
+            return "", ""
+
+        if trimmed.startswith("??"):
+            return "??", trimmed[2:].strip()
+
+        if len(trimmed) >= 3 and trimmed[1] == " ":
+            return trimmed[:2], trimmed[3:].strip()
+
+        if " " in trimmed:
+            status, path = trimmed.split(" ", 1)
+            return status.strip(), path.strip()
+        return trimmed.strip(), ""
+
+    @staticmethod
+    def _truncate_for_log(value: str, limit: int = 160) -> str:
+        if len(value) <= limit:
+            return value
+        return value[: limit - 3].rstrip() + "..."
+
+    def _build_compaction_summary(self, dropped_messages: list[Message]) -> str:
+        if not dropped_messages:
+            return "No earlier conversation to summarize."
+
+        total = len(dropped_messages)
+        user_count = sum(1 for message in dropped_messages if message.role == "user")
+        assistant_count = sum(1 for message in dropped_messages if message.role == "assistant")
+        lines = [
+            f"Compacted from {total} older messages.",
+            f"Included contributions: {user_count} user, {assistant_count} assistant.",
+            "",
+            "Recent dropped turns:",
+        ]
+        for message in dropped_messages[-6:]:
+            content = (message.content or "").replace("\n", " ").strip()
+            if not content:
+                continue
+            role = "User" if message.role == "user" else "Assistant"
+            lines.append(f"- {role}: {self._truncate_for_log(content)}")
+        if len(lines) == 4:
+            lines.append("- (No readable content in dropped turns.)")
+        return "\n".join(lines)
 
     # pure agentic mode: no deterministic profile shortcuts
 
@@ -643,7 +1194,14 @@ class TUI:
             )
             if r.returncode != 0:
                 return "Workspace changes: unavailable"
-            lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
+            raw_lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
+            lines = []
+            for raw_line in raw_lines:
+                code, path = self._parse_git_status_line(raw_line)
+                if not path:
+                    continue
+                label = self._format_git_status_label(code)
+                lines.append(f"{label}: {path}")
             if not lines:
                 return "Workspace changes: none"
             preview = ", ".join(lines[:5])
@@ -691,8 +1249,7 @@ class TUI:
                     with self.console.status("[dim]Preparing request...[/dim]", spinner="dots") as status:
                         t0 = time.monotonic()
                         backend_name = self.agent.backend.name
-                        est_ctx = self._estimate_context_tokens()
-                        status.update(f"[dim]Using backend: {backend_name} | ctx~{est_ctx:,} tok[/dim]")
+                        status.update(f"[dim]Using backend: {backend_name} | {self._format_context_usage()}[/dim]")
 
                         add_dirs = []
                         docs_dir = str((Path.home() / "Documents").resolve())
@@ -797,17 +1354,17 @@ class TUI:
                     # Optional auto-apply for coding-assistant style file actions.
                     if self._should_auto_apply(user_input) and not (response or "").startswith("Error:"):
                         response = self._strip_json_command_prefix(response)
-                        auto_steps = ["Auto-apply pipeline: analyzing assistant output."]
-                        self.console.print("  [dim]Auto-apply: analyzing assistant output for editable actions...[/dim]")
-                        script = self._extract_bash_block(response)
-                        diff_block = self._extract_diff_block(response)
+                    auto_steps = ["Auto-apply: analyzing assistant output."]
+                    self.console.print("  [dim]Auto-apply: analyzing assistant output for editable actions...[/dim]")
+                    script = self._extract_bash_block(response)
+                    diff_block = self._extract_diff_block(response)
 
-                        # Always require actionable patch/script for edit intents.
-                        if not diff_block and not script:
-                            auto_steps.append("No direct diff/script found; requesting a clean patch from the model.")
-                            diff_req = self.agent.handle_message(
-                                "Provide only an actionable patch for the requested edit. Prefer a single ```diff``` block. No prose."
-                            )
+                    # Always require actionable patch/script for edit intents.
+                    if not diff_block and not script:
+                        auto_steps.append("No patch found; requesting a clean patch from the model.")
+                        diff_req = self.agent.handle_message(
+                            "Provide only an actionable patch for the requested edit. Prefer a single ```diff``` block. No prose."
+                        )
                             diff_req = self._strip_json_command_prefix(diff_req)
                             diff_block = self._extract_diff_block(diff_req)
                             if not diff_block:
@@ -839,17 +1396,34 @@ class TUI:
 
                             if decision in {"once", "always"}:
                                 auto_steps.append(
-                                    "Applying proposed changes now."
+                                    "Applying proposed changes."
                                     if diff_block
                                     else "Applying proposed shell command now."
                                 )
                                 self.console.print(f"  [system]{auto_steps[-1]}[/system]")
                                 if diff_block:
-                                    apply_result = self._apply_unified_diff(diff_block)
+                                    apply_result = self._apply_unified_diff_with_retries(diff_block)
                                 else:
-                                    apply_result = self._auto_apply_shell_script(script or "")
-                                auto_steps.append(f"Auto-apply result: {apply_result}")
-                                response = f"{response}\n\n---\n" + "\n".join(auto_steps)
+                                    apply_result = self._apply_shell_script_with_retries(script or "", 1)
+
+                                status, next_action, details = self._parse_apply_contract(apply_result)
+                                if status == "APPLIED" and not self._auto_apply_verbose:
+                                    compact = f"Auto-apply: {status}"
+                                    if next_action:
+                                        compact += f"; {next_action}"
+                                    if details:
+                                        compact += f"; {details}"
+                                    response = f"{response}\n\n---\n{compact}"
+                                else:
+                                    auto_steps.append(
+                                        f"Auto-apply status: {status}"
+                                        + (f"; next_action: {next_action}" if next_action else "")
+                                    )
+                                    if details:
+                                        auto_steps.append(f"Details: {details}")
+                                    if status == "RETRYABLE" and next_action:
+                                        auto_steps.append(f"Retry action: {next_action}")
+                                    response = f"{response}\n\n---\n" + "\n".join(auto_steps)
                             else:
                                 auto_steps.append("Auto-apply skipped: user denied edits.")
                                 response = f"{response}\n\n---\n" + "\n".join(auto_steps)

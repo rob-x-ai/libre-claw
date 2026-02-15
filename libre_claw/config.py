@@ -132,6 +132,10 @@ class HeartbeatConfig(BaseModel):
         default=True,
         description="Whether heartbeat action blocks (diff/script) are applied automatically.",
     )
+    auto_apply_verbose: bool = Field(
+        default=False,
+        description="Whether auto-apply logs should include detailed status lines in the UI.",
+    )
     prompt: str = Field(
         default="You are the same model running this project and this workspace is your home; act as the same agent across direct and heartbeat mode. "
         "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "

@@ -21,7 +21,7 @@ class Workspace:
     """
 
     # Files loaded in every mode
-    CORE_FILES = ["SOUL.md", "USER.md", "IDENTITY.md", "AGENTS.md"]
+    CORE_FILES = ["SOUL.md", "USER.md", "IDENTITY.md", "AGENTS.md", "CONVERSATION_SUMMARY.md"]
 
     # Additional files for direct mode (main session with human)
     DIRECT_FILES = ["MEMORY.md"]
@@ -31,7 +31,7 @@ class Workspace:
 
     # All possible template files
     ALL_TEMPLATES = [
-        "SOUL.md", "USER.md", "IDENTITY.md", "AGENTS.md",
+        "SOUL.md", "USER.md", "IDENTITY.md", "AGENTS.md", "CONVERSATION_SUMMARY.md",
         "MEMORY.md", "HEARTBEAT.md", "HEARTBEAT-AUDIT.md",
         "INFRA.md", "TOOLS.md",
     ]
