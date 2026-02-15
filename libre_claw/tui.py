@@ -498,6 +498,26 @@ class TUI:
                 return self._set_user_name(name)
         return None
 
+    def _workspace_changes_summary(self) -> str:
+        try:
+            r = subprocess.run(
+                ["git", "status", "--short"],
+                cwd=str(self.agent.workspace.path),
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if r.returncode != 0:
+                return "Workspace changes: unavailable (not a git repo)"
+            lines = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
+            if not lines:
+                return "Workspace changes: none"
+            preview = ", ".join(lines[:5])
+            more = f" (+{len(lines)-5} more)" if len(lines) > 5 else ""
+            return f"Workspace changes: {preview}{more}"
+        except Exception:
+            return "Workspace changes: unavailable"
+
     def _format_uptime(self) -> str:
         delta = datetime.now() - self._start_time
         seconds = int(delta.total_seconds())
@@ -536,6 +556,7 @@ class TUI:
                     # Deterministic direct-edit intents (avoid model claiming fake edits)
                     direct_result = self._handle_direct_profile_update(user_input)
                     if direct_result:
+                        direct_result = f"{direct_result}\n\n{self._workspace_changes_summary()}"
                         self.console.print()
                         self.console.print(Panel(
                             Markdown(direct_result),
@@ -635,6 +656,8 @@ class TUI:
                         if script:
                             apply_result = self._auto_apply_shell_script(script)
                             response = f"{response}\n\n---\n**Auto-apply:** {apply_result}"
+
+                    response = f"{response}\n\n{self._workspace_changes_summary()}"
 
                     # Display response
                     self.console.print()
