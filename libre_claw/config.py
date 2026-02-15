@@ -75,9 +75,10 @@ class Config(BaseSettings):
 
     config_file: Optional[Path] = Field(default=None, description="Path to config file")
 
-    class Config:
-        env_prefix = "LIBRE_CLAW_"
-        env_nested_delimiter = "__"
+    model_config = {
+        "env_prefix": "LIBRE_CLAW_",
+        "env_nested_delimiter": "__",
+    }
 
     @classmethod
     def from_yaml(cls, path: Path) -> "Config":
@@ -87,6 +88,9 @@ class Config(BaseSettings):
 
         with open(path) as f:
             data = yaml.safe_load(f) or {}
+
+        # Remove config_file from data if present (it's set explicitly below)
+        data.pop("config_file", None)
 
         return cls(**data, config_file=path)
 
