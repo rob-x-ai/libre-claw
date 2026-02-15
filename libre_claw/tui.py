@@ -1354,92 +1354,92 @@ class TUI:
                     # Optional auto-apply for coding-assistant style file actions.
                     if self._should_auto_apply(user_input) and not (response or "").startswith("Error:"):
                         response = self._strip_json_command_prefix(response)
-                    auto_steps = ["Auto-apply: analyzing assistant output."]
-                    self.console.print("  [dim]Auto-apply: analyzing assistant output for editable actions...[/dim]")
-                    script = self._extract_bash_block(response)
-                    diff_block = self._extract_diff_block(response)
+                        auto_steps = ["Auto-apply: analyzing assistant output."]
+                        self.console.print("  [dim]Auto-apply: analyzing assistant output for editable actions...[/dim]")
+                        script = self._extract_bash_block(response)
+                        diff_block = self._extract_diff_block(response)
 
-                    # Always require actionable patch/script for edit intents.
-                    if not diff_block and not script:
-                        auto_steps.append("No patch found; requesting a clean patch from the model.")
-                        diff_req = self.agent.handle_message(
-                            "Provide only an actionable patch for the requested edit. Prefer a single ```diff``` block. No prose."
-                        )
-                        diff_req = self._strip_json_command_prefix(diff_req)
-                        diff_block = self._extract_diff_block(diff_req)
-                        if not diff_block:
-                            script = self._extract_bash_block(diff_req)
-
-                    if script or diff_block:
-                        decision = self._approval_mode
-                        if self._approval_mode == "ask":
-                            self.console.print("\n  [command]Edit proposal detected.[/command]")
-                            preview = diff_block or script or "(no preview)"
-                            self.console.print(Panel(
-                                Markdown(f"```\n{preview[:4000]}\n```"),
-                                title="Proposed changes",
-                                border_style="blue",
-                            ))
-                            choice = Prompt.ask(
-                                "  Approve edits?",
-                                choices=["once", "always", "never"],
-                                default="once",
+                        # Always require actionable patch/script for edit intents.
+                        if not diff_block and not script:
+                            auto_steps.append("No patch found; requesting a clean patch from the model.")
+                            diff_req = self.agent.handle_message(
+                                "Provide only an actionable patch for the requested edit. Prefer a single ```diff``` block. No prose."
                             )
-                            if choice == "once":
-                                decision = "once"
-                            elif choice == "always":
-                                self._approval_mode = "always"
-                                decision = "always"
-                            else:
-                                self._approval_mode = "never"
-                                decision = "never"
+                            diff_req = self._strip_json_command_prefix(diff_req)
+                            diff_block = self._extract_diff_block(diff_req)
+                            if not diff_block:
+                                script = self._extract_bash_block(diff_req)
 
-                        if decision in {"once", "always"}:
-                            auto_steps.append(
-                                "Applying proposed changes."
-                                if diff_block
-                                else "Applying proposed shell command now."
-                            )
-                            self.console.print(f"  [system]{auto_steps[-1]}[/system]")
-                            if diff_block:
-                                apply_result = self._apply_unified_diff_with_retries(diff_block)
-                            else:
-                                apply_result = self._apply_shell_script_with_retries(script or "", 1)
-
-                            status, next_action, details = self._parse_apply_contract(apply_result)
-                            if status == "APPLIED" and not self._auto_apply_verbose:
-                                compact = f"Auto-apply: {status}"
-                                if next_action:
-                                    compact += f"; {next_action}"
-                                if details:
-                                    compact += f"; {details}"
-                                response = f"{response}\n\n---\n{compact}"
-                            else:
-                                auto_steps.append(
-                                    f"Auto-apply status: {status}"
-                                    + (f"; next_action: {next_action}" if next_action else "")
+                        if script or diff_block:
+                            decision = self._approval_mode
+                            if self._approval_mode == "ask":
+                                self.console.print("\n  [command]Edit proposal detected.[/command]")
+                                preview = diff_block or script or "(no preview)"
+                                self.console.print(Panel(
+                                    Markdown(f"```\n{preview[:4000]}\n```"),
+                                    title="Proposed changes",
+                                    border_style="blue",
+                                ))
+                                choice = Prompt.ask(
+                                    "  Approve edits?",
+                                    choices=["once", "always", "never"],
+                                    default="once",
                                 )
-                                if details:
-                                    auto_steps.append(f"Details: {details}")
-                                if status == "RETRYABLE" and next_action:
-                                    auto_steps.append(f"Retry action: {next_action}")
+                                if choice == "once":
+                                    decision = "once"
+                                elif choice == "always":
+                                    self._approval_mode = "always"
+                                    decision = "always"
+                                else:
+                                    self._approval_mode = "never"
+                                    decision = "never"
+
+                            if decision in {"once", "always"}:
+                                auto_steps.append(
+                                    "Applying proposed changes."
+                                    if diff_block
+                                    else "Applying proposed shell command now."
+                                )
+                                self.console.print(f"  [system]{auto_steps[-1]}[/system]")
+                                if diff_block:
+                                    apply_result = self._apply_unified_diff_with_retries(diff_block)
+                                else:
+                                    apply_result = self._apply_shell_script_with_retries(script or "", 1)
+
+                                status, next_action, details = self._parse_apply_contract(apply_result)
+                                if status == "APPLIED" and not self._auto_apply_verbose:
+                                    compact = f"Auto-apply: {status}"
+                                    if next_action:
+                                        compact += f"; {next_action}"
+                                    if details:
+                                        compact += f"; {details}"
+                                    response = f"{response}\n\n---\n{compact}"
+                                else:
+                                    auto_steps.append(
+                                        f"Auto-apply status: {status}"
+                                        + (f"; next_action: {next_action}" if next_action else "")
+                                    )
+                                    if details:
+                                        auto_steps.append(f"Details: {details}")
+                                    if status == "RETRYABLE" and next_action:
+                                        auto_steps.append(f"Retry action: {next_action}")
+                                    response = f"{response}\n\n---\n" + "\n".join(auto_steps)
+                            else:
+                                auto_steps.append("Auto-apply skipped: user denied edits.")
                                 response = f"{response}\n\n---\n" + "\n".join(auto_steps)
+                                alt = self.agent.handle_message(
+                                    "User denied the proposed file edits. Provide next best steps without modifying files."
+                                )
+                                alt = self._strip_json_command_prefix(alt)
+                                response = f"{response}\n\n**Alternative plan:**\n{alt}"
                         else:
-                            auto_steps.append("Auto-apply skipped: user denied edits.")
-                            response = f"{response}\n\n---\n" + "\n".join(auto_steps)
-                            alt = self.agent.handle_message(
-                                "User denied the proposed file edits. Provide next best steps without modifying files."
-                            )
-                            alt = self._strip_json_command_prefix(alt)
-                            response = f"{response}\n\n**Alternative plan:**\n{alt}"
-                    else:
-                        # Prevent fake "done" claims when no patch exists.
-                        if self._looks_like_done_claim(response):
-                            auto_steps.append("NOT_APPLIED: no actionable patch/script produced.")
-                            response = (
-                                f"{response}\n\n---\n"
-                                "\n".join(auto_steps)
-                            )
+                            # Prevent fake "done" claims when no patch exists.
+                            if self._looks_like_done_claim(response):
+                                auto_steps.append("NOT_APPLIED: no actionable patch/script produced.")
+                                response = (
+                                    f"{response}\n\n---\n"
+                                    "\n".join(auto_steps)
+                                )
 
                     response = f"{response}\n\n{self._workspace_changes_summary()}"
 
