@@ -661,6 +661,9 @@ class TUI:
             result = self._apply_apply_patch_block(embedded)
             status, next_action, details = self._parse_apply_contract(result)
             if status == "FAILED_PERM" and "apply_patch utility not found" in (details or "").lower():
+                op_result = self._apply_openai_patch_file_ops(embedded)
+                if op_result:
+                    return op_result
                 repaired = self._repair_patch_with_file_context(embedded)
                 if repaired:
                     return repaired
@@ -680,6 +683,9 @@ class TUI:
             result = self._apply_apply_patch_block(candidate)
             status, next_action, details = self._parse_apply_contract(result)
             if status == "FAILED_PERM" and "apply_patch utility not found" in (details or "").lower():
+                op_result = self._apply_openai_patch_file_ops(candidate)
+                if op_result:
+                    return op_result
                 repaired = self._repair_patch_with_file_context(candidate)
                 if repaired:
                     return repaired
@@ -714,6 +720,111 @@ class TUI:
             )
         except Exception as e:
             return f"FAILED_PERM; next_action=retry with a valid patch; details=Diff apply error: {e}"
+
+    def _apply_openai_patch_file_ops(self, patch_text: str) -> Optional[str]:
+        if not patch_text or "*** Begin Patch" not in patch_text:
+            return None
+
+        lines = textwrap.dedent(patch_text).splitlines()
+        if not lines:
+            return None
+
+        mode: Optional[str] = None
+        current_path: Optional[str] = None
+        add_lines: list[str] = []
+        deleted: list[str] = []
+        written: list[str] = []
+
+        def _resolve(path_text: str) -> Optional[Path]:
+            rel = (path_text or "").strip().lstrip("/")
+            if not rel:
+                return None
+            return self.agent.workspace.path / rel
+
+        def _flush_add() -> Optional[str]:
+            nonlocal mode, current_path, add_lines
+            if mode != "add" or not current_path:
+                mode = None
+                current_path = None
+                add_lines = []
+                return None
+
+            target = _resolve(current_path)
+            if target is None:
+                mode = None
+                current_path = None
+                add_lines = []
+                return "FAILED_PERM; next_action=provide valid patch; details=Invalid Add File target."
+
+            target.parent.mkdir(parents=True, exist_ok=True)
+            content = "\n".join(add_lines)
+            if add_lines:
+                content += "\n"
+            target.write_text(content)
+            written.append(str(Path(current_path)))
+
+            mode = None
+            current_path = None
+            add_lines = []
+            return None
+
+        for raw in lines:
+            stripped = raw.strip()
+            if stripped.startswith("*** Add File:"):
+                err = _flush_add()
+                if err:
+                    return err
+                mode = "add"
+                current_path = stripped[len("*** Add File:"):].strip()
+                add_lines = []
+                continue
+
+            if stripped.startswith("*** Delete File:"):
+                err = _flush_add()
+                if err:
+                    return err
+                mode = None
+                path_text = stripped[len("*** Delete File:"):].strip()
+                target = _resolve(path_text)
+                if target and target.exists():
+                    target.unlink()
+                    deleted.append(str(Path(path_text)))
+                continue
+
+            if stripped.startswith("*** Update File:"):
+                err = _flush_add()
+                if err:
+                    return err
+                mode = "update"
+                current_path = stripped[len("*** Update File:"):].strip()
+                continue
+
+            if stripped.startswith("*** End Patch"):
+                break
+
+            if mode == "add":
+                if raw.startswith("+"):
+                    add_lines.append(raw[1:])
+                elif raw.startswith("***"):
+                    err = _flush_add()
+                    if err:
+                        return err
+                else:
+                    add_lines.append(raw)
+
+        err = _flush_add()
+        if err:
+            return err
+
+        if written or deleted:
+            details_parts: list[str] = []
+            if written:
+                details_parts.append(f"created/updated: {', '.join(written)}")
+            if deleted:
+                details_parts.append(f"deleted: {', '.join(deleted)}")
+            return f"APPLIED; next_action=none; details=Applied OpenAI file ops fallback. {'; '.join(details_parts)}"
+
+        return None
 
     def _repair_patch_with_file_context(self, diff_text: str) -> Optional[str]:
         def normalize_context_line(line: str) -> str:
