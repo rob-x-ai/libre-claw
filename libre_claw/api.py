@@ -131,6 +131,13 @@ def _proactive_status_payload(agent: Agent) -> Dict[str, Any]:
 @app.on_event("startup")
 async def startup_event() -> None:
     """Initialize agent and optionally start proactive loop on server boot."""
+    if _autostart_proactive or _gateway_mode:
+        agent = get_agent()
+        sandbox_ready, sandbox_detail = agent.ensure_container_sandbox()
+        if sandbox_ready:
+            print(f"[gateway] persistent sandbox ready: {sandbox_detail}")
+        elif sandbox_detail not in {"container mode disabled", "persistent sandbox disabled"}:
+            print(f"[gateway] persistent sandbox unavailable: {sandbox_detail}")
     if _autostart_proactive:
         agent = get_agent()
         agent.start_proactive()

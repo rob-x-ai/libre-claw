@@ -145,17 +145,27 @@ libre-claw -w ~/my-workspace
 ```
 
 Behavior:
-- Commands run in a short-lived container.
+- Commands run in a persistent sandbox container by default (one container per workspace, reused via `exec`).
+- Sandbox container name format: `libre-claw-sandbox-<workspace-hash>`.
+- Sandbox is prewarmed on agent startup when container mode is enabled.
 - Workspace is bind-mounted at `/workspace`.
 - Working directory is `/workspace`.
 - Network is disabled (`--network none`).
-- Files remain on your host workspace (the container is ephemeral).
+- Files remain on your host workspace (bind mount).
+- Set `LIBRE_CLAW_CONTAINER_PERSISTENT=0` to fall back to ephemeral `run --rm` containers.
+
+Quick checks:
+```bash
+docker ps | rg libre-claw-sandbox
+docker inspect libre-claw-sandbox-<workspace-hash> --format '{{.State.Running}}'
+```
 
 Environment knobs:
 - `LIBRE_CLAW_TOOL_MODE=container` enables container execution (`local` by default).
 - `LIBRE_CLAW_CONTAINER_ENGINE` (`docker` or `podman`, default `docker` with podman fallback).
 - `LIBRE_CLAW_CONTAINER_IMAGE` (default `ubuntu:24.04`).
 - `LIBRE_CLAW_CONTAINER_SHELL` (default `bash`).
+- `LIBRE_CLAW_CONTAINER_PERSISTENT` (`1` default, set `0` for ephemeral per-command containers).
 - `LIBRE_CLAW_CONTAINER_MEMORY` (default `1g`).
 - `LIBRE_CLAW_CONTAINER_CPUS` (default `1.5`).
 - `LIBRE_CLAW_CONTAINER_UID` / `LIBRE_CLAW_CONTAINER_GID` (default to current user when available).

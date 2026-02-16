@@ -9,6 +9,7 @@ import subprocess
 import shutil
 import os
 import json
+import hashlib
 import time
 import uuid
 import textwrap
@@ -114,8 +115,10 @@ class Agent:
 
         self._proactive_thread: Optional[threading.Thread] = None
         self._proactive_stop = threading.Event()
+        self._last_container_error: str = ""
 
         self._append_heartbeat_bootstrap_log()
+        self._maybe_prewarm_container_sandbox()
 
     def handle_message(
         self,
@@ -1742,7 +1745,8 @@ class Agent:
             run_cwd = None
             execution_mode = "container"
         elif wants_container:
-            fallback_note = "container engine unavailable; executed locally"
+            reason = (self._last_container_error or "").strip()
+            fallback_note = reason or "container unavailable; executed locally"
 
         try:
             result = subprocess.run(
@@ -1778,6 +1782,7 @@ class Agent:
             return f"Auto-apply command error: {e}"
 
     def _build_container_shell_command(self, script: str) -> Optional[List[str]]:
+        self._last_container_error = ""
         mode = (os.getenv("LIBRE_CLAW_TOOL_MODE") or "local").strip().lower()
         if mode not in {"container", "docker", "sandbox"}:
             return None
@@ -1787,6 +1792,7 @@ class Agent:
             if engine == "docker" and shutil.which("podman"):
                 engine = "podman"
             else:
+                self._last_container_error = "container engine unavailable"
                 return None
 
         image = (os.getenv("LIBRE_CLAW_CONTAINER_IMAGE") or "ubuntu:24.04").strip() or "ubuntu:24.04"
@@ -1796,10 +1802,38 @@ class Agent:
         workspace_dir = str(self.workspace.path.resolve())
         uid = (os.getenv("LIBRE_CLAW_CONTAINER_UID") or "").strip()
         gid = (os.getenv("LIBRE_CLAW_CONTAINER_GID") or "").strip()
+        persistent_raw = (os.getenv("LIBRE_CLAW_CONTAINER_PERSISTENT") or "1").strip().lower()
+        persistent = persistent_raw not in {"0", "false", "no", "off"}
         if not uid and hasattr(os, "getuid"):
             uid = str(os.getuid())
         if not gid and hasattr(os, "getgid"):
             gid = str(os.getgid())
+
+        if persistent:
+            container_name = self._container_name_for_workspace()
+            ready, reason = self._ensure_persistent_container(
+                engine=engine,
+                name=container_name,
+                image=image,
+                shell=shell,
+                workspace_dir=workspace_dir,
+                memory_limit=memory_limit,
+                cpu_limit=cpu_limit,
+                uid=uid,
+                gid=gid,
+            )
+            if not ready:
+                self._last_container_error = reason or "failed to start persistent sandbox container"
+                return None
+            return [
+                engine,
+                "exec",
+                "-i",
+                container_name,
+                shell,
+                "-lc",
+                script,
+            ]
 
         cmd = [
             engine,
@@ -1823,6 +1857,137 @@ class Agent:
             cmd.extend(["--user", f"{uid}:{gid}"])
         cmd.extend([image, shell, "-lc", script])
         return cmd
+
+    def _maybe_prewarm_container_sandbox(self) -> None:
+        ready, detail = self.ensure_container_sandbox()
+        if ready:
+            return
+        if detail not in {"container mode disabled", "persistent sandbox disabled"}:
+            self._last_container_error = detail
+
+    def ensure_container_sandbox(self) -> tuple[bool, str]:
+        mode = (os.getenv("LIBRE_CLAW_TOOL_MODE") or "local").strip().lower()
+        if mode not in {"container", "docker", "sandbox"}:
+            return False, "container mode disabled"
+
+        engine = (os.getenv("LIBRE_CLAW_CONTAINER_ENGINE") or "docker").strip() or "docker"
+        if not shutil.which(engine):
+            if engine == "docker" and shutil.which("podman"):
+                engine = "podman"
+            else:
+                return False, "container engine unavailable"
+
+        persistent_raw = (os.getenv("LIBRE_CLAW_CONTAINER_PERSISTENT") or "1").strip().lower()
+        persistent = persistent_raw not in {"0", "false", "no", "off"}
+        if not persistent:
+            return False, "persistent sandbox disabled"
+
+        image = (os.getenv("LIBRE_CLAW_CONTAINER_IMAGE") or "ubuntu:24.04").strip() or "ubuntu:24.04"
+        shell = (os.getenv("LIBRE_CLAW_CONTAINER_SHELL") or "bash").strip() or "bash"
+        memory_limit = (os.getenv("LIBRE_CLAW_CONTAINER_MEMORY") or "1g").strip() or "1g"
+        cpu_limit = (os.getenv("LIBRE_CLAW_CONTAINER_CPUS") or "1.5").strip() or "1.5"
+        workspace_dir = str(self.workspace.path.resolve())
+        uid = (os.getenv("LIBRE_CLAW_CONTAINER_UID") or "").strip()
+        gid = (os.getenv("LIBRE_CLAW_CONTAINER_GID") or "").strip()
+        if not uid and hasattr(os, "getuid"):
+            uid = str(os.getuid())
+        if not gid and hasattr(os, "getgid"):
+            gid = str(os.getgid())
+
+        container_name = self._container_name_for_workspace()
+        ok, reason = self._ensure_persistent_container(
+            engine=engine,
+            name=container_name,
+            image=image,
+            shell=shell,
+            workspace_dir=workspace_dir,
+            memory_limit=memory_limit,
+            cpu_limit=cpu_limit,
+            uid=uid,
+            gid=gid,
+        )
+        if ok:
+            return True, container_name
+        return False, reason or "failed to initialize sandbox container"
+
+    def _container_name_for_workspace(self) -> str:
+        digest = hashlib.sha1(str(self.workspace.path.resolve()).encode("utf-8")).hexdigest()[:12]
+        return f"libre-claw-sandbox-{digest}"
+
+    def _ensure_persistent_container(
+        self,
+        *,
+        engine: str,
+        name: str,
+        image: str,
+        shell: str,
+        workspace_dir: str,
+        memory_limit: str,
+        cpu_limit: str,
+        uid: str,
+        gid: str,
+    ) -> tuple[bool, str]:
+        try:
+            inspect = subprocess.run(
+                [engine, "inspect", "-f", "{{.State.Running}}", name],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if inspect.returncode == 0:
+                running = (inspect.stdout or "").strip().lower() == "true"
+                if running:
+                    return True, ""
+                started = subprocess.run(
+                    [engine, "start", name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if started.returncode == 0:
+                    return True, ""
+                return False, (started.stderr or started.stdout or "failed to start container").strip()[:240]
+
+            cmd = [
+                engine,
+                "run",
+                "-d",
+                "--name",
+                name,
+                "--network",
+                "none",
+                "--pids-limit",
+                "256",
+                "--memory",
+                memory_limit,
+                "--cpus",
+                cpu_limit,
+                "-v",
+                f"{workspace_dir}:/workspace",
+                "-w",
+                "/workspace",
+            ]
+            if uid and gid:
+                cmd.extend(["--user", f"{uid}:{gid}"])
+            cmd.extend(
+                [
+                    image,
+                    shell,
+                    "-lc",
+                    "while true; do sleep 3600; done",
+                ]
+            )
+            created = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if created.returncode == 0:
+                return True, ""
+            return False, (created.stderr or created.stdout or "failed to create container").strip()[:240]
+        except Exception as e:
+            return False, str(e)
 
     def _execute_heartbeat_actions(self, content: str) -> str:
         outputs: List[str] = []
