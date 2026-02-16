@@ -656,6 +656,24 @@ class TUI:
         if not candidate:
             return "FAILED_PERM; next_action=no valid diff; details=No valid diff content found."
 
+        # Prefer the Agent's patch engine first (it has richer retry/repair logic).
+        delegated_apply = getattr(self.agent, "_apply_unified_diff", None)
+        if callable(delegated_apply):
+            try:
+                delegated_result = delegated_apply(candidate)
+                d_status, d_next_action, d_details = self._parse_apply_contract(delegated_result)
+                if d_status == "APPLIED":
+                    return delegated_result
+                if d_status == "FAILED_PERM" and "apply_patch utility not found" not in (d_details or "").lower():
+                    return delegated_result
+                if "apply_patch utility not found" in (d_details or "").lower():
+                    op_result = self._apply_openai_patch_file_ops(candidate)
+                    if op_result:
+                        return op_result
+                # If delegated strategy was retryable, continue into local fallback strategies below.
+            except Exception:
+                pass
+
         embedded = self._extract_embedded_apply_patch(candidate)
         if embedded:
             result = self._apply_apply_patch_block(embedded)
@@ -729,102 +747,238 @@ class TUI:
         if not lines:
             return None
 
-        mode: Optional[str] = None
-        current_path: Optional[str] = None
-        add_lines: list[str] = []
-        deleted: list[str] = []
-        written: list[str] = []
+        segments: list[tuple[int, int]] = []
+        scan_idx = 0
+        while scan_idx < len(lines):
+            if lines[scan_idx].strip() != "*** Begin Patch":
+                scan_idx += 1
+                continue
+            end_idx = scan_idx + 1
+            while end_idx < len(lines) and lines[end_idx].strip() != "*** End Patch":
+                end_idx += 1
+            if end_idx >= len(lines):
+                break
+            segments.append((scan_idx, end_idx))
+            scan_idx = end_idx + 1
 
-        def _resolve(path_text: str) -> Optional[Path]:
-            rel = (path_text or "").strip().lstrip("/")
-            if not rel:
-                return None
-            return self.agent.workspace.path / rel
-
-        def _flush_add() -> Optional[str]:
-            nonlocal mode, current_path, add_lines
-            if mode != "add" or not current_path:
-                mode = None
-                current_path = None
-                add_lines = []
-                return None
-
-            target = _resolve(current_path)
-            if target is None:
-                mode = None
-                current_path = None
-                add_lines = []
-                return "FAILED_PERM; next_action=provide valid patch; details=Invalid Add File target."
-
-            target.parent.mkdir(parents=True, exist_ok=True)
-            content = "\n".join(add_lines)
-            if add_lines:
-                content += "\n"
-            target.write_text(content)
-            written.append(str(Path(current_path)))
-
-            mode = None
-            current_path = None
-            add_lines = []
+        if not segments:
             return None
 
-        for raw in lines:
-            stripped = raw.strip()
-            if stripped.startswith("*** Add File:"):
-                err = _flush_add()
-                if err:
-                    return err
-                mode = "add"
-                current_path = stripped[len("*** Add File:"):].strip()
-                add_lines = []
+        workspace_root = self.agent.workspace.path.resolve()
+
+        def _resolve(path_text: str) -> tuple[Optional[Path], Optional[str]]:
+            rel = (path_text or "").strip().lstrip("/")
+            if not rel:
+                return None, None
+            target = (self.agent.workspace.path / rel).resolve()
+            try:
+                target.relative_to(workspace_root)
+            except ValueError:
+                return None, None
+            return target, rel
+
+        def _seek_sequence(haystack: list[str], pattern: list[str], start_idx: int) -> int:
+            if not pattern:
+                return -1
+            if len(pattern) > len(haystack):
+                return -1
+            for i in range(start_idx, len(haystack) - len(pattern) + 1):
+                if haystack[i : i + len(pattern)] == pattern:
+                    return i
+            return -1
+
+        def _normalize_line(value: str) -> str:
+            return re.sub(r"\s+", " ", (value or "").strip())
+
+        def _seek_sequence_relaxed(haystack: list[str], pattern: list[str], start_idx: int) -> int:
+            if not pattern:
+                return -1
+            if len(pattern) > len(haystack):
+                return -1
+            normalized_pattern = [_normalize_line(v) for v in pattern]
+            for i in range(start_idx, len(haystack) - len(pattern) + 1):
+                normalized_window = [_normalize_line(v) for v in haystack[i : i + len(pattern)]]
+                if normalized_window == normalized_pattern:
+                    return i
+            return -1
+
+        hunks: list[dict] = []
+        for begin_idx, end_idx in segments:
+            i = begin_idx + 1
+            while i < end_idx:
+                line = lines[i]
+                if line.startswith("*** Add File:"):
+                    path_text = line.split(":", 1)[1].strip()
+                    i += 1
+                    content_lines: list[str] = []
+                    while i < end_idx and not lines[i].startswith("***"):
+                        if lines[i].startswith("+"):
+                            content_lines.append(lines[i][1:])
+                        i += 1
+                    hunks.append({"type": "add", "path": path_text, "contents": "\n".join(content_lines)})
+                    continue
+
+                if line.startswith("*** Delete File:"):
+                    path_text = line.split(":", 1)[1].strip()
+                    hunks.append({"type": "delete", "path": path_text})
+                    i += 1
+                    continue
+
+                if line.startswith("*** Update File:"):
+                    path_text = line.split(":", 1)[1].strip()
+                    i += 1
+                    move_path: Optional[str] = None
+                    if i < end_idx and lines[i].startswith("*** Move to:"):
+                        move_path = lines[i].split(":", 1)[1].strip()
+                        i += 1
+
+                    chunks: list[dict] = []
+                    while i < end_idx and not lines[i].startswith("***"):
+                        if lines[i].startswith("@@"):
+                            context_line = lines[i][2:].strip()
+                            i += 1
+                            old_lines: list[str] = []
+                            new_lines: list[str] = []
+                            while i < end_idx and not lines[i].startswith("@@") and not lines[i].startswith("***"):
+                                change_line = lines[i]
+                                if change_line == "*** End of File":
+                                    i += 1
+                                    break
+                                if change_line.startswith(" "):
+                                    content = change_line[1:]
+                                    old_lines.append(content)
+                                    new_lines.append(content)
+                                elif change_line.startswith("-"):
+                                    old_lines.append(change_line[1:])
+                                elif change_line.startswith("+"):
+                                    new_lines.append(change_line[1:])
+                                i += 1
+                            chunks.append(
+                                {
+                                    "old_lines": old_lines,
+                                    "new_lines": new_lines,
+                                    "change_context": context_line or None,
+                                }
+                            )
+                            continue
+                        i += 1
+
+                    hunks.append({"type": "update", "path": path_text, "move_path": move_path, "chunks": chunks})
+                    continue
+
+                i += 1
+
+        if not hunks:
+            return None
+
+        added: list[str] = []
+        modified: list[str] = []
+        deleted: list[str] = []
+
+        for hunk in hunks:
+            hunk_type = hunk.get("type")
+            path_text = hunk.get("path", "")
+            target, rel = _resolve(path_text)
+            if target is None or rel is None:
+                return "FAILED_PERM; next_action=provide valid patch; details=Invalid patch target path."
+
+            if hunk_type == "add":
+                target.parent.mkdir(parents=True, exist_ok=True)
+                content = hunk.get("contents", "")
+                if content and not content.endswith("\n"):
+                    content += "\n"
+                target.write_text(content)
+                added.append(rel)
                 continue
 
-            if stripped.startswith("*** Delete File:"):
-                err = _flush_add()
-                if err:
-                    return err
-                mode = None
-                path_text = stripped[len("*** Delete File:"):].strip()
-                target = _resolve(path_text)
-                if target and target.exists():
+            if hunk_type == "delete":
+                if target.exists():
                     target.unlink()
-                    deleted.append(str(Path(path_text)))
+                deleted.append(rel)
                 continue
 
-            if stripped.startswith("*** Update File:"):
-                err = _flush_add()
-                if err:
-                    return err
-                mode = "update"
-                current_path = stripped[len("*** Update File:"):].strip()
-                continue
+            if hunk_type == "update":
+                if not target.exists():
+                    return None
 
-            if stripped.startswith("*** End Patch"):
-                break
+                original_content = target.read_text()
+                original_lines = original_content.split("\n")
+                if original_lines and original_lines[-1] == "":
+                    original_lines.pop()
 
-            if mode == "add":
-                if raw.startswith("+"):
-                    add_lines.append(raw[1:])
-                elif raw.startswith("***"):
-                    err = _flush_add()
-                    if err:
-                        return err
+                replacements: list[tuple[int, int, list[str]]] = []
+                line_index = 0
+                chunks = hunk.get("chunks", [])
+
+                for chunk in chunks:
+                    change_context = chunk.get("change_context")
+                    old_lines = list(chunk.get("old_lines", []))
+                    new_lines = list(chunk.get("new_lines", []))
+
+                    if change_context:
+                        context_idx = _seek_sequence(original_lines, [change_context], line_index)
+                        if context_idx == -1:
+                            context_idx = _seek_sequence_relaxed(original_lines, [change_context], line_index)
+                        if context_idx == -1:
+                            return None
+                        line_index = context_idx + 1
+
+                    if not old_lines:
+                        insert_idx = len(original_lines)
+                        replacements.append((insert_idx, 0, new_lines))
+                        continue
+
+                    pattern = old_lines
+                    new_slice = new_lines
+                    found = _seek_sequence(original_lines, pattern, line_index)
+                    if found == -1 and pattern and pattern[-1] == "":
+                        pattern = pattern[:-1]
+                        if new_slice and new_slice[-1] == "":
+                            new_slice = new_slice[:-1]
+                        found = _seek_sequence(original_lines, pattern, line_index)
+                    if found == -1:
+                        found = _seek_sequence_relaxed(original_lines, pattern, line_index)
+
+                    if found == -1:
+                        return None
+
+                    replacements.append((found, len(pattern), new_slice))
+                    line_index = found + len(pattern)
+
+                replacements.sort(key=lambda x: x[0])
+                result_lines = list(original_lines)
+                for start, old_len, new_segment in reversed(replacements):
+                    del result_lines[start : start + old_len]
+                    for idx, value in enumerate(new_segment):
+                        result_lines.insert(start + idx, value)
+
+                if not result_lines or result_lines[-1] != "":
+                    result_lines.append("")
+                new_content = "\n".join(result_lines)
+
+                move_path = hunk.get("move_path")
+                if move_path:
+                    move_target, move_rel = _resolve(move_path)
+                    if move_target is None or move_rel is None:
+                        return "FAILED_PERM; next_action=provide valid patch; details=Invalid move target path."
+                    move_target.parent.mkdir(parents=True, exist_ok=True)
+                    move_target.write_text(new_content)
+                    if move_target != target and target.exists():
+                        target.unlink()
+                    modified.append(move_rel)
                 else:
-                    add_lines.append(raw)
+                    target.write_text(new_content)
+                    modified.append(rel)
 
-        err = _flush_add()
-        if err:
-            return err
-
-        if written or deleted:
-            details_parts: list[str] = []
-            if written:
-                details_parts.append(f"created/updated: {', '.join(written)}")
-            if deleted:
-                details_parts.append(f"deleted: {', '.join(deleted)}")
-            return f"APPLIED; next_action=none; details=Applied OpenAI file ops fallback. {'; '.join(details_parts)}"
-
-        return None
+        details_parts: list[str] = []
+        if added:
+            details_parts.append(f"created: {', '.join(added)}")
+        if modified:
+            details_parts.append(f"updated: {', '.join(modified)}")
+        if deleted:
+            details_parts.append(f"deleted: {', '.join(deleted)}")
+        detail = "; ".join(details_parts) if details_parts else "No-op."
+        return f"APPLIED; next_action=none; details=Applied OpenAI file ops fallback. {detail}"
 
     def _repair_patch_with_file_context(self, diff_text: str) -> Optional[str]:
         def normalize_context_line(line: str) -> str:
@@ -1542,9 +1696,11 @@ class TUI:
         if not text:
             return None
 
-        match = re.search(r"(?ms)^\s*\*\*\* Begin Patch[\s\S]*?^\s*\*\*\* End Patch", text)
-        if match:
-            return textwrap.dedent(match.group(0)).strip()
+        matches = re.findall(r"(?ms)^\s*\*\*\* Begin Patch[\s\S]*?^\s*\*\*\* End Patch", text)
+        if matches:
+            blocks = [textwrap.dedent(match).strip() for match in matches if match.strip()]
+            if blocks:
+                return "\n\n".join(blocks)
         return None
 
     def _apply_apply_patch_block(self, patch_text: str) -> str:
