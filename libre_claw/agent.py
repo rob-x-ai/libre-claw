@@ -7,6 +7,7 @@ import threading
 import re
 import subprocess
 import shutil
+import os
 import json
 import time
 import uuid
@@ -1725,10 +1726,25 @@ class Agent:
                 )
             return "Auto-apply could not find a valid shell command."
 
+        requested_mode = (os.getenv("LIBRE_CLAW_TOOL_MODE") or "local").strip().lower()
+        wants_container = requested_mode in {"container", "docker", "sandbox"}
+        run_cmd = ["bash", "-lc", safe_script]
+        run_cwd: Optional[str] = str(self.workspace.path)
+        execution_mode = "local"
+        fallback_note = ""
+
+        container_cmd = self._build_container_shell_command(safe_script)
+        if container_cmd:
+            run_cmd = container_cmd
+            run_cwd = None
+            execution_mode = "container"
+        elif wants_container:
+            fallback_note = "container engine unavailable; executed locally"
+
         try:
             result = subprocess.run(
-                ["bash", "-lc", safe_script],
-                cwd=str(self.workspace.path),
+                run_cmd,
+                cwd=run_cwd,
                 capture_output=True,
                 text=True,
                 timeout=90,
@@ -1738,20 +1754,72 @@ class Agent:
             if result.returncode == 0:
                 if unsafe_lines:
                     return (
-                        "Auto-apply command succeeded for edit-safe commands; "
+                        f"Auto-apply command succeeded ({execution_mode}) for edit-safe commands; "
                         f"runtime commands skipped: {', '.join(unsafe_lines)}. "
                         f"{(out or err)[:300]}".strip()
                     )
-                return f"Auto-apply command succeeded. {(out or err)[:300]}".strip()
+                suffix = f" ({fallback_note})" if fallback_note else ""
+                return f"Auto-apply command succeeded ({execution_mode}){suffix}. {(out or err)[:300]}".strip()
             if unsafe_lines:
                 return (
-                    "Auto-apply command failed for edit-safe commands. "
+                    f"Auto-apply command failed ({execution_mode}) for edit-safe commands. "
                     f"unsafe commands skipped: {', '.join(unsafe_lines)}. "
                     f"{(err or out)[:300]}".strip()
                 )
-            return f"Auto-apply command failed (exit {result.returncode}). {(err or out)[:300]}".strip()
+            suffix = f" ({fallback_note})" if fallback_note else ""
+            return (
+                f"Auto-apply command failed ({execution_mode}{suffix}, exit {result.returncode}). "
+                f"{(err or out)[:300]}"
+            ).strip()
         except Exception as e:
             return f"Auto-apply command error: {e}"
+
+    def _build_container_shell_command(self, script: str) -> Optional[List[str]]:
+        mode = (os.getenv("LIBRE_CLAW_TOOL_MODE") or "local").strip().lower()
+        if mode not in {"container", "docker", "sandbox"}:
+            return None
+
+        engine = (os.getenv("LIBRE_CLAW_CONTAINER_ENGINE") or "docker").strip() or "docker"
+        if not shutil.which(engine):
+            if engine == "docker" and shutil.which("podman"):
+                engine = "podman"
+            else:
+                return None
+
+        image = (os.getenv("LIBRE_CLAW_CONTAINER_IMAGE") or "ubuntu:24.04").strip() or "ubuntu:24.04"
+        shell = (os.getenv("LIBRE_CLAW_CONTAINER_SHELL") or "bash").strip() or "bash"
+        memory_limit = (os.getenv("LIBRE_CLAW_CONTAINER_MEMORY") or "1g").strip() or "1g"
+        cpu_limit = (os.getenv("LIBRE_CLAW_CONTAINER_CPUS") or "1.5").strip() or "1.5"
+        workspace_dir = str(self.workspace.path.resolve())
+        uid = (os.getenv("LIBRE_CLAW_CONTAINER_UID") or "").strip()
+        gid = (os.getenv("LIBRE_CLAW_CONTAINER_GID") or "").strip()
+        if not uid and hasattr(os, "getuid"):
+            uid = str(os.getuid())
+        if not gid and hasattr(os, "getgid"):
+            gid = str(os.getgid())
+
+        cmd = [
+            engine,
+            "run",
+            "--rm",
+            "-i",
+            "--network",
+            "none",
+            "--pids-limit",
+            "256",
+            "--memory",
+            memory_limit,
+            "--cpus",
+            cpu_limit,
+            "-v",
+            f"{workspace_dir}:/workspace",
+            "-w",
+            "/workspace",
+        ]
+        if uid and gid:
+            cmd.extend(["--user", f"{uid}:{gid}"])
+        cmd.extend([image, shell, "-lc", script])
+        return cmd
 
     def _execute_heartbeat_actions(self, content: str) -> str:
         outputs: List[str] = []
@@ -2029,14 +2097,21 @@ class Agent:
             self._proactive_thread.join(timeout=2.0)
 
     def _proactive_loop(self) -> None:
-        interval = max(5, int(self.config.heartbeat.interval_seconds))
+        interval = max(5, self.heartbeat._resolve_interval_seconds(self.config.heartbeat.interval_seconds))
+        next_due = time.monotonic()
         while not self._proactive_stop.is_set():
+            interval = max(5, self.heartbeat._resolve_interval_seconds(self.config.heartbeat.interval_seconds))
+            now = time.monotonic()
+            if now < next_due:
+                time.sleep(min(1.0, max(0.05, next_due - now)))
+                continue
             try:
                 # Run only when idle for at least one interval
                 if self.state.last_activity:
                     idle_for = (datetime.now() - self.state.last_activity).total_seconds()
                     if idle_for < interval:
-                        time.sleep(1)
+                        remaining_idle = max(1.0, interval - idle_for)
+                        next_due = time.monotonic() + min(5.0, remaining_idle)
                         continue
 
                 result = self.handle_heartbeat()
@@ -2044,16 +2119,16 @@ class Agent:
                 status = "NO_REPLY" if top_line.upper() == "NO_REPLY" else "SUCCESS"
                 self.workspace.update_heartbeat_audit(status, self._format_heartbeat_audit_entry(result, status=status))
                 self._record_heartbeat_state(status=status, details=str(result or status))
+                if status == "NO_REPLY":
+                    next_due = time.monotonic() + min(30, interval)
+                else:
+                    next_due = time.monotonic() + interval
             except Exception as e:
                 self.workspace.update_heartbeat_audit("FAILED", f"proactive tick error: {e}")
                 self._append_heartbeat_trace("FAILED", f"proactive tick error: {e}")
                 self._record_heartbeat_state(status="FAILED", details=str(e))
-
-            # Sleep in short chunks for responsive stop
-            slept = 0
-            while slept < interval and not self._proactive_stop.is_set():
-                time.sleep(1)
-                slept += 1
+                retry_delay = max(5, min(30, int(interval / 6) if interval > 0 else 5))
+                next_due = time.monotonic() + retry_delay
 
     def search_memory(
         self,

@@ -1,7 +1,9 @@
 """Entry point for Libre Claw."""
 
 import argparse
+import os
 import subprocess
+import urllib.request
 from pathlib import Path
 
 import uvicorn
@@ -35,6 +37,12 @@ def main():
     )
 
     parser.add_argument(
+        "--gateway",
+        action="store_true",
+        help="Start dedicated gateway server (autostarts proactive heartbeat loop)",
+    )
+
+    parser.add_argument(
         "--api-host",
         default="0.0.0.0",
         help="API server host",
@@ -45,6 +53,19 @@ def main():
         type=int,
         default=8000,
         help="API server port",
+    )
+
+    parser.add_argument(
+        "--gateway-host",
+        default="127.0.0.1",
+        help="Gateway server host (default: loopback)",
+    )
+
+    parser.add_argument(
+        "--gateway-port",
+        type=int,
+        default=8421,
+        help="Gateway server port",
     )
 
     parser.add_argument(
@@ -129,9 +150,22 @@ def main():
     if not ws.exists:
         ws.init(force=False)
 
-    if args.api:
+    if args.gateway:
+        # Start dedicated gateway server with proactive loop ownership
+        app = create_app(
+            config,
+            gateway_mode=True,
+            autostart_proactive=True,
+        )
+        uvicorn.run(
+            app,
+            host=args.gateway_host,
+            port=args.gateway_port,
+            log_level="info",
+        )
+    elif args.api:
         # Start API server
-        app = create_app(config)
+        app = create_app(config, gateway_mode=False, autostart_proactive=False)
         uvicorn.run(
             app,
             host=args.api_host,
@@ -175,9 +209,26 @@ def main():
             memory=memory,
         )
 
-        # Start proactive heartbeat loop if enabled
+        # Start local proactive loop only when gateway is not reachable.
+        gateway_url = (os.getenv("LIBRE_CLAW_GATEWAY_URL") or "http://127.0.0.1:8421").rstrip("/")
+        gateway_reachable = False
+        try:
+            with urllib.request.urlopen(f"{gateway_url}/gateway/status", timeout=1.2) as resp:
+                gateway_reachable = 200 <= getattr(resp, "status", 200) < 500
+        except Exception:
+            gateway_reachable = False
+
+        force_local = (os.getenv("LIBRE_CLAW_FORCE_LOCAL_PROACTIVE") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         if args.heartbeat or config.heartbeat.enabled:
-            agent.start_proactive()
+            if gateway_reachable and not force_local:
+                print(f"Gateway detected at {gateway_url}; using gateway proactive loop.")
+            else:
+                agent.start_proactive()
 
         start_tui(agent, config)
 

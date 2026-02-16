@@ -7,7 +7,7 @@ import asyncio
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
-from .config import HeartbeatConfig
+from .config import HeartbeatConfig, _parse_heartbeat_interval
 from .workspace import Workspace
 
 
@@ -72,7 +72,15 @@ class Heartbeat:
                 self.workspace.update_heartbeat_audit("FAILED", str(e))
 
             # Wait for next interval
-            await asyncio.sleep(self.config.interval_seconds)
+            await asyncio.sleep(self._resolve_interval_seconds(self.config.interval_seconds))
+
+    @staticmethod
+    def _resolve_interval_seconds(value: Any) -> int:
+        """Resolve heartbeat interval value into seconds with a safe fallback."""
+        try:
+            return max(1, int(_parse_heartbeat_interval(value)))
+        except Exception:
+            return 1800
 
     async def _tick(self) -> None:
         """Execute a single heartbeat tick."""

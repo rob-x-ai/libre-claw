@@ -4,6 +4,7 @@ Rich-based TUI with slash commands, streaming output, and a polished experience.
 """
 
 import re
+import json
 import os
 import select
 import shutil
@@ -13,6 +14,8 @@ import termios
 import tty
 import time
 import textwrap
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -52,7 +55,7 @@ class TUI:
         "info": "Show session information",
         "memory": "Search long-term memory (usage: /memory <query>)",
         "heartbeat": "Trigger a manual heartbeat tick",
-        "proactive": "Show/start/stop proactive loop (usage: /proactive [start|stop|status])",
+        "proactive": "Control proactive loop (usage: /proactive [start|stop|status|wake])",
         "mode": "Show or switch mode (usage: /mode [direct|heartbeat])",
         "backend": "Show or switch backend (usage: /backend [claude_code|codex_cli|openai_codex|anthropic|openai|ollama])",
         "login": "Bind OpenAI via Codex OAuth (usage: /login openai)",
@@ -123,6 +126,36 @@ class TUI:
 
     def _workspace_config_path(self) -> Path:
         return self.agent.workspace.path / "config.yaml"
+
+    @staticmethod
+    def _default_gateway_url() -> str:
+        return "http://127.0.0.1:8421"
+
+    def _gateway_base_url(self) -> str:
+        raw = (os.getenv("LIBRE_CLAW_GATEWAY_URL") or self._default_gateway_url()).strip()
+        if not raw:
+            raw = self._default_gateway_url()
+        return raw.rstrip("/")
+
+    def _gateway_request(self, method: str, path: str, timeout: float = 2.5) -> tuple[bool, object]:
+        url = f"{self._gateway_base_url()}{path}"
+        data = b"" if method.upper() != "GET" else None
+        request = urllib.request.Request(url=url, data=data, method=method.upper())
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                payload = response.read().decode("utf-8", "replace")
+            if not payload:
+                return True, {}
+            try:
+                return True, json.loads(payload)
+            except Exception:
+                return True, {"raw": payload}
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")
+            detail = body[:240] if body else str(e)
+            return False, f"HTTP {e.code}: {detail}"
+        except Exception as e:
+            return False, str(e)
 
     def _save_user_config(self) -> None:
         target = self._workspace_config_path()
@@ -285,15 +318,83 @@ class TUI:
 
         elif cmd == "proactive":
             action = (args or "status").strip().lower()
+            aliases = {
+                "awake": "wake",
+                "wakeup": "wake",
+                "stauts": "status",
+                "stat": "status",
+                "stats": "status",
+            }
+            action = aliases.get(action, action)
+            endpoint_map = {
+                "start": ("POST", "/proactive/start"),
+                "stop": ("POST", "/proactive/stop"),
+                "status": ("GET", "/proactive/status"),
+                "wake": ("POST", "/gateway/wake"),
+            }
+            if action not in endpoint_map:
+                self.console.print("  [error]Usage: /proactive [start|stop|status|wake][/error]")
+                return True
+
+            method, path = endpoint_map[action]
+            request_timeout = 120.0 if action == "wake" else 2.5
+            ok, result = self._gateway_request(method, path, timeout=request_timeout)
+            if ok:
+                payload = result if isinstance(result, dict) else {}
+                running_raw = payload.get("proactive_running")
+                running = bool(running_raw) if isinstance(running_raw, bool) else None
+                mode = "gateway" if payload.get("gateway_mode") else "remote"
+
+                if action == "status":
+                    if running is None:
+                        self.console.print(f"  Proactive loop ({mode}): [bold]unknown[/bold]")
+                    else:
+                        status = "running" if running else "stopped"
+                        self.console.print(f"  Proactive loop ({mode}): [bold]{status}[/bold]")
+                elif action == "wake":
+                    self.console.print("  [system]Gateway heartbeat wake triggered[/system]")
+                else:
+                    self.console.print(f"  [system]Proactive loop {action}ed via gateway[/system]")
+
+                interval = payload.get("interval_seconds")
+                if isinstance(interval, int):
+                    self.console.print(f"  [dim]Interval: {interval}s[/dim]")
+                hb_state = payload.get("heartbeat_state")
+                if isinstance(hb_state, dict):
+                    last_run = hb_state.get("last_run_at")
+                    last_status = hb_state.get("last_status")
+                    if last_run:
+                        suffix = f" ({last_status})" if last_status else ""
+                        self.console.print(f"  [dim]Last run: {last_run}{suffix}[/dim]")
+                return True
+
+            if action == "wake" and isinstance(result, str):
+                lowered_error = result.lower()
+                if "timed out" in lowered_error or "timeout" in lowered_error:
+                    self.console.print(
+                        "  [error]Gateway wake request timed out. "
+                        "The gateway may still be processing this wake.[/error]"
+                    )
+                    return True
+
+            # Fallback to local control when gateway is unavailable.
             if action == "start":
                 self.agent.start_proactive()
-                self.console.print("  [system]Proactive loop started[/system]")
+                self.console.print("  [system]Proactive loop started (local fallback)[/system]")
             elif action == "stop":
                 self.agent.stop_proactive()
-                self.console.print("  [system]Proactive loop stopped[/system]")
-            else:
+                self.console.print("  [system]Proactive loop stopped (local fallback)[/system]")
+            elif action == "status":
                 status = "running" if self.agent.proactive_running else "stopped"
-                self.console.print(f"  Proactive loop: [bold]{status}[/bold]")
+                self.console.print(f"  Proactive loop (local fallback): [bold]{status}[/bold]")
+            elif action == "wake":
+                with self.console.status("Running heartbeat..."):
+                    response = self.agent.heartbeat_tick()
+                self.console.print(Panel(Markdown(response), title="Heartbeat", border_style="yellow"))
+            self.console.print(
+                "  [dim]Gateway unavailable; local fallback used. "
+                f"Set LIBRE_CLAW_GATEWAY_URL (current: {self._gateway_base_url()}) if needed.[/dim]"
+            )
 
         elif cmd == "backend":
             if args:
@@ -1661,9 +1762,26 @@ class TUI:
         return safe_script, unsafe_lines
 
     def _run_shell_script(self, script: str) -> str:
+        requested_mode = (os.getenv("LIBRE_CLAW_TOOL_MODE") or "local").strip().lower()
+        wants_container = requested_mode in {"container", "docker", "sandbox"}
+        run_cmd = ["bash", "-lc", script]
+        run_cwd: Optional[str] = str(self.agent.workspace.path)
+        execution_mode = "local"
+        fallback_note = ""
+
+        build_container = getattr(self.agent, "_build_container_shell_command", None)
+        if callable(build_container):
+            container_cmd = build_container(script)
+            if container_cmd:
+                run_cmd = container_cmd
+                run_cwd = None
+                execution_mode = "container"
+            elif wants_container:
+                fallback_note = "container engine unavailable; executed locally"
+
         result = subprocess.run(
-            ["bash", "-lc", script],
-            cwd=str(self.agent.workspace.path),
+            run_cmd,
+            cwd=run_cwd,
             capture_output=True,
             text=True,
             timeout=90,
@@ -1671,8 +1789,16 @@ class TUI:
         out = (result.stdout or "").strip()
         err = (result.stderr or "").strip()
         if result.returncode == 0:
-            return f"APPLIED; next_action=none; details=Command output: {(out or 'success').strip()}"
-        return f"RETRYABLE; next_action=retry with corrected script; details=Auto-apply failed (exit {result.returncode}). {(err or out)[:300]}".strip()
+            suffix = f" ({fallback_note})" if fallback_note else ""
+            return (
+                f"APPLIED; next_action=none; "
+                f"details=Command output ({execution_mode}{suffix}): {(out or 'success').strip()}"
+            )
+        suffix = f" ({fallback_note})" if fallback_note else ""
+        return (
+            "RETRYABLE; next_action=retry with corrected script; "
+            f"details=Auto-apply failed ({execution_mode}{suffix}, exit {result.returncode}). {(err or out)[:300]}"
+        ).strip()
 
     def _parse_apply_contract(self, output: str) -> tuple[str, str, str]:
         if hasattr(self.agent, "_parse_heartbeat_action_contract"):

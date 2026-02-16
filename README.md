@@ -2,16 +2,17 @@
 
 An agentic AI framework by [Kroonen AI Inc.](https://kroonen.ai)
 
-Libre Claw wraps AI backends (Claude Code CLI, Ollama, Anthropic API) into a persistent agent with workspace management, heartbeat autonomy, semantic memory, and a polished terminal UI.
+Libre Claw wraps AI backends (Claude Code CLI, Anthropic API, OpenAI API/OAuth, Ollama) into a persistent agent with workspace management, heartbeat autonomy, semantic memory, and a polished terminal UI.
 
 ## Features
 
 - **Multiple backends** — Claude Code CLI, Anthropic API, OpenAI API/OAuth token, Ollama (local)
 - **Workspace system** — Markdown-based context files (SOUL.md, USER.md, AGENTS.md, etc.)
 - **Mode-aware context** — Direct mode loads MEMORY.md, heartbeat mode loads HEARTBEAT.md
-- **Heartbeat autonomy** — Async heartbeat loop for autonomous task execution
+- **Heartbeat autonomy** — Idle-aware proactive loop with closed-loop follow-ups, retry/backoff behavior, and duration-style intervals (`30m`, `2h`, etc.)
+- **Gateway daemon mode** — Long-running loopback server that keeps proactive heartbeat alive outside the TUI session
 - **Semantic memory** — ChromaDB integration for long-term memory search/storage
-- **Rich TUI** — Terminal UI with slash commands, markdown rendering, and spinners
+- **Rich TUI** — OpenCode-style startup panel, bordered composer, paste summaries, keybinding-aware multiline input, diff/script previews
 - **HTTP API** — FastAPI server for programmatic access
 - **Cost tracking** — Token usage and cost estimation
 - **Git sync** — Auto-commit and push workspace changes
@@ -40,6 +41,9 @@ libre-claw -w ~/my-workspace
 
 # Or start API server
 libre-claw --api -w ~/my-workspace
+
+# Or run dedicated proactive gateway (recommended for always-on heartbeat)
+libre-claw --gateway -w ~/my-workspace
 ```
 
 ## Workspace Structure
@@ -70,7 +74,7 @@ my-workspace/
 | `/info` | Show session information |
 | `/memory <query>` | Search long-term memory |
 | `/heartbeat` | Trigger manual heartbeat |
-| `/proactive [start\|stop\|status]` | Control background proactive loop |
+| `/proactive [start\|stop\|status\|wake]` | Control proactive loop (gateway-first, local fallback) |
 | `/mode [direct\|heartbeat]` | Show/switch mode |
 | `/backend [claude_code\|codex_cli\|anthropic\|openai\|ollama]` | Show/switch model provider |
 | `/login openai` | Use Codex OAuth session (or paste token) and switch backend |
@@ -81,6 +85,80 @@ my-workspace/
 | `/read <file>` | Read a workspace file |
 | `/cost` | Show token usage |
 | `/quit` | Exit |
+
+## Composer UX
+
+- `Enter` sends the prompt immediately.
+- `Shift+Enter` inserts a newline without sending.
+- `Ctrl+J` is supported as a newline fallback.
+- `Ctrl+U` clears the current input line.
+- Large pastes are summarized inline as `++ paste N: X lines ++` to keep the composer readable.
+- Proposed edits render in syntax-highlighted diff/script panels before approval.
+
+## Proactive Heartbeat Behavior
+
+- Heartbeat proactive mode runs in the background when `heartbeat.enabled: true` (or when started with `/proactive start`).
+- Ticks are idle-aware: the loop waits until user inactivity reaches the configured interval.
+- `interval_seconds` supports numeric and duration forms (`30`, `15m`, `2h`, `1d`) and is resolved safely across proactive + async heartbeat paths.
+- `NO_REPLY` outcomes are retried sooner than a full interval to keep autonomous flow responsive.
+- Failures use bounded retry delay instead of killing the loop.
+- Every run updates `HEARTBEAT-AUDIT.md` and `heartbeat-state.json`.
+
+## Gateway Mode (OpenClaw-style)
+
+Run a dedicated gateway process when you want proactive autonomy independent from the TUI lifecycle:
+
+```bash
+libre-claw --gateway -w ~/my-workspace
+```
+
+Gateway defaults:
+- host: `127.0.0.1` (loopback)
+- port: `8421`
+
+Override via CLI:
+
+```bash
+libre-claw --gateway --gateway-host 127.0.0.1 --gateway-port 8421 -w ~/my-workspace
+```
+
+Gateway endpoints:
+- `GET /gateway/status` — proactive state + heartbeat state snapshot
+- `POST /gateway/wake` — force immediate heartbeat run
+- `GET /proactive/status` — proactive status
+- `POST /proactive/start` — start proactive loop
+- `POST /proactive/stop` — stop proactive loop
+
+TUI integration:
+- `/proactive ...` calls gateway endpoints first (URL from `LIBRE_CLAW_GATEWAY_URL`, default `http://127.0.0.1:8421`).
+- If gateway is unavailable, TUI falls back to local proactive control.
+- On TUI startup, if a gateway is reachable, local proactive autostart is skipped to avoid double loops.
+- Set `LIBRE_CLAW_FORCE_LOCAL_PROACTIVE=1` to force local proactive even when gateway is up.
+
+## Containerized Tool Execution (workspace-only)
+
+To let the agent use shell tools (e.g., `sed`, `awk`, `bash`) in an isolated workspace container:
+
+```bash
+export LIBRE_CLAW_TOOL_MODE=container
+libre-claw -w ~/my-workspace
+```
+
+Behavior:
+- Commands run in a short-lived container.
+- Workspace is bind-mounted at `/workspace`.
+- Working directory is `/workspace`.
+- Network is disabled (`--network none`).
+- Files remain on your host workspace (the container is ephemeral).
+
+Environment knobs:
+- `LIBRE_CLAW_TOOL_MODE=container` enables container execution (`local` by default).
+- `LIBRE_CLAW_CONTAINER_ENGINE` (`docker` or `podman`, default `docker` with podman fallback).
+- `LIBRE_CLAW_CONTAINER_IMAGE` (default `ubuntu:24.04`).
+- `LIBRE_CLAW_CONTAINER_SHELL` (default `bash`).
+- `LIBRE_CLAW_CONTAINER_MEMORY` (default `1g`).
+- `LIBRE_CLAW_CONTAINER_CPUS` (default `1.5`).
+- `LIBRE_CLAW_CONTAINER_UID` / `LIBRE_CLAW_CONTAINER_GID` (default to current user when available).
 
 ## Configuration
 

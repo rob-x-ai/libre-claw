@@ -73,13 +73,16 @@ app = FastAPI(
 
 # Global agent instance
 _agent: Optional[Agent] = None
+_app_config: Optional[Config] = None
+_gateway_mode: bool = False
+_autostart_proactive: bool = False
 
 
 def get_agent() -> Agent:
     """Get or create the global agent instance."""
     global _agent
     if _agent is None:
-        config = Config.load()
+        config = _app_config or Config.load()
         backend = get_backend(
             config.backend.type,
             BackendConfig(
@@ -108,8 +111,37 @@ def get_agent() -> Agent:
             memory = MemoryManager(config.memory.chromadb_url)
 
         _agent = Agent(backend=backend, workspace=workspace, config=config, memory=memory)
+        if _autostart_proactive:
+            _agent.start_proactive()
 
     return _agent
+
+
+def _proactive_status_payload(agent: Agent) -> Dict[str, Any]:
+    return {
+        "gateway_mode": _gateway_mode,
+        "proactive_running": agent.proactive_running,
+        "heartbeat_enabled": bool(agent.config.heartbeat.enabled),
+        "interval_seconds": agent.heartbeat._resolve_interval_seconds(agent.config.heartbeat.interval_seconds),
+        "last_activity": agent.state.last_activity.isoformat() if agent.state.last_activity else None,
+        "heartbeat_state": agent.workspace.get_heartbeat_state(),
+    }
+
+
+@app.on_event("startup")
+async def startup_event() -> None:
+    """Initialize agent and optionally start proactive loop on server boot."""
+    if _autostart_proactive:
+        agent = get_agent()
+        agent.start_proactive()
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    """Stop background proactive loop on server shutdown."""
+    global _agent
+    if _agent:
+        _agent.stop_proactive()
 
 
 @app.get("/")
@@ -119,6 +151,7 @@ async def root():
         "name": "Libre Claw API",
         "version": "0.1.0",
         "description": "HTTP API for Libre Claw agentic AI framework",
+        "gateway_mode": _gateway_mode,
     }
 
 
@@ -183,6 +216,55 @@ async def trigger_heartbeat(request: HeartbeatRequest = None):
             "mode": agent.state.mode.value,
         }
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/proactive/status")
+async def proactive_status():
+    """Get proactive loop status."""
+    agent = get_agent()
+    return _proactive_status_payload(agent)
+
+
+@app.post("/proactive/start")
+async def proactive_start():
+    """Start proactive loop."""
+    agent = get_agent()
+    agent.start_proactive()
+    payload = _proactive_status_payload(agent)
+    payload["status"] = "started"
+    return payload
+
+
+@app.post("/proactive/stop")
+async def proactive_stop():
+    """Stop proactive loop."""
+    agent = get_agent()
+    agent.stop_proactive()
+    payload = _proactive_status_payload(agent)
+    payload["status"] = "stopped"
+    return payload
+
+
+@app.get("/gateway/status")
+async def gateway_status():
+    """Gateway alias for proactive status."""
+    agent = get_agent()
+    return _proactive_status_payload(agent)
+
+
+@app.post("/gateway/wake")
+async def gateway_wake(request: HeartbeatRequest = None):
+    """Force an immediate heartbeat run."""
+    agent = get_agent()
+    prompt = request.prompt if request else None
+    try:
+        response = agent.handle_heartbeat(prompt=prompt)
+        payload = _proactive_status_payload(agent)
+        payload["status"] = "ran"
+        payload["content"] = response
+        return payload
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -323,18 +405,27 @@ async def write_workspace_file(filename: str, content: str):
     return {"status": "saved", "filename": filename}
 
 
-def create_app(config: Optional[Config] = None) -> FastAPI:
+def create_app(
+    config: Optional[Config] = None,
+    *,
+    gateway_mode: bool = False,
+    autostart_proactive: bool = False,
+) -> FastAPI:
     """Create FastAPI app with custom config.
 
     Args:
         config: Configuration
+        gateway_mode: Whether app is running as gateway service
+        autostart_proactive: Whether proactive loop should start on startup
 
     Returns:
         FastAPI app
     """
-    global _agent
+    global _agent, _app_config, _gateway_mode, _autostart_proactive
 
-    if config:
-        _agent = None  # Force recreation with new config
+    _agent = None  # Force recreation with supplied lifecycle settings
+    _app_config = config
+    _gateway_mode = bool(gateway_mode)
+    _autostart_proactive = bool(autostart_proactive)
 
     return app
