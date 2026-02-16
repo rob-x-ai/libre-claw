@@ -54,7 +54,7 @@ class TUI:
         "clear": "Clear conversation history",
         "info": "Show session information",
         "memory": "Search long-term memory (usage: /memory <query>)",
-        "heartbeat": "Trigger a manual heartbeat tick",
+        "heartbeat": "Heartbeat command (usage: /heartbeat [run|last])",
         "proactive": "Control proactive loop (usage: /proactive [start|stop|status|wake])",
         "mode": "Show or switch mode (usage: /mode [direct|heartbeat])",
         "backend": "Show or switch backend (usage: /backend [claude_code|codex_cli|openai_codex|anthropic|openai|ollama])",
@@ -384,6 +384,25 @@ class TUI:
                 self.console.print("  [system]No results found[/system]")
 
         elif cmd == "heartbeat":
+            action = (args or "run").strip().lower()
+            if action in {"last", "status"}:
+                state = self._fetch_heartbeat_stream_state()
+                if not state:
+                    self.console.print("  [system]No heartbeat state found yet[/system]")
+                    return True
+
+                last_run = str(state.get("last_run_at") or "").strip() or "(unknown)"
+                last_status = str(state.get("last_status") or "").strip() or "UNKNOWN"
+                details = str(state.get("last_status_details") or "")
+                summary = self._extract_heartbeat_tick_summary(details)
+                self.console.print(f"  Last heartbeat: [bold]{last_run}[/bold] ([bold]{last_status}[/bold])")
+                self.console.print(f"  [dim]{summary}[/dim]")
+                return True
+
+            if action not in {"run", "now"}:
+                self.console.print("  [error]Usage: /heartbeat [run|last][/error]")
+                return True
+
             with self.console.status("Running heartbeat..."):
                 response = self.agent.heartbeat_tick()
             self.console.print(Panel(
@@ -1672,6 +1691,22 @@ class TUI:
             "No extra explanation, no command wrappers."
         )
 
+    def _build_script_retry_prompt(
+        self,
+        failure_details: str,
+        attempt: int,
+    ) -> str:
+        return (
+            "A prior shell auto-apply command failed during this turn.\n"
+            f"Failure reason: {failure_details}\n"
+            f"This is retry attempt {attempt}.\n\n"
+            "Return one corrected actionable block for the same goal:\n"
+            "- Prefer a single ```bash``` block with safe workspace-local commands, or\n"
+            "- Return a single unified diff block (```diff```) if command-based edit is brittle.\n"
+            "Use concrete workspace file paths only. No placeholders like yourfile.md.\n"
+            "No extra explanation."
+        )
+
     @staticmethod
     def _looks_retryable_due_context_loss(next_action: str) -> bool:
         return "re-read target file context" in (next_action or "").lower()
@@ -1731,13 +1766,10 @@ class TUI:
         if status != "RETRYABLE":
             return result
 
-        if not self._looks_retryable_due_context_loss(next_action):
-            return result
-
         if attempt >= self.AUTO_APPLY_MAX_ATTEMPTS:
             return result
 
-        retry_prompt = self._build_patch_retry_prompt(details, attempt + 1)
+        retry_prompt = self._build_script_retry_prompt(details, attempt + 1)
         retry_raw = self.agent.handle_message(retry_prompt)
         retry_raw = self._strip_json_command_prefix(retry_raw)
         refreshed_script = self._extract_bash_block(retry_raw)
@@ -1747,7 +1779,7 @@ class TUI:
                 return self._apply_unified_diff_with_retries(refreshed_diff)
             return "RETRYABLE; next_action=manual retry with corrected command; details=Could not extract a valid rerun command."
 
-        return self._auto_apply_shell_script(refreshed_script)
+        return self._apply_shell_script_with_retries(refreshed_script, attempt + 1)
 
     @staticmethod
     def _shell_segment_command(segment: str) -> str:
@@ -2071,6 +2103,18 @@ class TUI:
 
         if not safe_script:
             return "FAILED_PERM; next_action=provide valid script; details=No executable shell content."
+
+        placeholder_match = re.search(
+            r"\b(yourfile\.[a-z0-9]+|your_file\.[a-z0-9]+|your-file\.[a-z0-9]+|path/to/\S+)\b",
+            safe_script,
+            flags=re.IGNORECASE,
+        )
+        if placeholder_match:
+            token = placeholder_match.group(1)
+            return (
+                "RETRYABLE; next_action=re-read target file context and regenerate patch; "
+                f"details=Script references placeholder target '{token}' instead of a real workspace file."
+            )
 
         try:
             outcome = self._run_shell_script(safe_script)
@@ -2530,6 +2574,10 @@ class TUI:
                 stream_message = self._poll_heartbeat_stream_message()
                 if stream_message:
                     _emit_heartbeat_stream(stream_message)
+
+                ready, _, _ = select.select([fd], [], [], 0.15)
+                if not ready:
+                    continue
 
                 key = self._read_key_from_terminal(fd)
                 if key == "":
