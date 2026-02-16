@@ -54,8 +54,9 @@ class TUI:
         "clear": "Clear conversation history",
         "info": "Show session information",
         "memory": "Search long-term memory (usage: /memory <query>)",
-        "heartbeat": "Heartbeat command (usage: /heartbeat [run|last])",
+        "heartbeat": "Heartbeat command (usage: /heartbeat [run|last|log [n]])",
         "proactive": "Control proactive loop (usage: /proactive [start|stop|status|wake])",
+        "agent": "Switch agent profile (usage: /agent [build|plan|status])",
         "mode": "Show or switch mode (usage: /mode [direct|heartbeat])",
         "backend": "Show or switch backend (usage: /backend [claude_code|codex_cli|openai_codex|anthropic|openai|ollama])",
         "login": "Bind OpenAI via Codex OAuth (usage: /login openai)",
@@ -123,6 +124,7 @@ class TUI:
         self._auto_apply_verbose = bool(self.config.heartbeat.auto_apply_verbose)
         self._stdin_buffer = b""
         self._last_edit_proposal: Optional[tuple[str, str]] = None
+        self._agent_profile = "build"
         try:
             poll_raw = (os.getenv("LIBRE_CLAW_HEARTBEAT_STREAM_POLL_SECONDS") or "1.0").strip() or "1.0"
             poll_seconds = float(poll_raw)
@@ -132,6 +134,9 @@ class TUI:
         self._heartbeat_stream_next_poll_at = 0.0
         self._heartbeat_stream_last_run_at = ""
         self._heartbeat_stream_last_status = ""
+        self._gateway_status_signature = ""
+        self._pending_gateway_status_message = ""
+        self._last_auto_compact_at = 0.0
 
     def _workspace_config_path(self) -> Path:
         return self.agent.workspace.path / "config.yaml"
@@ -149,7 +154,11 @@ class TUI:
     def _gateway_request(self, method: str, path: str, timeout: float = 2.5) -> tuple[bool, object]:
         url = f"{self._gateway_base_url()}{path}"
         data = b"" if method.upper() != "GET" else None
-        request = urllib.request.Request(url=url, data=data, method=method.upper())
+        headers = {}
+        token = (os.getenv("LIBRE_CLAW_API_TOKEN") or "").strip()
+        if token:
+            headers["X-Libre-Claw-Token"] = token
+        request = urllib.request.Request(url=url, data=data, method=method.upper(), headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 payload = response.read().decode("utf-8", "replace")
@@ -174,6 +183,19 @@ class TUI:
     def _fetch_heartbeat_stream_state(self) -> dict:
         ok, payload = self._gateway_request("GET", "/gateway/status", timeout=0.8)
         if ok and isinstance(payload, dict):
+            running_raw = payload.get("proactive_running")
+            running = (
+                "running"
+                if isinstance(running_raw, bool) and running_raw
+                else "stopped"
+                if isinstance(running_raw, bool)
+                else "unknown"
+            )
+            mode = "gateway" if payload.get("gateway_mode") else "remote"
+            signature = f"{mode}:{running}"
+            if signature != self._gateway_status_signature:
+                self._gateway_status_signature = signature
+                self._pending_gateway_status_message = f"Gateway status: {mode} proactive={running}"
             state = payload.get("heartbeat_state")
             if isinstance(state, dict):
                 return state
@@ -234,6 +256,11 @@ class TUI:
         self._heartbeat_stream_next_poll_at = now + self._heartbeat_stream_poll_seconds
 
         state = self._fetch_heartbeat_stream_state()
+        if self._pending_gateway_status_message:
+            msg = self._pending_gateway_status_message
+            self._pending_gateway_status_message = ""
+            return msg
+
         last_run = str(state.get("last_run_at") or "").strip()
         if not last_run:
             return None
@@ -278,6 +305,8 @@ class TUI:
         status.append(f"Backend: {info['backend']}", style="info")
         status.append("  │  ", style="dim")
         status.append(f"Mode: {info['mode']}", style="info")
+        status.append("  │  ", style="dim")
+        status.append(f"Agent: {self._agent_profile}", style="info")
         status.append("  │  ", style="dim")
         status.append(self._format_context_usage(), style="info")
 
@@ -384,7 +413,8 @@ class TUI:
                 self.console.print("  [system]No results found[/system]")
 
         elif cmd == "heartbeat":
-            action = (args or "run").strip().lower()
+            parts = (args or "run").strip().split()
+            action = parts[0].lower() if parts else "run"
             if action in {"last", "status"}:
                 state = self._fetch_heartbeat_stream_state()
                 if not state:
@@ -399,8 +429,56 @@ class TUI:
                 self.console.print(f"  [dim]{summary}[/dim]")
                 return True
 
+            if action == "log":
+                limit = 10
+                if len(parts) >= 2:
+                    try:
+                        limit = max(1, min(200, int(parts[1])))
+                    except Exception:
+                        self.console.print("  [error]Usage: /heartbeat log [n][/error]")
+                        return True
+
+                jsonl = self.agent.workspace.read("HEARTBEAT-AUDIT.jsonl") or ""
+                events = []
+                for raw in jsonl.splitlines():
+                    row = raw.strip()
+                    if not row:
+                        continue
+                    try:
+                        payload = json.loads(row)
+                        if isinstance(payload, dict):
+                            events.append(payload)
+                    except Exception:
+                        continue
+
+                if events:
+                    self.console.print(f"  Last {min(limit, len(events))} heartbeat event(s):")
+                    for item in events[-limit:]:
+                        ts = str(item.get("ts") or item.get("timestamp") or "(unknown)")
+                        status = str(item.get("status") or "UNKNOWN")
+                        action_id = str(item.get("action_id") or "-")
+                        result = str(item.get("result") or item.get("summary") or "").strip()
+                        if result:
+                            result = re.sub(r"\s+", " ", result)[:120]
+                        else:
+                            result = "-"
+                        self.console.print(
+                            f"  [dim]{ts}[/dim] [bold]{status}[/bold] action={action_id} result={result}"
+                        )
+                    return True
+
+                markdown = self.agent.workspace.read("HEARTBEAT-AUDIT.md") or ""
+                lines = [line for line in markdown.splitlines() if line.strip()]
+                if not lines:
+                    self.console.print("  [system]No heartbeat audit log found yet[/system]")
+                    return True
+                self.console.print("  [system]HEARTBEAT-AUDIT.jsonl missing; showing markdown tail[/system]")
+                for line in lines[-max(5, min(120, limit * 4)):]:
+                    self.console.print(f"  {line}")
+                return True
+
             if action not in {"run", "now"}:
-                self.console.print("  [error]Usage: /heartbeat [run|last][/error]")
+                self.console.print("  [error]Usage: /heartbeat [run|last|log [n]][/error]")
                 return True
 
             with self.console.status("Running heartbeat..."):
@@ -423,6 +501,20 @@ class TUI:
                     self.console.print("  [error]Invalid mode. Use: direct or heartbeat[/error]")
             else:
                 self.console.print(f"  Current mode: [bold]{self.agent.state.mode.value}[/bold]")
+
+        elif cmd == "agent":
+            action = (args or "status").strip().lower()
+            if action in {"status", ""}:
+                self.console.print(f"  Agent profile: [bold]{self._agent_profile}[/bold]")
+                return True
+            if action not in {"build", "plan"}:
+                self.console.print("  [error]Usage: /agent [build|plan|status][/error]")
+                return True
+            self._agent_profile = action
+            if action == "plan":
+                self.console.print("  [system]Agent profile set to plan (read-only, auto-apply disabled)[/system]")
+            else:
+                self.console.print("  [system]Agent profile set to build (edits + commands enabled)[/system]")
 
         elif cmd == "proactive":
             action = (args or "status").strip().lower()
@@ -848,6 +940,35 @@ class TUI:
         if usage["level"] == "warn":
             return f"Context: {used:,}/{budget:,} tokens ({pct}%) — nearing limit"
         return f"Context: {used:,}/{budget:,} tokens ({pct}%)"
+
+    def _auto_compact_if_needed(self) -> bool:
+        usage = self._parse_context_usage()
+        if usage["level"] != "critical":
+            return False
+
+        now = time.monotonic()
+        if now - self._last_auto_compact_at < 60:
+            return False
+        self._last_auto_compact_at = now
+
+        history = self.agent.backend.get_history()
+        keep = 12
+        if len(history) <= keep:
+            return False
+
+        dropped = len(history) - keep
+        kept = history[-keep:]
+        summary_text = self._build_compaction_summary(history[:-keep])
+        summary_entry = Message(
+            role="assistant",
+            content=f"[Conversation summary]\n{summary_text}",
+        )
+        self.agent.workspace.write("CONVERSATION_SUMMARY.md", summary_text)
+        self.agent.backend._conversation_history = [summary_entry] + kept
+        self.console.print(
+            f"  [system]Auto-compacted history: dropped {dropped} messages, kept {keep} + summary[/system]"
+        )
+        return True
 
     def _extract_bash_block(self, text: str) -> Optional[str]:
         if not text:
@@ -1956,7 +2077,7 @@ class TUI:
         match = re.search(r"next_action\s*=\s*([^;]+)", output, flags=re.IGNORECASE)
         if match:
             next_action = match.group(1).strip()
-        match = re.search(r"details\s*=\s*(.+)", output, flags=re.IGNORECASE)
+        match = re.search(r"details\s*=\s*(.+)", output, flags=re.IGNORECASE | re.DOTALL)
         if match:
             details = match.group(1).strip()
         return status, next_action, details
@@ -2090,6 +2211,49 @@ class TUI:
         l = text.lower()
         markers = ["done", "updated", "i updated", "applied", "completed"]
         return any(m in l for m in markers)
+
+    @staticmethod
+    def _response_claims_execution_unavailable(text: str) -> bool:
+        lowered = (text or "").lower()
+        cant = r"(?:cannot|can[’']?t)"
+        patterns = [
+            rf"\bi {cant}\s+(?:actually\s+)?(?:execute|run)\s+(?:shell\s+)?commands?\b",
+            rf"\bi {cant}\s+directly\s+edit\s+files?\b",
+            rf"\bi {cant}\s+run\s+commands?\s+in\s+this\s+chat\s+environment\b",
+            r"\bi (?:do not|don't)\s+have\s+direct\s+file-?system\s+visibility\b",
+            r"\bi still can(?:not|[’']?t)\s+directly\s+read\s+files?\b",
+        ]
+        return any(re.search(pattern, lowered) for pattern in patterns)
+
+    @staticmethod
+    def _with_execution_correction(text: str) -> str:
+        note = "Correction: the requested command was executed via auto-apply in the workspace sandbox."
+        if note in text:
+            return text
+        kept_lines = [line for line in text.splitlines() if not TUI._response_claims_execution_unavailable(line)]
+        base = "\n".join(kept_lines).strip() or "Command executed successfully."
+        return f"{base}\n\n{note}".strip()
+
+    @staticmethod
+    def _extract_command_output_from_apply_details(details: str) -> str:
+        text = (details or "").strip()
+        if not text:
+            return ""
+        marker = "Command output"
+        idx = text.find(marker)
+        if idx == -1:
+            return ""
+        payload = text[idx:]
+        if ":" in payload:
+            payload = payload.split(":", 1)[1]
+        return payload.strip()
+
+    @staticmethod
+    def _trim_command_output(output: str, limit: int = 2000) -> str:
+        value = (output or "").strip()
+        if len(value) <= limit:
+            return value
+        return value[: max(0, limit - 18)].rstrip() + "\n... (truncated)"
 
     def _auto_apply_shell_script(self, script: str) -> str:
         # Guardrails: block obvious destructive commands.
@@ -2729,6 +2893,7 @@ class TUI:
 
                     # Display user message
                     self._message_count += 1
+                    self._auto_compact_if_needed()
 
                     # Get response with visible execution phases
                     with self.console.status("[dim]Preparing request...[/dim]", spinner="dots") as status:
@@ -2754,6 +2919,13 @@ class TUI:
                             status.update("[dim]Permission handled. Continuing...[/dim]")
 
                         effective_input = self._inject_referenced_file_context(user_input)
+                        if self._agent_profile == "plan":
+                            effective_input = (
+                                "PLAN MODE (read-only): provide analysis only. "
+                                "Do not propose file edits or shell command execution. "
+                                "Ask user to switch to /agent build for implementation.\n\n"
+                                + effective_input
+                            )
                         if permission_granted:
                             effective_input = (
                                 "Permission granted: you may create/modify files under ~/Documents for this task.\n\n"
@@ -2840,6 +3012,8 @@ class TUI:
                     script = self._extract_bash_block(response)
                     diff_block = self._extract_diff_block(response)
                     should_attempt_auto_apply = (
+                        self._agent_profile != "plan"
+                        and
                         not (response or "").startswith("Error:")
                         and (
                             bool(script or diff_block)
@@ -2847,6 +3021,13 @@ class TUI:
                             or (is_confirmation and self._last_edit_proposal is not None)
                         )
                     )
+                    if self._agent_profile == "plan" and (script or diff_block):
+                        self._last_edit_proposal = None
+                        response = (
+                            f"{response}\n\n---\n"
+                            "Plan mode: edit/command proposal suppressed. "
+                            "Use /agent build to execute changes."
+                        )
 
                     # Optional auto-apply for coding-assistant style file actions.
                     if should_attempt_auto_apply:
@@ -2916,13 +3097,25 @@ class TUI:
                                     apply_result = self._apply_shell_script_with_retries(script or "", 1)
 
                                 status, next_action, details = self._parse_apply_contract(apply_result)
+                                if status == "APPLIED" and self._response_claims_execution_unavailable(response):
+                                    response = self._with_execution_correction(response)
+                                command_output = ""
+                                if status == "APPLIED" and script:
+                                    command_output = self._extract_command_output_from_apply_details(details)
                                 if status == "APPLIED" and not self._auto_apply_verbose:
                                     compact = f"Auto-apply: {status}"
                                     if next_action:
                                         compact += f"; {next_action}"
                                     if details:
                                         compact += f"; {details}"
-                                    response = f"{response}\n\n---\n{compact}"
+                                    if command_output:
+                                        rendered_output = self._trim_command_output(command_output)
+                                        response = (
+                                            f"{response}\n\n---\n{compact}\n\n"
+                                            f"```text\n{rendered_output}\n```"
+                                        )
+                                    else:
+                                        response = f"{response}\n\n---\n{compact}"
                                 else:
                                     auto_steps.append(
                                         f"Auto-apply status: {status}"

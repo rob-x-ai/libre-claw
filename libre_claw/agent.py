@@ -56,6 +56,7 @@ class Agent:
         "HEARTBEAT-AUDIT.md",
     ]
     HEARTBEAT_BOOTSTRAP_LOG = "HEARTBEAT-BOOTSTRAP.md"
+    HEARTBEAT_ROTATION_STATE_FILE = "HEARTBEAT-ROTATION.json"
 
     def __init__(
         self,
@@ -143,12 +144,35 @@ class Agent:
             if not self._is_heartbeat_history_message(msg.content)
         ]
         messages = [Message(role="system", content=system_prompt)] + history
-        response = self.backend.chat(
-            messages=messages,
-            tools=tools,
-        )
+        fallback_used = ""
+        try:
+            response = self.backend.chat(
+                messages=messages,
+                tools=tools,
+            )
+        except Exception:
+            response = None
+            fallback_models = [
+                item.strip()
+                for item in (os.getenv("LIBRE_CLAW_MODEL_FALLBACKS") or "").split(",")
+                if item.strip()
+            ]
+            for candidate in fallback_models:
+                if not self._set_active_backend_model(candidate):
+                    continue
+                try:
+                    self.switch_backend(self.config.backend.type)
+                    response = self.backend.chat(messages=messages, tools=tools)
+                    fallback_used = candidate
+                    break
+                except Exception:
+                    continue
+            if response is None:
+                raise
 
         response_text = response.content or "NO_REPLY"
+        if fallback_used:
+            response_text = f"[model-failover: {fallback_used}]\n{response_text}"
         if response_text.strip().upper() == "NO_REPLY":
             response_text = "Hi—I'm here. What can I help with?"
 
@@ -163,11 +187,78 @@ class Agent:
         self._set_mode(AgentMode.HEARTBEAT)
         result = self._run_heartbeat_cycle(prompt=prompt)
 
+        rotation_action = self._extract_heartbeat_action_id(result)
+        previous_action = self._load_last_rotation_action()
+        repeated = bool(rotation_action and previous_action and rotation_action == previous_action)
+        if repeated and not self._rotation_repeat_allowed(result):
+            enforce_prompt = (
+                f"Rotation enforcement: previous action_id was '{previous_action}'. "
+                f"Do not use action_id '{rotation_action}' again for this tick. "
+                "Execute the next applicable different action_id and verify."
+            )
+            retry_result = self._run_heartbeat_cycle(prompt=enforce_prompt)
+            retry_action = self._extract_heartbeat_action_id(retry_result)
+            self._save_rotation_state(retry_action or rotation_action, enforced=True)
+            result = (
+                f"{retry_result}\n\n"
+                f"Rotation enforcement: repeated action_id '{rotation_action}' was retried."
+            ).strip()
+        else:
+            self._save_rotation_state(rotation_action, enforced=False)
+
         trace_status = self._classify_heartbeat_trace_status(result)
         if trace_status:
             self._append_heartbeat_trace(trace_status, result)
 
         return result
+
+    @staticmethod
+    def _extract_heartbeat_action_id(result: Optional[str]) -> str:
+        text = (result or "").strip()
+        if not text:
+            return ""
+        match = re.search(r"action:([A-Za-z0-9._-]+)", text)
+        if match:
+            return match.group(1).strip()
+        match = re.search(r"\"action_id\"\s*:\s*\"([A-Za-z0-9._-]+)\"", text)
+        if match:
+            return match.group(1).strip()
+        return ""
+
+    @staticmethod
+    def _rotation_repeat_allowed(result: Optional[str]) -> bool:
+        text = (result or "").lower()
+        if not text:
+            return False
+        hints = (
+            "inapplicable",
+            "no applicable action",
+            "all other actions",
+            "only applicable action",
+        )
+        return any(h in text for h in hints)
+
+    def _load_last_rotation_action(self) -> str:
+        payload = self.workspace.read(self.HEARTBEAT_ROTATION_STATE_FILE) or ""
+        if not payload.strip():
+            return ""
+        try:
+            data = json.loads(payload)
+        except Exception:
+            return ""
+        if not isinstance(data, dict):
+            return ""
+        return str(data.get("last_action_id") or "").strip()
+
+    def _save_rotation_state(self, action_id: str, enforced: bool = False) -> None:
+        if not action_id:
+            return
+        state = {
+            "last_action_id": action_id,
+            "last_tick": self._heartbeat_timestamp_line(),
+            "enforced_retry": bool(enforced),
+        }
+        self.workspace.write(self.HEARTBEAT_ROTATION_STATE_FILE, json.dumps(state, indent=2))
 
     def _run_heartbeat_cycle(self, prompt: Optional[str] = None) -> str:
         context = self._hydrate_heartbeat_bootstrap_context(self.workspace.get_context(mode="heartbeat"))
@@ -1732,7 +1823,7 @@ class Agent:
                 )
             return "Auto-apply could not find a valid shell command."
 
-        requested_mode = (os.getenv("LIBRE_CLAW_TOOL_MODE") or "local").strip().lower()
+        requested_mode = self._effective_tool_mode()
         wants_container = requested_mode in {"container", "docker", "sandbox"}
         run_cmd = ["bash", "-lc", safe_script]
         run_cwd: Optional[str] = str(self.workspace.path)
@@ -1783,7 +1874,7 @@ class Agent:
 
     def _build_container_shell_command(self, script: str) -> Optional[List[str]]:
         self._last_container_error = ""
-        mode = (os.getenv("LIBRE_CLAW_TOOL_MODE") or "local").strip().lower()
+        mode = self._effective_tool_mode()
         if mode not in {"container", "docker", "sandbox"}:
             return None
 
@@ -1866,7 +1957,7 @@ class Agent:
             self._last_container_error = detail
 
     def ensure_container_sandbox(self) -> tuple[bool, str]:
-        mode = (os.getenv("LIBRE_CLAW_TOOL_MODE") or "local").strip().lower()
+        mode = self._effective_tool_mode()
         if mode not in {"container", "docker", "sandbox"}:
             return False, "container mode disabled"
 
@@ -1909,6 +2000,24 @@ class Agent:
         if ok:
             return True, container_name
         return False, reason or "failed to initialize sandbox container"
+
+    def _effective_tool_mode(self) -> str:
+        mode = (os.getenv("LIBRE_CLAW_TOOL_MODE") or "local").strip().lower()
+        policy = (os.getenv("LIBRE_CLAW_SANDBOX_POLICY") or "").strip().lower()
+
+        if policy in {"host", "local"}:
+            return "local"
+
+        if policy in {"container", "all"} and mode not in {"container", "docker", "sandbox"}:
+            return "container"
+
+        if policy in {"non-main", "non_main", "nonmain"}:
+            if self.state.mode == AgentMode.DIRECT:
+                return "local"
+            if mode not in {"container", "docker", "sandbox"}:
+                return "container"
+
+        return mode
 
     def _container_name_for_workspace(self) -> str:
         digest = hashlib.sha1(str(self.workspace.path.resolve()).encode("utf-8")).hexdigest()[:12]
@@ -2089,6 +2198,7 @@ class Agent:
                 "- Never replace unknown user facts with 'Not provided' unless the user explicitly asked for placeholders.\n"
                 "- Never switch to jokes/sarcasm when the user asks for concrete updates.\n"
                 "- You can access workspace files through local execution and patches in this app. Do not claim you cannot read files from this machine.\n"
+                "- You can execute safe workspace shell commands via the app's auto-apply runner. Do not claim command execution is unavailable.\n"
                 "- If the user asks about a file's content or asks to edit it, read and operate on that workspace file directly unless it is missing."
             )
 
@@ -2346,6 +2456,28 @@ class Agent:
             ),
         )
         self.config.backend.type = backend_type
+
+    def _set_active_backend_model(self, model_id: str) -> bool:
+        target = (model_id or "").strip()
+        if not target:
+            return False
+        backend_type = self.config.backend.type
+        if backend_type == "openai_codex":
+            self.config.backend.openai_codex_model = target
+            return True
+        if backend_type == "openai":
+            self.config.backend.openai_model = target
+            return True
+        if backend_type == "anthropic":
+            self.config.backend.anthropic_model = target
+            return True
+        if backend_type == "ollama":
+            self.config.backend.ollama_model = target
+            return True
+        if backend_type == "codex_cli":
+            self.config.backend.codex_model = target
+            return True
+        return False
 
     def get_session_info(self) -> Dict[str, Any]:
         return {

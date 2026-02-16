@@ -44,7 +44,40 @@ libre-claw --api -w ~/my-workspace
 
 # Or run dedicated proactive gateway (recommended for always-on heartbeat)
 libre-claw --gateway -w ~/my-workspace
+
+# Diagnostics / onboarding / upgrade
+libre-claw --doctor -w ~/my-workspace
+libre-claw --onboard
+libre-claw --self-update
+
+# Skills catalog + install
+libre-claw --skills-list -w ~/my-workspace
+libre-claw --skills-install coding-agent -w ~/my-workspace
 ```
+
+## Skills (curated + install)
+
+Use CLI-managed skill discovery/install inspired by OpenClaw:
+
+```bash
+# Show installed and curated skills
+libre-claw --skills-list -w ~/my-workspace
+
+# Install from curated catalog by name
+libre-claw --skills-install coding-agent -w ~/my-workspace
+
+# Install from git (single skill directory in repo)
+libre-claw --skills-install "https://github.com/openclaw/openclaw.git#skills/healthcheck" -w ~/my-workspace
+
+# Install from local path
+libre-claw --skills-install ~/.codex/skills/.system/skill-creator -w ~/my-workspace
+```
+
+Catalog behavior:
+- Built-in curated entries include selected OpenClaw skills and local Codex system skills.
+- Optional external catalog file: set `LIBRE_CLAW_SKILLS_CATALOG=/path/to/skills-catalog.json`.
+- Workspace-local catalog override: `<workspace>/skills-catalog.json`.
+- Catalog JSON shape: `{ "skills": [{ "name": "...", "source": "...", "description": "..." }] }`.
 
 ## Workspace Structure
 
@@ -74,7 +107,9 @@ my-workspace/
 | `/info` | Show session information |
 | `/memory <query>` | Search long-term memory |
 | `/heartbeat` | Trigger manual heartbeat |
+| `/heartbeat log [n]` | Show last heartbeat audit events |
 | `/proactive [start\|stop\|status\|wake]` | Control proactive loop (gateway-first, local fallback) |
+| `/agent [build\|plan\|status]` | Switch execution profile (`plan` is read-only) |
 | `/mode [direct\|heartbeat]` | Show/switch mode |
 | `/backend [claude_code\|codex_cli\|anthropic\|openai\|ollama]` | Show/switch model provider |
 | `/login openai` | Use Codex OAuth session (or paste token) and switch backend |
@@ -135,6 +170,20 @@ TUI integration:
 - On TUI startup, if a gateway is reachable, local proactive autostart is skipped to avoid double loops.
 - Set `LIBRE_CLAW_FORCE_LOCAL_PROACTIVE=1` to force local proactive even when gateway is up.
 
+Gateway service management:
+```bash
+libre-claw --gateway-service install -w ~/my-workspace
+libre-claw --gateway-service start
+libre-claw --gateway-service status
+libre-claw --gateway-service stop
+libre-claw --gateway-service uninstall
+```
+
+API hardening (optional):
+- `LIBRE_CLAW_API_TOKEN=<token>` enables token auth for non-public API routes.
+- Use header `X-Libre-Claw-Token: <token>` or `Authorization: Bearer <token>`.
+- `LIBRE_CLAW_API_RATE_LIMIT_PER_MIN=<n>` enables simple per-IP request limiting.
+
 ## Containerized Tool Execution (workspace-only)
 
 To let the agent use shell tools (e.g., `sed`, `awk`, `bash`) in an isolated workspace container:
@@ -162,6 +211,10 @@ docker inspect libre-claw-sandbox-<workspace-hash> --format '{{.State.Running}}'
 
 Environment knobs:
 - `LIBRE_CLAW_TOOL_MODE=container` enables container execution (`local` by default).
+- `LIBRE_CLAW_SANDBOX_POLICY` supports `host`, `container`, `non-main`.
+  - `host`: always run on host.
+  - `container`: always run in container.
+  - `non-main`: direct mode on host, non-direct (heartbeat/proactive) in container.
 - `LIBRE_CLAW_CONTAINER_ENGINE` (`docker` or `podman`, default `docker` with podman fallback).
 - `LIBRE_CLAW_CONTAINER_IMAGE` (default `ubuntu:24.04`).
 - `LIBRE_CLAW_CONTAINER_SHELL` (default `bash`).
@@ -169,6 +222,11 @@ Environment knobs:
 - `LIBRE_CLAW_CONTAINER_MEMORY` (default `1g`).
 - `LIBRE_CLAW_CONTAINER_CPUS` (default `1.5`).
 - `LIBRE_CLAW_CONTAINER_UID` / `LIBRE_CLAW_CONTAINER_GID` (default to current user when available).
+- `LIBRE_CLAW_SKILLS_CATALOG` (optional path/URL to curated skills catalog JSON).
+
+Heartbeat audit files:
+- `HEARTBEAT-AUDIT.md` (human-readable log)
+- `HEARTBEAT-AUDIT.jsonl` (structured events for tooling/queries)
 
 ## Configuration
 

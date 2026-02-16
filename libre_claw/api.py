@@ -1,9 +1,13 @@
 """FastAPI HTTP API for Libre Claw."""
 
+import os
+import time
+import json
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
+from starlette.responses import HTMLResponse, JSONResponse
 
 from .agent import Agent
 from .backends import BackendConfig, get_backend
@@ -76,6 +80,15 @@ _agent: Optional[Agent] = None
 _app_config: Optional[Config] = None
 _gateway_mode: bool = False
 _autostart_proactive: bool = False
+_api_token: str = ""
+_api_rate_limit_per_minute: int = 0
+_api_rate_limit_windows: Dict[str, tuple[int, int]] = {}
+_public_paths = {
+    "/",
+    "/health",
+    "/gateway/status",
+    "/proactive/status",
+}
 
 
 def get_agent() -> Agent:
@@ -126,6 +139,28 @@ def _proactive_status_payload(agent: Agent) -> Dict[str, Any]:
         "last_activity": agent.state.last_activity.isoformat() if agent.state.last_activity else None,
         "heartbeat_state": agent.workspace.get_heartbeat_state(),
     }
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if _api_rate_limit_per_minute > 0:
+        client_ip = (request.client.host if request.client else "") or "unknown"
+        now_minute = int(time.time() // 60)
+        window_minute, count = _api_rate_limit_windows.get(client_ip, (now_minute, 0))
+        if window_minute != now_minute:
+            window_minute, count = now_minute, 0
+        count += 1
+        _api_rate_limit_windows[client_ip] = (window_minute, count)
+        if count > _api_rate_limit_per_minute:
+            return JSONResponse({"detail": "Rate limit exceeded"}, status_code=429)
+
+    if _api_token and request.url.path not in _public_paths:
+        token = request.headers.get("x-libre-claw-token", "").strip()
+        auth = request.headers.get("authorization", "").strip()
+        bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        if token != _api_token and bearer != _api_token:
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
 
 
 @app.on_event("startup")
@@ -259,6 +294,88 @@ async def gateway_status():
     """Gateway alias for proactive status."""
     agent = get_agent()
     return _proactive_status_payload(agent)
+
+
+@app.get("/gateway/recent")
+async def gateway_recent(limit: int = 20):
+    """Return recent structured heartbeat audit events."""
+    agent = get_agent()
+    raw = agent.workspace.read("HEARTBEAT-AUDIT.jsonl") or ""
+    events: List[Dict[str, Any]] = []
+    for line in raw.splitlines():
+        row = line.strip()
+        if not row:
+            continue
+        try:
+            payload = json.loads(row)
+            if isinstance(payload, dict):
+                events.append(payload)
+        except Exception:
+            continue
+    limit = max(1, min(500, int(limit)))
+    return {"events": events[-limit:]}
+
+
+@app.get("/gateway/ui", response_class=HTMLResponse)
+async def gateway_ui():
+    """Minimal control UI for gateway status and heartbeat events."""
+    html = """
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Libre Claw Gateway</title>
+  <style>
+    body { font-family: Menlo, monospace; background:#0f172a; color:#e2e8f0; margin:0; padding:24px; }
+    .card { border:1px solid #334155; border-radius:10px; padding:16px; margin-bottom:16px; background:#111827; }
+    h1 { margin-top:0; font-size:20px; }
+    button { margin-right:8px; padding:8px 12px; border-radius:8px; border:1px solid #475569; background:#1e293b; color:#e2e8f0; cursor:pointer; }
+    pre { white-space:pre-wrap; word-break:break-word; background:#020617; padding:12px; border-radius:8px; border:1px solid #1e293b; max-height:420px; overflow:auto; }
+  </style>
+</head>
+<body>
+  <h1>Libre Claw Gateway Control</h1>
+  <div class="card">
+    <div id="status">Loading...</div>
+    <div style="margin-top:10px;">
+      <button onclick="wake()">Wake</button>
+      <button onclick="startLoop()">Start</button>
+      <button onclick="stopLoop()">Stop</button>
+    </div>
+  </div>
+  <div class="card">
+    <div><strong>Recent heartbeat events</strong></div>
+    <pre id="events"></pre>
+  </div>
+<script>
+async function fetchJson(url, opts) {
+  const r = await fetch(url, opts || {});
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return await r.json();
+}
+async function refresh() {
+  try {
+    const s = await fetchJson('/gateway/status');
+    const hb = s.heartbeat_state || {};
+    document.getElementById('status').textContent =
+      `proactive=${s.proactive_running} interval=${s.interval_seconds}s last_run=${hb.last_run_at || '-'} last_status=${hb.last_status || '-'}`;
+    const recent = await fetchJson('/gateway/recent?limit=25');
+    const lines = (recent.events || []).map(e => `${e.ts || '-'} | ${e.status || '-'} | ${e.action_id || '-'} | ${e.result || '-'}`);
+    document.getElementById('events').textContent = lines.join('\\n');
+  } catch (e) {
+    document.getElementById('status').textContent = `error: ${e.message}`;
+  }
+}
+async function wake() { await fetchJson('/gateway/wake', {method:'POST'}); await refresh(); }
+async function startLoop() { await fetchJson('/proactive/start', {method:'POST'}); await refresh(); }
+async function stopLoop() { await fetchJson('/proactive/stop', {method:'POST'}); await refresh(); }
+setInterval(refresh, 3000);
+refresh();
+</script>
+</body>
+</html>
+"""
+    return HTMLResponse(content=html)
 
 
 @app.post("/gateway/wake")
@@ -438,11 +555,17 @@ def create_app(
     Returns:
         FastAPI app
     """
-    global _agent, _app_config, _gateway_mode, _autostart_proactive
+    global _agent, _app_config, _gateway_mode, _autostart_proactive, _api_token, _api_rate_limit_per_minute
 
     _agent = None  # Force recreation with supplied lifecycle settings
     _app_config = config
     _gateway_mode = bool(gateway_mode)
     _autostart_proactive = bool(autostart_proactive)
+    _api_token = (os.getenv("LIBRE_CLAW_API_TOKEN") or "").strip()
+    try:
+        _api_rate_limit_per_minute = max(0, int((os.getenv("LIBRE_CLAW_API_RATE_LIMIT_PER_MIN") or "0").strip()))
+    except Exception:
+        _api_rate_limit_per_minute = 0
+    _api_rate_limit_windows.clear()
 
     return app

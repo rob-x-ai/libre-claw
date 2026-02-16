@@ -5,6 +5,7 @@ Supports mode-aware context loading (direct vs heartbeat mode load different fil
 """
 
 import json
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -194,10 +195,56 @@ class Workspace:
     def update_heartbeat_audit(self, status: str, details: str = "") -> None:
         """Append to heartbeat audit log."""
         timestamp = datetime.now().isoformat()
+        details_text = (details or "").strip()
         entry = f"\n## {timestamp}\n\n- Status: {status}\n"
-        if details:
-            entry += f"- Details: {details}\n"
+        if details_text:
+            entry += f"- Details: {details_text[:2400]}\n"
         self.append("HEARTBEAT-AUDIT.md", entry)
+
+        action_id = ""
+        result = ""
+        if details_text:
+            action_match = re.search(r"action:([A-Za-z0-9._-]+)", details_text)
+            if action_match:
+                action_id = action_match.group(1)
+            result_match = re.search(r"result:([^\n]+)", details_text)
+            if result_match:
+                result = result_match.group(1).strip()
+
+        event = {
+            "ts": timestamp,
+            "status": status,
+            "action_id": action_id,
+            "result": result,
+            "details": details_text[:4000],
+        }
+        self.append("HEARTBEAT-AUDIT.jsonl", json.dumps(event, ensure_ascii=True) + "\n")
+        self._compact_heartbeat_audit_files()
+
+    def _compact_heartbeat_audit_files(self) -> None:
+        self._compact_lines("HEARTBEAT-AUDIT.md", max_lines=500, keep_lines=300)
+        self._compact_lines("HEARTBEAT-AUDIT.jsonl", max_lines=2000, keep_lines=1000)
+
+    def _compact_lines(self, filename: str, max_lines: int, keep_lines: int) -> None:
+        path = self.path / filename
+        if not path.exists():
+            return
+        try:
+            lines = path.read_text().splitlines()
+        except Exception:
+            return
+
+        if len(lines) <= max_lines:
+            return
+
+        trimmed = lines[-keep_lines:]
+        content = "\n".join(trimmed).strip("\n")
+        if content:
+            content += "\n"
+        try:
+            path.write_text(content)
+        except Exception:
+            return
 
     def git_sync(self, message: Optional[str] = None) -> bool:
         """Commit and push workspace changes."""
