@@ -4,6 +4,7 @@ Rich-based TUI with slash commands, streaming output, and a polished experience.
 """
 
 import re
+import os
 import select
 import shutil
 import sys
@@ -111,6 +112,7 @@ class TUI:
         self._approval_mode = "ask"  # ask | always | never
         self._auto_apply_verbose = bool(self.config.heartbeat.auto_apply_verbose)
         self._stdin_buffer = b""
+        self._last_edit_proposal: Optional[tuple[str, str]] = None
 
     def _workspace_config_path(self) -> Path:
         return self.agent.workspace.path / "config.yaml"
@@ -714,88 +716,294 @@ class TUI:
             return f"FAILED_PERM; next_action=retry with a valid patch; details=Diff apply error: {e}"
 
     def _repair_patch_with_file_context(self, diff_text: str) -> Optional[str]:
-        operations = self._extract_patch_line_ops(diff_text)
-        if not operations:
+        def normalize_context_line(line: str) -> str:
+            return re.sub(r"\s+", " ", (line or "").strip())
+
+        def is_heading(line: str) -> bool:
+            return normalize_context_line(line).startswith("## ")
+
+        def is_table_row(line: str) -> bool:
+            normalized = normalize_context_line(line)
+            return normalized.startswith("|") and normalized.endswith("|")
+
+        def is_table_separator(line: str) -> bool:
+            cells = [cell.strip() for cell in normalize_context_line(line).strip("|").split("|")]
+            if not cells:
+                return False
+            return all((not cell) or bool(re.fullmatch(r"-{3,}", cell)) for cell in cells)
+
+        def is_tableish(context: list[str], added: list[str]) -> bool:
+            return any(is_table_row(line) for line in context) or any(is_table_row(line) for line in added)
+
+        def resolve_file(path_text: str) -> Optional[Path]:
+            rel = (path_text or "").strip().lstrip("/")
+            if not rel:
+                return None
+            direct = self.agent.workspace.path / rel
+            if direct.exists():
+                return direct
+
+            requested = Path(rel)
+            requested_parts = [part.casefold() for part in requested.parts if part and part != "."]
+            if not requested_parts:
+                return None
+
+            matches: list[Path] = []
+            for candidate in self.agent.workspace.path.rglob("*"):
+                if not candidate.is_file():
+                    continue
+                rel_candidate = candidate.relative_to(self.agent.workspace.path)
+                candidate_parts = [part.casefold() for part in rel_candidate.parts]
+                if len(candidate_parts) < len(requested_parts):
+                    continue
+                if candidate_parts[-len(requested_parts) :] == requested_parts:
+                    matches.append(candidate)
+
+            if len(matches) == 1:
+                return matches[0]
+
+            if matches:
+                requested_name = requested.name.casefold()
+                for candidate in matches:
+                    if candidate.name.casefold() == requested_name:
+                        return candidate
+            return None
+
+        def find_section_bounds(lines: list[str], context_lines: list[str]) -> tuple[int, int]:
+            headings = [normalize_context_line(line) for line in context_lines if is_heading(line)]
+            for heading in reversed(headings):
+                heading_normalized = heading.casefold()
+                for idx, line in enumerate(lines):
+                    if normalize_context_line(line).casefold() == heading_normalized:
+                        end = len(lines)
+                        for j in range(idx + 1, len(lines)):
+                            if is_heading(lines[j]):
+                                end = j
+                                break
+                        return idx + 1, end
+            if headings:
+                # New section headings included in patch but absent in the current file.
+                # Append the proposed block at end, preserving the intent to create that section.
+                return len(lines), len(lines)
+            return 0, len(lines)
+
+        def find_last_context_index(lines: list[str], start: int, end: int, context_lines: list[str]) -> Optional[int]:
+            normalized_context = [normalize_context_line(line) for line in context_lines if normalize_context_line(line)]
+            if not normalized_context:
+                return None
+            for target in reversed(normalized_context):
+                for idx in range(min(end, len(lines)) - 1, max(start, 0) - 1, -1):
+                    if normalize_context_line(lines[idx]) == target:
+                        return idx
+            return None
+
+        def table_end_from_anchor(lines: list[str], anchor: int, section_end: int) -> int:
+            if anchor < 0:
+                return 0
+            idx = min(max(0, anchor), len(lines))
+            if idx >= section_end:
+                return min(idx, section_end)
+            if not is_table_row(lines[idx]):
+                return min(idx + 1, section_end)
+            while idx < section_end and is_table_row(lines[idx]):
+                idx += 1
+            return min(idx, section_end)
+
+        def infer_insert_index(
+            content_lines: list[str], context_lines: list[str], added_lines: list[str]
+        ) -> tuple[int, tuple[int, int]]:
+            section_start, section_end = find_section_bounds(content_lines, context_lines)
+            table_mode = is_tableish(context_lines, added_lines)
+
+            if table_mode:
+                table_context = [line for line in context_lines if is_table_row(line)]
+                anchor = find_last_context_index(content_lines, section_start, section_end, table_context)
+                if anchor is not None:
+                    return table_end_from_anchor(content_lines, anchor, section_end), (section_start, section_end)
+
+                for idx in range(section_start, section_end):
+                    if is_table_row(content_lines[idx]) and idx + 1 < section_end and is_table_separator(content_lines[idx + 1]):
+                        return table_end_from_anchor(content_lines, idx + 1, section_end), (section_start, section_end)
+
+            context_idx = find_last_context_index(content_lines, section_start, section_end, context_lines)
+            if context_idx is not None:
+                return min(context_idx + 1, section_end), (section_start, section_end)
+
+            return section_end, (section_start, section_end)
+
+        def normalize_lines(lines: list[str]) -> list[str]:
+            return [normalize_context_line(line) for line in lines]
+
+        def block_exists(content_lines: list[str], block_lines: list[str], section: tuple[int, int]) -> bool:
+            if not block_lines:
+                return False
+            start, end = section
+            start = max(0, min(start, len(content_lines)))
+            end = max(start, min(end, len(content_lines)))
+            target = normalize_lines(block_lines)
+            span = len(block_lines)
+            if end - start < span:
+                return False
+            for i in range(start, end - span + 1):
+                if normalize_lines(content_lines[i : i + span]) == target:
+                    return True
+            return False
+
+        def _dedupe_added_table_lines(
+            content_lines: list[str],
+            section: tuple[int, int],
+            added_lines: list[str],
+        ) -> list[str]:
+            if not added_lines:
+                return added_lines
+
+            start, end = section
+            start = max(0, min(start, len(content_lines)))
+            end = max(start, min(end, len(content_lines)))
+            section_slice = content_lines[start:end]
+            deduped = [line for line in added_lines if line is not None]
+            if not deduped:
+                return deduped
+
+            # If a section heading already exists right before the insertion window, drop
+            # a duplicate heading line from the patch payload.
+            if start > 0 and deduped and is_heading(deduped[0]):
+                if normalize_context_line(deduped[0]).casefold() == normalize_context_line(content_lines[start - 1]).casefold():
+                    deduped = deduped[1:]
+
+            if len(deduped) >= 2 and is_table_row(deduped[0]) and is_table_separator(deduped[1]):
+                target_header = normalize_context_line(deduped[0])
+                target_sep = normalize_context_line(deduped[1])
+                for idx in range(len(section_slice) - 2):
+                    if is_table_row(section_slice[idx]) and is_table_separator(section_slice[idx + 1]):
+                        if normalize_context_line(section_slice[idx]) == target_header and normalize_context_line(section_slice[idx + 1]) == target_sep:
+                            deduped = deduped[2:]
+                            break
+
+            return deduped
+
+        def remove_block(content_lines: list[str], block_lines: list[str], section: tuple[int, int]) -> Optional[list[str]]:
+            if not block_lines:
+                return None
+            start, end = section
+            start = max(0, min(start, len(content_lines)))
+            end = max(start, min(end, len(content_lines)))
+            target = normalize_lines(block_lines)
+            span = len(block_lines)
+            for i in range(start, end - span + 1):
+                if normalize_lines(content_lines[i : i + span]) == target:
+                    return content_lines[:i] + content_lines[i + span :]
+            return None
+
+        def replace_block(
+            content_lines: list[str],
+            old_lines: list[str],
+            new_lines: list[str],
+            section: tuple[int, int],
+        ) -> Optional[list[str]]:
+            if not old_lines:
+                return None
+            start, end = section
+            start = max(0, min(start, len(content_lines)))
+            end = max(start, min(end, len(content_lines)))
+            target = normalize_lines(old_lines)
+            span = len(old_lines)
+            for i in range(start, end - span + 1):
+                if normalize_lines(content_lines[i : i + span]) == target:
+                    return content_lines[:i] + new_lines + content_lines[i + span :]
             return None
 
         def normalize_line_for_match(line: str) -> str:
             normalized = (line or "").strip()
             normalized = normalized.strip("*")
             normalized = re.sub(r"^\s*[+-]+\s*", "", normalized)
-            normalized = normalized.strip()
-            return normalized
+            return normalized.strip()
+
+        def replace_single_line(
+            content_lines: list[str], old_line: str, new_line: str, section: tuple[int, int]
+        ) -> Optional[list[str]]:
+            start, end = section
+            start = max(0, min(start, len(content_lines)))
+            end = max(start, min(end, len(content_lines)))
+            old_norm = normalize_line_for_match(old_line)
+            for idx in range(start, end):
+                if normalize_line_for_match(content_lines[idx]) == old_norm:
+                    updated = content_lines.copy()
+                    updated[idx] = new_line
+                    return updated
+            return None
+
+        operations = self._extract_patch_line_ops(diff_text)
+        if not operations:
+            return None
 
         applied_files = []
         no_change_files = []
 
         for filename, hunks in operations.items():
-            filepath = self.agent.workspace.path / filename
-            if not filepath.exists():
+            filepath = resolve_file(filename)
+            if filepath is None or not filepath.exists():
                 return (
                     "RETRYABLE; next_action=retry with valid patch; "
                     f"details=Target file not found for fallback patch: {filename}"
                 )
 
-            current = filepath.read_text()
-            next_content = current
+            next_content = filepath.read_text()
             file_changed = False
             file_noop = False
 
-            for removed_lines, added_lines in hunks:
-                old_block = "\n".join(removed_lines).strip()
-                new_block = "\n".join(added_lines).strip()
-
+            for removed_lines, added_lines, context_lines in hunks:
                 if not removed_lines and not added_lines:
                     continue
 
+                current_lines = next_content.splitlines()
+                section_lines = list(context_lines)
+                if not section_lines:
+                    section_lines.extend(line for line in removed_lines + added_lines if line)
+                section = find_section_bounds(current_lines, section_lines)
+
                 if removed_lines and not added_lines:
-                    if old_block in next_content:
-                        next_content = next_content.replace(old_block, "", 1)
-                        file_changed = True
-                    else:
+                    updated = remove_block(current_lines, removed_lines, section)
+                    if updated is None:
                         return None
+                    next_content = "\n".join(updated)
+                    file_changed = True
                     continue
 
                 if added_lines and not removed_lines:
-                    if new_block in next_content:
+                    add_lines = _dedupe_added_table_lines(current_lines, section, list(added_lines))
+                    if not add_lines:
                         file_noop = True
                         continue
-                    if next_content and not next_content.endswith("\n"):
-                        next_content += "\n"
-                    next_content += new_block + "\n"
+
+                    insert_at, insertion_section = infer_insert_index(current_lines, section_lines, add_lines)
+                    if block_exists(current_lines, add_lines, insertion_section):
+                        file_noop = True
+                        continue
+
+                    if insert_at < 0:
+                        insert_at = 0
+                    insert_at = min(insert_at, len(current_lines))
+                    current_lines[insert_at:insert_at] = add_lines
+                    next_content = "\n".join(current_lines)
                     file_changed = True
                     continue
 
                 if removed_lines and added_lines:
+                    updated = None
                     if len(removed_lines) == 1 and len(added_lines) == 1:
-                        old_line = removed_lines[0]
-                        new_line = added_lines[0]
-                        old_norm = normalize_line_for_match(old_line)
-                        for line in next_content.splitlines():
-                            if normalize_line_for_match(line) == old_norm:
-                                next_content = next_content.replace(line, new_line, 1)
-                                file_changed = True
-                                break
-                        if file_changed:
+                        updated = replace_single_line(current_lines, removed_lines[0], added_lines[0], section)
+                    if updated is None:
+                        updated = replace_block(current_lines, removed_lines, added_lines, section)
+
+                    if updated is None:
+                        if block_exists(current_lines, added_lines, section) and not block_exists(current_lines, removed_lines, section):
+                            file_noop = True
                             continue
+                        return None
 
-                    if old_block in next_content and (
-                        next_content.count(old_block) == 1
-                        or (
-                            len(removed_lines) == 1
-                            and len(added_lines) == 1
-                            and next_content.count(removed_lines[0]) == 1
-                        )
-                    ):
-                        next_content = next_content.replace(old_block, new_block, 1)
-                        file_changed = True
-                        continue
-
-                    if new_block in next_content and old_block not in next_content:
-                        file_noop = True
-                        continue
-
-                    return None
+                    next_content = "\n".join(updated)
+                    file_changed = True
 
             if file_changed:
                 filepath.write_text(next_content)
@@ -808,9 +1016,7 @@ class TUI:
             if applied_files:
                 detail_parts.append(f"patched: {', '.join(sorted(applied_files))}")
             if no_change_files:
-                detail_parts.append(
-                    f"no-op (already up-to-date): {', '.join(sorted(no_change_files))}"
-                )
+                detail_parts.append(f"no-op (already up-to-date): {', '.join(sorted(no_change_files))}")
             detail = "; ".join(detail_parts)
             return (
                 "APPLIED; next_action=none; details=Deterministic fallback patch applied. "
@@ -819,37 +1025,44 @@ class TUI:
 
         return None
 
-    def _extract_patch_line_ops(self, patch_text: str) -> Dict[str, list[tuple[list[str], list[str]]]]:
+    def _extract_patch_line_ops(
+        self,
+        patch_text: str,
+    ) -> Dict[str, list[tuple[list[str], list[str], list[str]]]]:
         text = self._normalize_unified_diff((patch_text or "").strip())
         if not text:
             return {}
 
         lines = text.splitlines()
-        operations: Dict[str, list[tuple[list[str], list[str]]]] = {}
+        operations: Dict[str, list[tuple[list[str], list[str], list[str]]]] = {}
 
         current_file: Optional[str] = None
         removed: list[str] = []
         added: list[str] = []
+        context: list[str] = []
         in_patch = False
+        in_hunk = False
 
         def flush() -> None:
-            nonlocal removed, added
+            nonlocal removed, added, context
             if not current_file:
-                removed, added = [], []
+                removed, added, context = [], [], []
                 return
             if removed or added:
-                operations.setdefault(current_file, []).append((removed, added))
-            removed, added = [], []
+                operations.setdefault(current_file, []).append((removed, added, context))
+            removed, added, context = [], [], []
 
         for line in lines:
             if line.startswith("*** Begin Patch"):
                 flush()
                 in_patch = True
+                in_hunk = False
                 continue
 
             if line.startswith("*** End Patch"):
                 flush()
                 in_patch = False
+                in_hunk = False
                 continue
 
             if line.startswith("diff --git"):
@@ -860,11 +1073,14 @@ class TUI:
                     if current_file == "/dev/null":
                         current_file = None
                 in_patch = True
+                in_hunk = False
                 continue
 
             if line.startswith("*** Update File:"):
                 flush()
                 current_file = line[len("*** Update File:"):].strip()
+                in_patch = True
+                in_hunk = False
                 continue
 
             if line.startswith("---"):
@@ -875,6 +1091,7 @@ class TUI:
                     if path != "/dev/null":
                         current_file = path
                 in_patch = True
+                in_hunk = False
                 continue
 
             if line.startswith("+++"):
@@ -887,6 +1104,7 @@ class TUI:
 
             if line.startswith("@@"):
                 flush()
+                in_hunk = True
                 continue
 
             if not in_patch:
@@ -894,21 +1112,40 @@ class TUI:
 
             if line.startswith("+") and not line.startswith("+++"):
                 added.append(line[1:])
+                in_hunk = True
                 continue
 
             if line.startswith("-") and not line.startswith("---"):
                 removed.append(line[1:])
+                in_hunk = True
                 continue
 
-            if line.startswith(" ") or line.strip() == "":
-                flush()
+            if line.startswith(" "):
+                context.append(line[1:])
+                continue
+
+            if in_hunk and line.startswith("\\ No newline"):
+                continue
+
+            if in_hunk and line.startswith("\\"):
+                continue
+
+            if in_hunk and line.strip() == "":
+                context.append("")
+                continue
+
+            if in_hunk and line and line.strip():
+                context.append(line)
+                continue
+
+            if line.strip() == "":
                 continue
 
         flush()
 
-        cleaned: Dict[str, list[tuple[list[str], list[str]]]] = {}
+        cleaned: Dict[str, list[tuple[list[str], list[str], list[str]]]] = {}
         for filename, hunks in operations.items():
-            filtered = [pair for pair in hunks if pair[0] or pair[1]]
+            filtered = [hunk for hunk in hunks if hunk[0] or hunk[1]]
             if filtered:
                 cleaned[filename] = filtered
 
@@ -1229,21 +1466,54 @@ class TUI:
         except Exception as e:
             return f"FAILED_PERM; next_action=retry with a valid patch; details=Patch apply error: {e}"
 
+    @staticmethod
+    def _has_file_edit_hint(user_input: str) -> bool:
+        lowered = (user_input or "").lower()
+        if re.search(
+            r"\b[\w./-]+\.(?:md|txt|rst|json|ya?ml|toml|ini|cfg|py|js|ts|tsx|jsx|html|css|sh|sql)\b",
+            lowered,
+        ):
+            return True
+
+        hints = (
+            "this file",
+            "that file",
+            "the file",
+            "in file ",
+            "to file ",
+            "into file ",
+            "in the workspace",
+        )
+        return any(hint in lowered for hint in hints)
+
     def _should_auto_apply(self, user_input: str) -> bool:
-        lowered = user_input.lower()
-        exact_phrases = [
+        lowered = (user_input or "").strip().lower()
+        if not lowered:
+            return False
+
+        if self._is_confirmation_request(lowered):
+            return True
+
+        edit_verbs = ("add", "apply", "edit", "update", "write", "fix", "patch", "implement", "fill", "set", "change")
+        if not any(re.search(rf"\b{re.escape(verb)}\b", lowered) for verb in edit_verbs):
+            return False
+
+        return self._has_file_edit_hint(lowered)
+
+    @staticmethod
+    def _is_confirmation_request(user_input: str) -> bool:
+        lowered = (user_input or "").strip().lower()
+        confirmations = {
             "do it",
             "please do",
             "apply it",
             "go ahead",
             "go for it",
             "proceed",
-        ]
-        if any(phrase in lowered for phrase in exact_phrases):
-            return True
-
-        triggers = ["add", "apply", "edit", "update", "create", "write", "fix", "patch", "implement", "fill", "set", "change", "remember"]
-        return any(t in lowered for t in triggers)
+            "yes",
+            "yes please",
+        }
+        return lowered in confirmations
 
     def _looks_like_done_claim(self, text: str) -> bool:
         l = text.lower()
@@ -1384,6 +1654,11 @@ class TUI:
                 lines.append(f"{label}: {path}")
             if not lines:
                 return "Workspace changes: none"
+            tracked_lines = [line for line in lines if not line.startswith("untracked:")]
+            if tracked_lines:
+                lines = tracked_lines
+            elif lines:
+                return "Workspace changes: untracked only"
             preview = ", ".join(lines[:5])
             more = f" (+{len(lines)-5} more)" if len(lines) > 5 else ""
             return f"Workspace changes: {preview}{more}"
@@ -1402,25 +1677,70 @@ class TUI:
             m = (seconds % 3600) // 60
             return f"{h}h {m}m"
 
-    @staticmethod
-    def _read_with_timeout(fd: int, timeout: float) -> Optional[bytes]:
+    def _read_with_timeout(self, fd: int, timeout: float) -> Optional[bytes]:
+        timeout = max(0.0, timeout)
         ready, _, _ = select.select([fd], [], [], timeout)
         if not ready:
             return None
-        return sys.stdin.buffer.read(1)
+        ch = self._read_stdin(fd)
+        if not ch:
+            return None
+        return ch
+
+    @staticmethod
+    def _consume_ansi_escape(seq: bytes) -> int:
+        if not seq or seq[0] != 0x1B:
+            return 0
+        if len(seq) == 1:
+            return 0
+
+        # Non-CSI escapes are two-byte sequences.
+        if seq[1] != ord("["):
+            if 64 <= seq[1] <= 126:
+                return 2
+            return 0
+
+        # CSI escapes terminate on the first byte in the final-range (@-~).
+        for idx in range(2, len(seq)):
+            if 64 <= seq[idx] <= 126:
+                return idx + 1
+        return 0
+
+    def _read_escaped_sequence(self, fd: int, seed: bytes) -> str:
+        if not seed:
+            return ""
+
+        seq = bytearray(seed)
+        escape_deadline = time.monotonic() + 0.40
+        while True:
+            consumed = TUI._consume_ansi_escape(bytes(seq))
+            if consumed:
+                if consumed < len(seq):
+                    self._unread_stdin(bytes(seq[consumed:]))
+                return bytes(seq[:consumed]).decode("utf-8", "ignore")
+
+            nxt = self._read_with_timeout(fd, max(0.0, escape_deadline - time.monotonic()))
+            if nxt is None:
+                break
+            seq.extend(nxt)
+            if len(seq) > 64:
+                break
+
+        return bytes(seq).decode("utf-8", "ignore")
 
     def _read_stdin(self, fd: int) -> Optional[bytes]:
         if self._stdin_buffer:
             data = self._stdin_buffer[:1]
             self._stdin_buffer = self._stdin_buffer[1:]
             return data
-        return sys.stdin.buffer.read(1)
+        ch = os.read(fd, 1)
+        return ch
 
-    def _read_bracketed_paste(self) -> str:
+    def _read_bracketed_paste(self, fd: int) -> str:
         end = b"\x1b[201~"
         payload = bytearray()
         while True:
-            ch = self._read_stdin(0)
+            ch = self._read_stdin(fd)
             if ch is None:
                 break
             if not ch:
@@ -1441,7 +1761,7 @@ class TUI:
         if not first:
             return "EOF"
         if first in {b"\r", b"\n"}:
-            timeout = 0.20
+            timeout = 0.45
             tail = bytearray()
             end_time = time.monotonic() + timeout
             while time.monotonic() < end_time:
@@ -1456,6 +1776,17 @@ class TUI:
                 tail = tail[1:]
             if not tail:
                 return "ENTER"
+            if tail.startswith(b"\x1b"):
+                self._unread_stdin(bytes(tail))
+                esc = self._read_escaped_sequence(fd, b"\x1b")
+                if esc == "\x1b[200~":
+                    return f"\x00PASTE::{self._read_bracketed_paste(fd)}"
+                if self._is_shift_enter_sequence(esc):
+                    return "SHIFT_ENTER"
+                if esc in {"\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D"}:
+                    return "ARROW"
+                self._unread_stdin(esc.encode("utf-8"))
+                return "SOFT_ENTER"
             self._unread_stdin(bytes(tail))
             return "SOFT_ENTER"
         if first in {b"\x03"}:
@@ -1470,25 +1801,44 @@ class TUI:
         if first != b"\x1b":
             return first.decode("utf-8", "ignore")
 
-        seq = bytearray(first)
-        while True:
-            nxt = TUI._read_with_timeout(fd, 0.004)
-            if nxt is None:
-                break
-            seq.extend(nxt)
-            if nxt in {b"~", b"u"}:
-                break
-            if len(seq) > 16:
-                break
-
-        esc = seq.decode("utf-8", "ignore")
+        esc = self._read_escaped_sequence(fd, first)
         if esc == "\x1b[200~":
-            return f"\x00PASTE::{self._read_bracketed_paste()}"
-        if re.fullmatch(r"\x1b\[[0-9]+;2u", esc):
+            return f"\x00PASTE::{self._read_bracketed_paste(fd)}"
+        if self._is_shift_enter_sequence(esc):
             return "SHIFT_ENTER"
         if esc in {"\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D"}:
             return "ARROW"
         return "ESC"
+
+    @staticmethod
+    def _is_shift_enter_sequence(seq: str) -> bool:
+        if not seq.startswith("\x1b["):
+            return False
+        body = seq[2:]
+        if len(body) < 2:
+            return False
+        if body[-1] not in {"~", "u", "U"}:
+            return False
+
+        params = body[:-1].split(";")
+        if len(params) < 2:
+            return False
+
+        if (params[0] in {"10", "13"}) and params[-1] in {"2", "2u", "2U"}:
+            return True
+
+        return ("13" in params or "10" in params) and "2" in params
+
+    @staticmethod
+    def _strip_paste_line_numbers(line: str) -> str:
+        line = re.sub(r"^\s*>+\s*", "", line, count=1)
+        return re.sub(r"^\s*\d+\|\s*", "", line, count=1)
+
+    def _apply_paste_cleanup(self, text: str) -> str:
+        if not text:
+            return text
+        lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        return "\n".join(self._strip_paste_line_numbers(line) for line in lines)
 
     def _format_input_line_prefix(self, line_no: int = 0) -> str:
         return " > "
@@ -1518,7 +1868,7 @@ class TUI:
 
                 if key.startswith("\x00PASTE::"):
                     paste = key[len("\x00PASTE::"):]
-                    paste = paste.replace("\r\n", "\n").replace("\r", "\n")
+                    paste = self._apply_paste_cleanup(paste)
                     if not paste:
                         continue
                     paste_lines = paste.split("\n")
@@ -1530,14 +1880,14 @@ class TUI:
                                 sys.stdout.flush()
                         else:
                             lines.append(paste_line)
-                            sys.stdout.write("\n")
+                            sys.stdout.write(f"\n{self._format_input_line_prefix()}")
                             sys.stdout.write(paste_line)
                             sys.stdout.flush()
                     continue
 
                 if key in {"SHIFT_ENTER", "SOFT_ENTER"}:
                     lines.append("")
-                    sys.stdout.write("\n")
+                    sys.stdout.write(f"\n{self._format_input_line_prefix()}")
                     sys.stdout.flush()
                     continue
 
@@ -1586,14 +1936,29 @@ class TUI:
                     if not user_input.strip():
                         continue
 
+                    is_confirmation = self._is_confirmation_request(user_input)
+                    if not is_confirmation:
+                        self._last_edit_proposal = None
+
                     # Handle commands
                     if user_input.startswith("/"):
                         command_text = user_input[1:].strip()
-                        command_name = command_text.split(maxsplit=1)[0].lower() if command_text else ""
-                        if command_name in self.COMMANDS:
-                            if not self._handle_command(command_text):
-                                break
-                            continue
+                        if not command_text:
+                            command_text = None
+                        else:
+                            command_token = command_text.split(maxsplit=1)[0]
+                            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_\-]*", command_token):
+                                command_text = None
+
+                        if command_text is None:
+                            # Treat pasted/escaped text beginning with slash as normal content.
+                            pass
+                        else:
+                            command_name = command_text.split(maxsplit=1)[0].lower()
+                            if command_name in self.COMMANDS:
+                                if not self._handle_command(command_text):
+                                    break
+                                continue
 
                     # Display user message
                     self._message_count += 1
@@ -1704,26 +2069,54 @@ class TUI:
 
                         elapsed = time.monotonic() - t0
 
+                    response = self._strip_json_command_prefix(response)
+                    script = self._extract_bash_block(response)
+                    diff_block = self._extract_diff_block(response)
+                    should_attempt_auto_apply = (
+                        not (response or "").startswith("Error:")
+                        and (
+                            bool(script or diff_block)
+                            or self._should_auto_apply(user_input)
+                            or (is_confirmation and self._last_edit_proposal is not None)
+                        )
+                    )
+
                     # Optional auto-apply for coding-assistant style file actions.
-                    if self._should_auto_apply(user_input) and not (response or "").startswith("Error:"):
-                        response = self._strip_json_command_prefix(response)
+                    if should_attempt_auto_apply:
                         auto_steps = ["Auto-apply: analyzing assistant output."]
                         self.console.print("  [dim]Auto-apply: analyzing assistant output for editable actions...[/dim]")
-                        script = self._extract_bash_block(response)
-                        diff_block = self._extract_diff_block(response)
 
                         # Always require actionable patch/script for edit intents.
                         if not diff_block and not script:
-                            auto_steps.append("No patch found; requesting a clean patch from the model.")
-                            diff_req = self.agent.handle_message(
-                                "Provide only an actionable patch for the requested edit. Prefer a single ```diff``` block. No prose."
-                            )
-                            diff_req = self._strip_json_command_prefix(diff_req)
-                            diff_block = self._extract_diff_block(diff_req)
-                            if not diff_block:
-                                script = self._extract_bash_block(diff_req)
+                            cached_kind = None
+                            cached_value = None
+                            if is_confirmation and self._last_edit_proposal:
+                                cached_kind, cached_value = self._last_edit_proposal
+
+                            if not cached_value:
+                                auto_steps.append("No patch found; requesting a clean patch from the model.")
+                                diff_req = self.agent.handle_message(
+                                    "Provide only an actionable patch for the requested edit. Prefer a single ```diff``` block. No prose."
+                                )
+                                diff_req = self._strip_json_command_prefix(diff_req)
+                                diff_block = self._extract_diff_block(diff_req)
+                                if not diff_block:
+                                    script = self._extract_bash_block(diff_req)
+                            elif cached_kind == "diff":
+                                diff_block = cached_value
+                            elif cached_kind == "script":
+                                script = cached_value
+
+                            if cached_value and is_confirmation:
+                                auto_steps.append("Reusing latest editable proposal from previous turn.")
+                            if cached_value and is_confirmation:
+                                self._last_edit_proposal = None
 
                         if script or diff_block:
+                            if diff_block:
+                                self._last_edit_proposal = ("diff", diff_block)
+                            elif script:
+                                self._last_edit_proposal = ("script", script)
                             decision = self._approval_mode
                             if self._approval_mode == "ask":
                                 self.console.print("\n  [command]Edit proposal detected.[/command]")
