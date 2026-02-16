@@ -1851,7 +1851,9 @@ class Agent:
                 "\n# DIRECT MODE HARD RULES\n"
                 "- If user asks to update profile/context files and required fields are missing, ask concise targeted follow-up questions first.\n"
                 "- Never replace unknown user facts with 'Not provided' unless the user explicitly asked for placeholders.\n"
-                "- Never switch to jokes/sarcasm when the user asks for concrete updates."
+                "- Never switch to jokes/sarcasm when the user asks for concrete updates.\n"
+                "- You can access workspace files through local execution and patches in this app. Do not claim you cannot read files from this machine.\n"
+                "- If the user asks about a file's content or asks to edit it, read and operate on that workspace file directly unless it is missing."
             )
 
         return "\n\n".join(parts)

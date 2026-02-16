@@ -1843,6 +1843,67 @@ class TUI:
     def _format_input_line_prefix(self, line_no: int = 0) -> str:
         return " > "
 
+    @staticmethod
+    def _normalize_file_token(token: str) -> str:
+        cleaned = (token or "").strip().strip("'\"`")
+        cleaned = cleaned.rstrip(".,:;!?)]}>")
+        return cleaned.lstrip("./")
+
+    def _resolve_workspace_file_reference(self, token: str) -> Optional[str]:
+        ref = self._normalize_file_token(token)
+        if not ref:
+            return None
+
+        direct = self.agent.workspace.path / ref
+        if direct.is_file():
+            return ref
+
+        requested = Path(ref)
+        requested_name = requested.name.casefold()
+        requested_parts = [p.casefold() for p in requested.parts if p and p != "."]
+        if not requested_parts:
+            return None
+
+        for candidate in self.agent.workspace.path.rglob("*"):
+            if not candidate.is_file():
+                continue
+            rel = candidate.relative_to(self.agent.workspace.path)
+            rel_parts = [p.casefold() for p in rel.parts]
+            if len(rel_parts) < len(requested_parts):
+                continue
+            if rel_parts[-len(requested_parts):] == requested_parts:
+                return str(rel)
+            if requested_name and rel.name.casefold() == requested_name:
+                return str(rel)
+        return None
+
+    def _inject_referenced_file_context(self, user_input: str) -> str:
+        text = user_input or ""
+        refs = re.findall(r"(?i)\b[\w./-]+\.[a-z0-9]{1,8}\b", text)
+        if not refs:
+            return text
+
+        resolved: list[str] = []
+        for ref in refs:
+            path = self._resolve_workspace_file_reference(ref)
+            if path and path not in resolved:
+                resolved.append(path)
+            if len(resolved) >= 2:
+                break
+
+        if not resolved:
+            return text
+
+        blocks: list[str] = []
+        for path in resolved:
+            content = self.agent.workspace.read(path) or ""
+            snippet = content[:12000]
+            blocks.append(
+                f"[Auto-loaded workspace file: {path}]\n```text\n{snippet}\n```"
+            )
+
+        return f"{text}\n\n" + "\n\n".join(blocks)
+
     def _read_multiline_input(self) -> str:
         if not sys.stdin.isatty():
             return Prompt.ask("\n [user]>[/user]")
@@ -1986,11 +2047,11 @@ class TUI:
                             status.start()
                             status.update("[dim]Permission handled. Continuing...[/dim]")
 
-                        effective_input = user_input
+                        effective_input = self._inject_referenced_file_context(user_input)
                         if permission_granted:
                             effective_input = (
                                 "Permission granted: you may create/modify files under ~/Documents for this task.\n\n"
-                                + user_input
+                                + effective_input
                             )
 
                         if backend_name == "codex-cli" and hasattr(self.agent.backend, "complete_with_progress"):
