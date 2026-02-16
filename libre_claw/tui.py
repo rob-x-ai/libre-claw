@@ -123,6 +123,15 @@ class TUI:
         self._auto_apply_verbose = bool(self.config.heartbeat.auto_apply_verbose)
         self._stdin_buffer = b""
         self._last_edit_proposal: Optional[tuple[str, str]] = None
+        try:
+            poll_raw = (os.getenv("LIBRE_CLAW_HEARTBEAT_STREAM_POLL_SECONDS") or "1.0").strip() or "1.0"
+            poll_seconds = float(poll_raw)
+        except Exception:
+            poll_seconds = 1.0
+        self._heartbeat_stream_poll_seconds = max(0.5, min(10.0, poll_seconds))
+        self._heartbeat_stream_next_poll_at = 0.0
+        self._heartbeat_stream_last_run_at = ""
+        self._heartbeat_stream_last_status = ""
 
     def _workspace_config_path(self) -> Path:
         return self.agent.workspace.path / "config.yaml"
@@ -156,6 +165,86 @@ class TUI:
             return False, f"HTTP {e.code}: {detail}"
         except Exception as e:
             return False, str(e)
+
+    @staticmethod
+    def _heartbeat_stream_enabled() -> bool:
+        raw = (os.getenv("LIBRE_CLAW_HEARTBEAT_STREAM") or "1").strip().lower()
+        return raw not in {"0", "false", "off", "no"}
+
+    def _fetch_heartbeat_stream_state(self) -> dict:
+        ok, payload = self._gateway_request("GET", "/gateway/status", timeout=0.8)
+        if ok and isinstance(payload, dict):
+            state = payload.get("heartbeat_state")
+            if isinstance(state, dict):
+                return state
+        state = self.agent.workspace.get_heartbeat_state()
+        return state if isinstance(state, dict) else {}
+
+    @staticmethod
+    def _extract_heartbeat_tick_summary(details: str) -> str:
+        text = (details or "").strip()
+        if not text:
+            return "tick completed"
+
+        action_match = re.search(r"action:([A-Za-z0-9._-]+)", text)
+        result_match = re.search(r"result:([^\n]+)", text)
+        if action_match:
+            action = action_match.group(1)
+            if result_match:
+                result = re.sub(r"\s+", " ", result_match.group(1)).strip()
+                return f"{action} - {result[:120]}"
+            return f"{action} completed"
+
+        next_step_match = re.search(r'"next_step"\s*:\s*"([^"]+)"', text)
+        if next_step_match:
+            return re.sub(r"\s+", " ", next_step_match.group(1)).strip()[:140]
+
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith("```"):
+                continue
+            if line.startswith("[HEARTBEAT]"):
+                continue
+            if line.startswith("### Heartbeat execution trace"):
+                continue
+            line = re.sub(r"\s+", " ", line)
+            if line:
+                return line[:140]
+
+        return "tick completed"
+
+    def _prime_heartbeat_stream_cursor(self) -> None:
+        self._heartbeat_stream_next_poll_at = 0.0
+        self._heartbeat_stream_last_run_at = ""
+        self._heartbeat_stream_last_status = ""
+        if not self._heartbeat_stream_enabled():
+            return
+        state = self._fetch_heartbeat_stream_state()
+        self._heartbeat_stream_last_run_at = str(state.get("last_run_at") or "")
+        self._heartbeat_stream_last_status = str(state.get("last_status") or "")
+
+    def _poll_heartbeat_stream_message(self) -> Optional[str]:
+        if not self._heartbeat_stream_enabled():
+            return None
+        now = time.monotonic()
+        if now < self._heartbeat_stream_next_poll_at:
+            return None
+        self._heartbeat_stream_next_poll_at = now + self._heartbeat_stream_poll_seconds
+
+        state = self._fetch_heartbeat_stream_state()
+        last_run = str(state.get("last_run_at") or "").strip()
+        if not last_run:
+            return None
+        if last_run == self._heartbeat_stream_last_run_at:
+            return None
+
+        self._heartbeat_stream_last_run_at = last_run
+        status = str(state.get("last_status") or "UNKNOWN").strip() or "UNKNOWN"
+        self._heartbeat_stream_last_status = status
+        summary = self._extract_heartbeat_tick_summary(str(state.get("last_status_details") or ""))
+        return f"Heartbeat {last_run} ({status}): {summary}"
 
     def _save_user_config(self) -> None:
         target = self._workspace_config_path()
@@ -2414,6 +2503,21 @@ class TUI:
                 if marker not in composed:
                     paste_markers.pop(marker, None)
 
+        def _render_current_input() -> None:
+            for idx, line in enumerate(lines):
+                if idx > 0:
+                    sys.stdout.write("\n")
+                sys.stdout.write(f"{self._format_input_line_prefix()}{line}")
+
+        def _emit_heartbeat_stream(message: str) -> None:
+            if not message:
+                return
+            sys.stdout.write("\r\033[K")
+            sys.stdout.write("\n")
+            sys.stdout.write(f"  [heartbeat] {message}\n")
+            _render_current_input()
+            sys.stdout.flush()
+
         try:
             self.console.print(f"[dim]{self._composer_top_border()}[/dim]")
             tty.setraw(fd)
@@ -2423,6 +2527,10 @@ class TUI:
             sys.stdout.flush()
 
             while True:
+                stream_message = self._poll_heartbeat_stream_message()
+                if stream_message:
+                    _emit_heartbeat_stream(stream_message)
+
                 key = self._read_key_from_terminal(fd)
                 if key == "":
                     continue
@@ -2532,6 +2640,7 @@ class TUI:
         """Run the TUI main loop."""
         self._running = True
         self._render_banner()
+        self._prime_heartbeat_stream_cursor()
 
         try:
             while self._running:
