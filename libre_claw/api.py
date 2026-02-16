@@ -261,11 +261,21 @@ async def gateway_wake(request: HeartbeatRequest = None):
     prompt = request.prompt if request else None
     try:
         response = agent.handle_heartbeat(prompt=prompt)
+        top_line = ((response or "").strip().splitlines() or [""])[0]
+        status = "NO_REPLY" if top_line.upper() == "NO_REPLY" else "SUCCESS"
+        agent.workspace.update_heartbeat_audit(
+            status,
+            agent._format_heartbeat_audit_entry(response, status=status),
+        )
+        agent._record_heartbeat_state(status=status, details=str(response or status))
         payload = _proactive_status_payload(agent)
         payload["status"] = "ran"
         payload["content"] = response
         return payload
     except Exception as e:
+        agent.workspace.update_heartbeat_audit("FAILED", f"gateway wake error: {e}")
+        agent._append_heartbeat_trace("FAILED", f"gateway wake error: {e}")
+        agent._record_heartbeat_state(status="FAILED", details=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
