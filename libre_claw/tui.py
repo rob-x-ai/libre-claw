@@ -21,6 +21,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
+from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
@@ -72,6 +73,8 @@ class TUI:
     CONTEXT_WARNING_RATIO = 0.75
     CONTEXT_CRITICAL_RATIO = 0.9
     AUTO_APPLY_MAX_ATTEMPTS = 3
+    PASTE_SUMMARY_MIN_LINES = 3
+    PASTE_SUMMARY_MIN_CHARS = 150
     CONTEXT_HINT_MODEL_WINDOWS = [
         ("gpt-5", 200000),
         ("gpt-4.1", 200000),
@@ -2027,8 +2030,10 @@ class TUI:
         first = self._read_stdin(fd)
         if not first:
             return "EOF"
-        if first in {b"\r", b"\n"}:
-            timeout = 0.45
+        if first == b"\n":
+            return "CTRL_J"
+        if first == b"\r":
+            timeout = 0.08
             tail = bytearray()
             end_time = time.monotonic() + timeout
             while time.monotonic() < end_time:
@@ -2107,6 +2112,35 @@ class TUI:
         lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
         return "\n".join(self._strip_paste_line_numbers(line) for line in lines)
 
+    @classmethod
+    def _should_summarize_paste(cls, text: str) -> tuple[bool, int]:
+        line_count = (text.count("\n") + 1) if text else 0
+        summarize = line_count >= cls.PASTE_SUMMARY_MIN_LINES or len(text) >= cls.PASTE_SUMMARY_MIN_CHARS
+        return summarize, line_count
+
+    @staticmethod
+    def _detect_preview_language(preview: str) -> str:
+        value = (preview or "").strip()
+        if not value:
+            return "text"
+        if "diff --git" in value or value.startswith("*** Begin Patch") or "\n@@ " in value:
+            return "diff"
+        if value.startswith("#!/") or re.search(r"(?m)^\s*(mkdir|cat|sed|awk|python3?|bash|sh|git)\b", value):
+            return "bash"
+        return "text"
+
+    def _render_proposed_changes_panel(self, preview: str) -> Panel:
+        snippet = (preview or "").strip()
+        if len(snippet) > 8000:
+            snippet = snippet[:8000].rstrip() + "\n... (truncated)"
+        language = self._detect_preview_language(snippet)
+        title = "Proposed diff" if language == "diff" else "Proposed changes"
+        return Panel(
+            Syntax(snippet or "(no preview)", language, line_numbers=False, word_wrap=True),
+            title=title,
+            border_style="bright_blue",
+        )
+
     def _format_input_line_prefix(self, line_no: int = 0) -> str:
         return " > "
 
@@ -2178,6 +2212,21 @@ class TUI:
         fd = sys.stdin.fileno()
         old_attrs = termios.tcgetattr(fd)
         lines: list[str] = [""]
+        paste_markers: dict[str, str] = {}
+        next_paste_id = 1
+
+        def _remove_markers_in_fragment(fragment: str) -> None:
+            if not fragment:
+                return
+            for marker in list(paste_markers.keys()):
+                if marker in fragment:
+                    paste_markers.pop(marker, None)
+
+        def _prune_stale_markers() -> None:
+            composed = "\n".join(lines)
+            for marker in list(paste_markers.keys()):
+                if marker not in composed:
+                    paste_markers.pop(marker, None)
 
         try:
             tty.setraw(fd)
@@ -2192,7 +2241,10 @@ class TUI:
                     continue
 
                 if key == "ENTER":
-                    return "\n".join(lines).strip("\n")
+                    composed = "\n".join(lines).strip("\n")
+                    for marker, payload in paste_markers.items():
+                        composed = composed.replace(marker, payload)
+                    return composed
 
                 if key.startswith("\x00PASTE::"):
                     paste = key[len("\x00PASTE::"):]
@@ -2200,6 +2252,19 @@ class TUI:
                     if not paste:
                         continue
                     paste_lines = paste.split("\n")
+                    summarize, line_count = self._should_summarize_paste(paste)
+                    if summarize:
+                        marker = (
+                            f"++ paste {next_paste_id}: {line_count} lines ++"
+                            if line_count != 1
+                            else f"++ paste {next_paste_id}: 1 line ++"
+                        )
+                        next_paste_id += 1
+                        paste_markers[marker] = paste
+                        lines[-1] += marker
+                        sys.stdout.write(marker)
+                        sys.stdout.flush()
+                        continue
                     for idx, paste_line in enumerate(paste_lines):
                         if idx == 0:
                             lines[-1] += paste_line
@@ -2213,7 +2278,7 @@ class TUI:
                             sys.stdout.flush()
                     continue
 
-                if key in {"SHIFT_ENTER", "SOFT_ENTER"}:
+                if key in {"SHIFT_ENTER", "SOFT_ENTER", "CTRL_J"}:
                     lines.append("")
                     sys.stdout.write(f"\n{self._format_input_line_prefix()}")
                     sys.stdout.flush()
@@ -2222,13 +2287,38 @@ class TUI:
                 if key == "BACKSPACE":
                     current = lines[-1]
                     if not current:
+                        if len(lines) == 1:
+                            continue
+                        removed = lines.pop()
+                        _remove_markers_in_fragment(removed)
+                        sys.stdout.write("\x1b[1A\r\033[K")
+                        sys.stdout.write(f"{self._format_input_line_prefix()}{lines[-1]}")
+                        sys.stdout.write("\x1b[J")
+                        sys.stdout.flush()
+                        _prune_stale_markers()
                         continue
+
+                    matched_marker = None
+                    for marker in sorted(paste_markers.keys(), key=len, reverse=True):
+                        if current.endswith(marker):
+                            matched_marker = marker
+                            break
+                    if matched_marker:
+                        lines[-1] = current[: -len(matched_marker)]
+                        paste_markers.pop(matched_marker, None)
+                        sys.stdout.write("\r\033[K")
+                        sys.stdout.write(f"{self._format_input_line_prefix()}{lines[-1]}")
+                        sys.stdout.flush()
+                        continue
+
                     lines[-1] = current[:-1]
                     sys.stdout.write("\b \b")
                     sys.stdout.flush()
+                    _prune_stale_markers()
                     continue
 
                 if key == "CTRL_U":
+                    _remove_markers_in_fragment(lines[-1])
                     lines[-1] = ""
                     sys.stdout.write("\r\033[K")
                     sys.stdout.write(self._format_input_line_prefix())
@@ -2449,11 +2539,7 @@ class TUI:
                             if self._approval_mode == "ask":
                                 self.console.print("\n  [command]Edit proposal detected.[/command]")
                                 preview = diff_block or script or "(no preview)"
-                                self.console.print(Panel(
-                                    Markdown(f"```\n{preview[:4000]}\n```"),
-                                    title="Proposed changes",
-                                    border_style="blue",
-                                ))
+                                self.console.print(self._render_proposed_changes_panel(preview))
                                 choice = Prompt.ask(
                                     "  Approve edits?",
                                     choices=["once", "always", "never"],
