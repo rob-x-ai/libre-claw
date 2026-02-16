@@ -1868,18 +1868,22 @@ class TUI:
                 safe_lines.append(line)
                 continue
 
-            segments = re.split(r"\s*(?:&&|\|\||;|\|)\s*", line)
+            segments = re.split(r"\s*(?:&&|\|\||;)\s*", line)
             safe_segments: List[str] = []
+            unsafe_found = False
             for segment in segments:
                 seg = segment.strip()
                 if not seg:
                     continue
                 if self._is_interactive_shell_segment(seg):
                     unsafe_lines.append(seg)
+                    unsafe_found = True
                 else:
                     safe_segments.append(seg)
 
-            if safe_segments:
+            if not unsafe_found:
+                safe_lines.append(line)
+            elif safe_segments:
                 safe_lines.append(" && ".join(safe_segments))
 
         safe_script = "\n".join(safe_lines).strip()
