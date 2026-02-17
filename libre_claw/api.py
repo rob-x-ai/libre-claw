@@ -385,8 +385,7 @@ async def gateway_wake(request: HeartbeatRequest = None):
     prompt = request.prompt if request else None
     try:
         response = agent.handle_heartbeat(prompt=prompt)
-        top_line = ((response or "").strip().splitlines() or [""])[0]
-        status = "NO_REPLY" if top_line.upper() == "NO_REPLY" else "SUCCESS"
+        status = agent._infer_heartbeat_status(response)
         agent.workspace.update_heartbeat_audit(
             status,
             agent._format_heartbeat_audit_entry(response, status=status),

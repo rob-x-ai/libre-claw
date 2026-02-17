@@ -2157,24 +2157,27 @@ class Agent:
         parts = []
 
         if "SOUL.md" in context:
-            parts.append(f"# SOUL\n{context['SOUL.md']}")
+            parts.append(f"# SOUL\n{self._render_context_block('SOUL.md', context['SOUL.md'], is_heartbeat)}")
         if "AGENTS.md" in context:
-            parts.append(f"# RULES\n{context['AGENTS.md']}")
+            parts.append(f"# RULES\n{self._render_context_block('AGENTS.md', context['AGENTS.md'], is_heartbeat)}")
         if "USER.md" in context:
-            parts.append(f"# USER\n{context['USER.md']}")
+            parts.append(f"# USER\n{self._render_context_block('USER.md', context['USER.md'], is_heartbeat)}")
         if "IDENTITY.md" in context:
-            parts.append(f"# IDENTITY\n{context['IDENTITY.md']}")
+            parts.append(f"# IDENTITY\n{self._render_context_block('IDENTITY.md', context['IDENTITY.md'], is_heartbeat)}")
         if "MEMORY.md" in context:
-            parts.append(f"# MEMORY\n{context['MEMORY.md']}")
+            parts.append(f"# MEMORY\n{self._render_context_block('MEMORY.md', context['MEMORY.md'], is_heartbeat)}")
         if "CONVERSATION_SUMMARY.md" in context:
-            parts.append(f"# CONVERSATION_SUMMARY\n{context['CONVERSATION_SUMMARY.md']}")
+            parts.append(
+                f"# CONVERSATION_SUMMARY\n"
+                f"{self._render_context_block('CONVERSATION_SUMMARY.md', context['CONVERSATION_SUMMARY.md'], is_heartbeat)}"
+            )
         if "HEARTBEAT.md" in context:
-            parts.append(f"# HEARTBEAT\n{context['HEARTBEAT.md']}")
+            parts.append(f"# HEARTBEAT\n{self._render_context_block('HEARTBEAT.md', context['HEARTBEAT.md'], is_heartbeat)}")
 
         # Daily note context
         for key, val in context.items():
             if key.startswith("memory/"):
-                parts.append(f"# {key}\n{val}")
+                parts.append(f"# {key}\n{self._render_context_block(key, val, is_heartbeat)}")
 
         if is_heartbeat:
             bootstrap = self._build_heartbeat_bootstrap_manifest(context)
@@ -2203,6 +2206,32 @@ class Agent:
             )
 
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _render_context_block(name: str, value: str, is_heartbeat: bool) -> str:
+        text = (value or "").strip()
+        if not text or not is_heartbeat:
+            return text
+
+        budgets = {
+            "SOUL.md": 4000,
+            "AGENTS.md": 8000,
+            "USER.md": 3000,
+            "IDENTITY.md": 2000,
+            "MEMORY.md": 6000,
+            "CONVERSATION_SUMMARY.md": 6000,
+            "HEARTBEAT.md": 10000,
+        }
+        max_chars = budgets.get(name, 3000)
+        if len(text) <= max_chars:
+            return text
+
+        if name in {"CONVERSATION_SUMMARY.md", "MEMORY.md"}:
+            tail = text[-max_chars:]
+            return f"[truncated older content; showing latest]\n{tail}"
+
+        head = text[:max_chars]
+        return f"{head}\n[truncated]"
 
     def _build_heartbeat_bootstrap_manifest(self, context: Dict[str, str]) -> str:
         lines: List[str] = [
@@ -2288,7 +2317,7 @@ class Agent:
         if details:
             state["last_status_details"] = details[:2000]
 
-        if status in {"FAILED", "ERROR", "TIMEOUT"}:
+        if status in {"FAILED", "ERROR", "TIMEOUT", "RETRYABLE"}:
             state["consecutive_failures"] = state.get("consecutive_failures", 0) + 1
         else:
             state["consecutive_failures"] = 0
@@ -2332,11 +2361,28 @@ class Agent:
             return ""
 
         normalized = str(result).upper()
+        if "CONTEXT_LENGTH_EXCEEDED" in normalized:
+            return "FAILED"
+        if "INVALID_REQUEST_ERROR" in normalized:
+            return "FAILED"
         if "FAILED_PERM" in normalized:
             return "FAILED"
         if "RETRYABLE" in normalized:
             return "RETRYABLE"
         return ""
+
+    @staticmethod
+    def _infer_heartbeat_status(result: Optional[str]) -> str:
+        text = (result or "").strip()
+        if not text:
+            return "NO_REPLY"
+        top_line = (text.splitlines() or [""])[0].strip().upper()
+        if top_line == "NO_REPLY":
+            return "NO_REPLY"
+        classified = Agent._classify_heartbeat_trace_status(text)
+        if classified in {"FAILED", "RETRYABLE"}:
+            return classified
+        return "SUCCESS"
 
     def _append_heartbeat_trace(self, status: str, result: str) -> None:
         if not result:
@@ -2393,12 +2439,14 @@ class Agent:
                         continue
 
                 result = self.handle_heartbeat()
-                top_line = ((result or "").strip().splitlines() or [""])[0]
-                status = "NO_REPLY" if top_line.upper() == "NO_REPLY" else "SUCCESS"
+                status = self._infer_heartbeat_status(result)
                 self.workspace.update_heartbeat_audit(status, self._format_heartbeat_audit_entry(result, status=status))
                 self._record_heartbeat_state(status=status, details=str(result or status))
                 if status == "NO_REPLY":
                     next_due = time.monotonic() + min(30, interval)
+                elif status in {"FAILED", "RETRYABLE"}:
+                    retry_delay = max(5, min(30, int(interval / 6) if interval > 0 else 5))
+                    next_due = time.monotonic() + retry_delay
                 else:
                     next_due = time.monotonic() + interval
             except Exception as e:
