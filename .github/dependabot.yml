@@ -1,0 +1,65 @@
+# Copyright 2026 Kroonen AI Inc. (https://kroonen.ai)
+# SPDX-License-Identifier: Apache-2.0
+
+version: 2
+
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/New_York
+    open-pull-requests-limit: 10
+    target-branch: main
+    labels:
+      - dependencies
+      - python
+    commit-message:
+      prefix: deps
+      include: scope
+    groups:
+      provider-sdks:
+        patterns:
+          - anthropic
+          - openai
+          - httpx
+      tui:
+        patterns:
+          - textual
+          - rich
+      auth-security:
+        patterns:
+          - authlib
+          - cryptography
+          - keyring
+      telegram:
+        patterns:
+          - python-telegram-bot
+      tests-and-build:
+        dependency-type: development
+        patterns:
+          - build
+          - pytest
+          - pytest-asyncio
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: America/New_York
+    open-pull-requests-limit: 5
+    target-branch: main
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      github-actions:
+        patterns:
+          - actions/*
