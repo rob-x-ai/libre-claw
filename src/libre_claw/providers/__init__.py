@@ -7,6 +7,7 @@ __all__ = [
     "Done",
     "LLMProvider",
     "LocalProvider",
+    "OllamaProvider",
     "OpenAIProvider",
     "ProviderConfigurationError",
     "ProviderError",
@@ -33,4 +34,5 @@ from libre_claw.providers.base import (
 )
 from libre_claw.providers.factory import create_provider
 from libre_claw.providers.local import LocalProvider
+from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.openai import OpenAIProvider

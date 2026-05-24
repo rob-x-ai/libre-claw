@@ -1,15 +1,14 @@
 # Libre Claw
 
 Libre Claw is a terminal-native AI agent harness from Kroonen AI Inc.
-(https://kroonen.ai). It provides a Textual TUI, Anthropic and OpenAI streaming
-providers, Ollama/OpenAI-compatible local inference, a permissioned local coding
-toolset, SQLite-backed memory, Telegram daemon support, key storage, and sandbox
-hardening.
+(https://kroonen.ai). It provides a Textual TUI, Anthropic, OpenAI, and Ollama
+streaming providers, a permissioned coding toolset, SQLite-backed memory,
+Telegram daemon support, key storage, and sandbox hardening.
 
 Version `0.1.0` is the first shippable CLI/TUI release. It is still early
 software, but it is functional end to end: launch the TUI, choose a provider,
-chat with the agent, approve tools, persist sessions, and run the Telegram
-bridge.
+chat with the agent, approve tools from an interactive panel, navigate the file
+explorer, persist sessions, and run the Telegram bridge.
 
 ## Install
 
@@ -51,6 +50,7 @@ or store them securely with OS keyring, falling back to
 ```bash
 libre-claw auth set-key anthropic
 libre-claw auth set-key openai
+libre-claw auth set-key ollama
 libre-claw auth status
 ```
 
@@ -72,7 +72,7 @@ default_provider = "openai"
 default_model = "gpt-4o"
 ```
 
-Local inference defaults to Ollama at `http://localhost:11434`:
+Ollama defaults to the local daemon at `http://localhost:11434`:
 
 ```bash
 ollama pull qwen3:32b
@@ -80,9 +80,9 @@ ollama pull qwen3:32b
 
 ```toml
 [general]
-default_provider = "local"
+default_provider = "ollama"
 
-[providers.local]
+[providers.ollama]
 base_url = "http://localhost:11434"
 default_model = "qwen3:32b"
 api_format = "ollama" # ollama | openai
@@ -90,11 +90,11 @@ supports_tools = true
 tool_mode = "auto" # auto | native | xml
 ```
 
-Native local tool calling is used when the model/server supports it. XML
-tool-call fallback can be enabled with `tool_mode = "xml"` for local models
-without native tool support.
+Native Ollama tool calling is used when the model/server supports it. XML
+tool-call fallback can be enabled with `tool_mode = "xml"` for models without
+native tool support.
 
-Ollama Cloud is supported through the same `local` provider. There are two
+Ollama Cloud is supported through the same `ollama` provider. There are two
 correct modes.
 
 For direct access to `ollama.com`, create an Ollama API key, set
@@ -107,25 +107,25 @@ export OLLAMA_API_KEY="..."
 
 ```toml
 [general]
-default_provider = "local"
+default_provider = "ollama"
 default_model = "gpt-oss:120b"
 
-[providers.local]
+[providers.ollama]
 base_url = "https://ollama.com"
 api_format = "ollama"
 api_key_env = "OLLAMA_API_KEY"
 ```
 
-Libre Claw also accepts a stored local-provider key:
+Libre Claw also accepts a stored Ollama-provider key:
 
 ```bash
-libre-claw auth set-key local
+libre-claw auth set-key ollama
 ```
 
 For Ollama's OpenAI-compatible cloud API, use:
 
 ```toml
-[providers.local]
+[providers.ollama]
 base_url = "https://ollama.com"
 api_format = "openai"
 api_key_env = "OLLAMA_API_KEY"
@@ -143,14 +143,17 @@ ollama pull gpt-oss:120b-cloud
 
 ```toml
 [general]
-default_provider = "local"
+default_provider = "ollama"
 default_model = "gpt-oss:120b-cloud"
 
-[providers.local]
+[providers.ollama]
 base_url = "http://localhost:11434"
 api_format = "ollama"
 api_key_env = ""
 ```
+
+Legacy configs that still say `default_provider = "local"` or `[providers.local]`
+are accepted and normalized to `ollama` at load time.
 
 ## TUI Commands
 
@@ -159,7 +162,7 @@ api_key_env = ""
 - `/cancel`
 - `/cost`
 - `/model <name>`
-- `/provider anthropic|openai|local`
+- `/provider anthropic|openai|ollama`
 - `/save [name]`
 - `/load <name>`
 - `/compact`
@@ -168,15 +171,25 @@ api_key_env = ""
 - `/telegram`
 - `/exit`
 
-Permission prompts accept `y`, `n`, `a`, and `!`.
+Permission prompts render as an interactive panel with Approve, Deny, Always
+Tool, and Always Command buttons. They also accept `y`, `n`, `a`, and `!`
+shortcuts without sending a chat message. Dangerous sandbox-blocked bash
+commands show a warning and only allow one-time approval or denial.
 
 Useful keybindings:
 
 - `Ctrl+B` toggles the file tree
 - `Ctrl+P` opens the command palette
 - `Ctrl+Shift+C` copies the last assistant response
-- `Ctrl+C` or `Esc` cancels active generation/tool execution
+- `Esc` or `/cancel` cancels active generation/tool execution
+- `Ctrl+C` exits the app
 - `Tab` completes the first slash-command suggestion
+
+The file explorer has an `Up` control. Moving the explorer root also updates the
+agent working directory, so tools follow the directory you are browsing.
+
+On startup, the TUI shows Libre Claw ASCII art plus the latest release notes
+from `RELEASE.md`.
 
 ## Tools
 

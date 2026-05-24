@@ -100,8 +100,8 @@ def test_api_key_store_falls_back_when_keyring_write_cannot_be_verified(tmp_path
         encrypted_file=encrypted_file(path),
     )
 
-    location = store.set_api_key("local", "fallback-key")
-    lookup = store.get_api_key("local")
+    location = store.set_api_key("ollama", "fallback-key")
+    lookup = store.get_api_key("ollama")
 
     assert location == "encrypted_file"
     assert lookup.value == "fallback-key"

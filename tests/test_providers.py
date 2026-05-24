@@ -10,7 +10,7 @@ import pytest
 from libre_claw.auth.api_keys import ApiKeyLookup
 from libre_claw.config import load_config
 from libre_claw.providers import ProviderConfigurationError, create_provider
-from libre_claw.providers.local import LocalProvider
+from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.openai import OpenAIProvider
 
 
@@ -80,16 +80,16 @@ def test_create_provider_supports_openai(monkeypatch, tmp_path: Path) -> None:
     assert provider.model == "gpt-4o"
 
 
-def test_create_provider_supports_local_without_api_key(monkeypatch, tmp_path: Path) -> None:
+def test_create_provider_supports_ollama_without_api_key(monkeypatch, tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
-    config_path.write_text("[general]\ndefault_provider = \"local\"\n", encoding="utf-8")
+    config_path.write_text("[general]\ndefault_provider = \"ollama\"\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     config = load_config(config_path=config_path)
 
     provider = create_provider(config)
 
-    assert isinstance(provider, LocalProvider)
+    assert isinstance(provider, OllamaProvider)
     assert provider.model == "qwen3:32b"
 
 
@@ -99,10 +99,10 @@ def test_create_provider_requires_ollama_cloud_api_key(monkeypatch, tmp_path: Pa
         "\n".join(
             [
                 "[general]",
-                'default_provider = "local"',
+                'default_provider = "ollama"',
                 'default_model = "gpt-oss:120b"',
                 "",
-                "[providers.local]",
+                "[providers.ollama]",
                 'base_url = "https://ollama.com"',
                 'api_format = "ollama"',
                 'api_key_env = "OLLAMA_API_KEY"',
@@ -124,10 +124,10 @@ def test_create_provider_supports_ollama_cloud_api_key(monkeypatch, tmp_path: Pa
         "\n".join(
             [
                 "[general]",
-                'default_provider = "local"',
+                'default_provider = "ollama"',
                 'default_model = "gpt-oss:120b"',
                 "",
-                "[providers.local]",
+                "[providers.ollama]",
                 'base_url = "https://ollama.com"',
                 'api_format = "ollama"',
                 'api_key_env = "OLLAMA_API_KEY"',
@@ -141,7 +141,7 @@ def test_create_provider_supports_ollama_cloud_api_key(monkeypatch, tmp_path: Pa
 
     provider = create_provider(config, api_key_store=FakeApiKeyStore("cloud-key"))  # type: ignore[arg-type]
 
-    assert isinstance(provider, LocalProvider)
+    assert isinstance(provider, OllamaProvider)
     assert provider.base_url == "https://ollama.com"
     assert provider.model == "gpt-oss:120b"
     assert provider.api_key == "cloud-key"

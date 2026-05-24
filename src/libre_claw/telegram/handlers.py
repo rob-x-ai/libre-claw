@@ -74,8 +74,10 @@ class TelegramHandlers:
             return
         provider = " ".join(context.args or [])
         if not provider:
-            await update.effective_message.reply_text("Usage: /provider anthropic|openai|local")
+            await update.effective_message.reply_text("Usage: /provider anthropic|openai|ollama")
             return
+        if provider == "local":
+            provider = "ollama"
         self.bridge.config = _replace_general(self.bridge.config, default_provider=provider)
         await update.effective_message.reply_text(f"Provider set to {provider}.")
 

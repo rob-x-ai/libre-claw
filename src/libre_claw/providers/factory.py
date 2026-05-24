@@ -11,22 +11,22 @@ from libre_claw.auth.api_keys import ApiKeyStore
 from libre_claw.config import LibreClawConfig
 from libre_claw.providers.anthropic import AnthropicProvider
 from libre_claw.providers.base import LLMProvider, ProviderConfigurationError
-from libre_claw.providers.local import LocalProvider
+from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.openai import OpenAIProvider
 
 
 def create_provider(config: LibreClawConfig, api_key_store: ApiKeyStore | None = None) -> LLMProvider:
     """Create the configured provider."""
-    provider_name = config.general.default_provider.lower()
+    provider_name = _canonical_provider_name(config.general.default_provider)
     provider_config = config.providers.get(provider_name)
-    if provider_name not in {"anthropic", "openai", "local"}:
-        msg = f"Provider '{provider_name}' is not supported. Use 'anthropic', 'openai', or 'local'."
+    if provider_name not in {"anthropic", "openai", "ollama"}:
+        msg = f"Provider '{provider_name}' is not supported. Use 'anthropic', 'openai', or 'ollama'."
         raise ProviderConfigurationError(msg)
     if provider_config is None:
         raise ProviderConfigurationError(f"Missing [providers.{provider_name}] configuration.")
 
-    if provider_name == "local":
-        return _create_local_provider(config, provider_config, api_key_store)
+    if provider_name == "ollama":
+        return _create_ollama_provider(config, provider_config, api_key_store)
 
     api_key_env = _str_provider_value(provider_config, "api_key_env", _default_api_key_env(provider_name))
     store = api_key_store or ApiKeyStore.from_config(config.auth)
@@ -49,38 +49,47 @@ def create_provider(config: LibreClawConfig, api_key_store: ApiKeyStore | None =
         raise ProviderConfigurationError(str(exc)) from exc
 
 
-def _create_local_provider(
+def _create_ollama_provider(
     config: LibreClawConfig,
     provider_config: Mapping[str, Any],
     api_key_store: ApiKeyStore | None,
-) -> LocalProvider:
+) -> OllamaProvider:
     api_key_env = _str_provider_value(provider_config, "api_key_env", "")
     store = api_key_store or ApiKeyStore.from_config(config.auth)
-    api_key_lookup = store.get_api_key("local", api_key_env or None)
+    api_key_lookup = store.get_api_key("ollama", api_key_env or None)
+    if not api_key_lookup.value:
+        api_key_lookup = store.get_api_key("local")
     base_url = _str_provider_value(provider_config, "base_url", "http://localhost:11434")
     if _is_ollama_cloud_url(base_url) and not api_key_lookup.value:
         msg = (
             "Missing Ollama Cloud API key. Set OLLAMA_API_KEY or run "
-            "`libre-claw auth set-key local` before using https://ollama.com."
+            "`libre-claw auth set-key ollama` before using https://ollama.com."
         )
         raise ProviderConfigurationError(msg)
     api_key = api_key_lookup.value or "ollama"
     api_format = _str_provider_value(provider_config, "api_format", "ollama").lower()
     if api_format not in {"ollama", "openai"}:
-        raise ProviderConfigurationError("[providers.local].api_format must be 'ollama' or 'openai'.")
+        raise ProviderConfigurationError("[providers.ollama].api_format must be 'ollama' or 'openai'.")
     tool_mode = _str_provider_value(provider_config, "tool_mode", "auto").lower()
     if tool_mode not in {"auto", "native", "xml"}:
-        raise ProviderConfigurationError("[providers.local].tool_mode must be 'auto', 'native', or 'xml'.")
+        raise ProviderConfigurationError("[providers.ollama].tool_mode must be 'auto', 'native', or 'xml'.")
 
-    return LocalProvider(
+    return OllamaProvider(
         base_url=base_url,
-        model=_resolve_model(config, "local", provider_config),
+        model=_resolve_model(config, "ollama", provider_config),
         max_tokens=_int_provider_value(provider_config, "max_tokens", 16384),
         api_format=api_format,  # type: ignore[arg-type]
         api_key=api_key,
         supports_tools=_bool_provider_value(provider_config, "supports_tools", True),
         tool_mode=tool_mode,  # type: ignore[arg-type]
     )
+
+
+def _canonical_provider_name(provider_name: str) -> str:
+    normalized = provider_name.lower()
+    if normalized == "local":
+        return "ollama"
+    return normalized
 
 
 def _str_provider_value(config: Mapping[str, Any], key: str, default: str) -> str:
@@ -130,7 +139,7 @@ def _resolve_model(
 def _fallback_model(provider_name: str) -> str:
     if provider_name == "openai":
         return "gpt-4o"
-    if provider_name == "local":
+    if provider_name == "ollama":
         return "qwen3:32b"
     return "claude-sonnet-4-6"
 

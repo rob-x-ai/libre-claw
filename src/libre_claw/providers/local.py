@@ -253,7 +253,7 @@ class LocalProvider(LLMProvider):
             raise
         except Exception as exc:
             self._logger.warning("local_ollama_stream_failed", error=str(exc))
-            yield ProviderError(f"Local provider request failed: {exc}")
+            yield ProviderError(f"Ollama provider request failed: {exc}")
             return
 
         yield Done(usage=usage, stop_reason=stop_reason)

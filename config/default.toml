@@ -38,7 +38,7 @@ api_key_env = "OPENAI_API_KEY"
 default_model = "gpt-4o"
 max_tokens = 16384
 
-[providers.local]
+[providers.ollama]
 base_url = "http://localhost:11434"
 default_model = "qwen3:32b"
 api_format = "ollama" # ollama | openai

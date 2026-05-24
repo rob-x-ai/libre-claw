@@ -25,9 +25,35 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert "Current toolset: read_file, write_file, edit_file, list_directory, and bash." in config.agent.system_prompt
     assert config.agent.system_prompt_extra == ""
     assert "curl | bash" in config.sandbox.blocked_patterns
-    assert config.providers["local"]["api_format"] == "ollama"
-    assert config.providers["local"]["api_key_env"] == "OLLAMA_API_KEY"
-    assert config.providers["local"]["tool_mode"] == "auto"
+    assert "local" not in config.providers
+    assert config.providers["ollama"]["api_format"] == "ollama"
+    assert config.providers["ollama"]["api_key_env"] == "OLLAMA_API_KEY"
+    assert config.providers["ollama"]["tool_mode"] == "auto"
+
+
+def test_config_normalizes_legacy_local_provider(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[general]",
+                'default_provider = "local"',
+                'default_model = "kimi-k2.6:cloud"',
+                "",
+                "[providers.local]",
+                'base_url = "https://ollama.com"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config(config_path=config_path)
+
+    assert config.general.default_provider == "ollama"
+    assert "local" not in config.providers
+    assert config.providers["ollama"]["base_url"] == "https://ollama.com"
 
 
 def test_config_file_env_and_cli_overrides(monkeypatch, tmp_path: Path) -> None:

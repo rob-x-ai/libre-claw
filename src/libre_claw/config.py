@@ -129,6 +129,8 @@ def load_config(
     if working_directory is not None:
         data.setdefault("general", {})["working_directory"] = str(working_directory)
 
+    _normalize_provider_aliases(data)
+
     return _build_config(data, tuple(source_paths))
 
 
@@ -196,7 +198,7 @@ def _load_default_config() -> ConfigTable:
                 "default_model": "gpt-4o",
                 "max_tokens": 16384,
             },
-            "local": {
+            "ollama": {
                 "base_url": "http://localhost:11434",
                 "default_model": "qwen3:32b",
                 "api_format": "ollama",
@@ -295,6 +297,30 @@ def _apply_environment_overrides(data: ConfigTable) -> None:
         value = os.getenv(env_name)
         if value is not None:
             data.setdefault(section, {})[key] = value
+
+
+def _normalize_provider_aliases(data: ConfigTable) -> None:
+    general = data.setdefault("general", {})
+    if isinstance(general, MutableMapping) and str(general.get("default_provider", "")).lower() == "local":
+        general["default_provider"] = "ollama"
+
+    telegram = data.get("telegram")
+    if isinstance(telegram, MutableMapping) and str(telegram.get("default_provider", "")).lower() == "local":
+        telegram["default_provider"] = "ollama"
+
+    providers = data.get("providers")
+    if not isinstance(providers, MutableMapping):
+        return
+
+    local_config = providers.pop("local", None)
+    if not isinstance(local_config, Mapping):
+        return
+
+    existing = providers.get("ollama")
+    if isinstance(existing, MutableMapping):
+        _deep_merge(existing, local_config)
+    else:
+        providers["ollama"] = dict(local_config)
 
 
 def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> LibreClawConfig:

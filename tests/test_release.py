@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from libre_claw import __version__
+from libre_claw.release import latest_release_notes, packaged_release_text
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -31,6 +32,14 @@ def test_release_docs_reference_current_version() -> None:
 
     assert f"## {__version__}" in changelog
     assert f"Version `{__version__}`" in readme
+    assert f"## {__version__}" in latest_release_notes()
+
+
+def test_packaged_release_notes_match_repo_release() -> None:
+    release_text = (ROOT / "RELEASE.md").read_text(encoding="utf-8")
+
+    assert packaged_release_text() == release_text
+    assert (ROOT / "src" / "libre_claw" / "RELEASE.md").read_text(encoding="utf-8") == release_text
 
 
 def test_license_is_apache_with_kroonen_attribution() -> None:

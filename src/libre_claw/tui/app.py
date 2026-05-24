@@ -41,6 +41,7 @@ from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
 from libre_claw.core.session import ChatMessage
 from libre_claw.core.tools import ToolCall, ToolResult
 from libre_claw.providers import ProviderConfigurationError, Usage, create_provider
+from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry
 
 
@@ -69,7 +70,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/cancel", "/cancel", "Cancel active generation or tool execution"),
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
     SlashCommand("/model", "/model <name>", "Switch Anthropic model for new turns"),
-    SlashCommand("/provider", "/provider anthropic|openai|local", "Switch provider for new turns"),
+    SlashCommand("/provider", "/provider anthropic|openai|ollama", "Switch provider for new turns"),
     SlashCommand("/save", "/save [name]", "Save the current session"),
     SlashCommand("/load", "/load <name>", "Load a saved session"),
     SlashCommand("/compact", "/compact", "Compact older context into the session summary"),
@@ -89,6 +90,13 @@ PERMISSION_KEYS: dict[str, PermissionResolution] = {
 }
 
 ASSISTANT_ACCENT = "#8B5CF6"
+STARTUP_ASCII = r"""
+ _     _ _                 ____ _
+| |   (_) |__  _ __ ___   / ___| | __ ___      __
+| |   | | '_ \| '__/ _ \ | |   | |/ _` \ \ /\ / /
+| |___| | |_) | | |  __/ | |___| | (_| |\ V  V /
+|_____|_|_.__/|_|  \___|  \____|_|\__,_| \_/\_/
+"""
 
 
 class LibreClawApp(App[None]):
@@ -393,7 +401,7 @@ class LibreClawApp(App[None]):
         self._update_slash_suggestions("")
         self.set_interval(1, self._update_status)
         await self._initialize_memory()
-        self._append_system("Libre Claw v0.1.0 ready. Type /help for commands.")
+        self._append_system(_startup_message())
         if self.provider_error is not None:
             self._append_system(self.provider_error)
 
@@ -750,8 +758,10 @@ class LibreClawApp(App[None]):
 
     def _set_provider(self, provider: str) -> None:
         if not provider:
-            self._append_system("Usage: /provider anthropic|openai|local")
+            self._append_system("Usage: /provider anthropic|openai|ollama")
             return
+        if provider == "local":
+            provider = "ollama"
         self.config = _replace_general(self.config, default_provider=provider)
         self._rebuild_agent()
         self._update_status()
@@ -1161,6 +1171,8 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
         "log_level": config.general.log_level,
     }
     general_values.update(changes)
+    if str(general_values["default_provider"]).lower() == "local":
+        general_values["default_provider"] = "ollama"
     general_values["working_directory"] = Path(general_values["working_directory"]).expanduser().resolve()
     general = GeneralConfig(**general_values)
     return LibreClawConfig(
@@ -1177,7 +1189,7 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
 
 
 def _effective_model(config: LibreClawConfig) -> str:
-    provider_name = config.general.default_provider.lower()
+    provider_name = "ollama" if config.general.default_provider.lower() == "local" else config.general.default_provider.lower()
     provider_config = config.providers.get(provider_name, {})
     provider_default = str(provider_config.get("default_model", config.general.default_model))
     other_defaults = {
@@ -1192,6 +1204,10 @@ def _effective_model(config: LibreClawConfig) -> str:
 
 def _usage_requires_argument(usage: str) -> bool:
     return " " in usage
+
+
+def _startup_message() -> str:
+    return f"{STARTUP_ASCII.strip()}\n\n{latest_release_notes()}\n\nType /help for commands."
 
 
 def _permission_label(resolution: PermissionResolution) -> str:

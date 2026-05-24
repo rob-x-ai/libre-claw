@@ -6,12 +6,14 @@ Initial shippable Libre Claw release.
 
 ### Added
 
-- Textual terminal UI with streaming chat, status bar, file tree, command palette, and permission prompts.
-- Anthropic, OpenAI, and local Ollama/OpenAI-compatible providers.
-- Native local tool calling and XML tool-call fallback for local models without native support.
+- Textual terminal UI with streaming chat, status bar, file tree, command palette, slash-command suggestions, startup release notes, and interactive permission prompts.
+- Anthropic, OpenAI, and Ollama providers. Ollama supports local daemon use, Ollama Cloud, and Ollama/OpenAI-compatible endpoints.
+- Native Ollama tool calling and XML tool-call fallback for models without native support.
 - ReAct-style async agent loop with concurrent tool execution.
 - Built-in `read_file`, `write_file`, `edit_file`, `list_directory`, and `bash` tools.
 - Working-directory sandboxing, blocked shell command patterns, and approval gates for side-effecting tools.
+- File explorer parent navigation that updates the agent working directory.
+- TUI polish including thin blue scrollbars and purple Libre Claw assistant labels.
 - SQLite memory for facts, sessions, summaries, and file edit logs.
 - Telegram daemon with allowlist auth, streaming updates, and inline permission prompts.
 - Key storage through environment variables, OS keyring, or encrypted local fallback.

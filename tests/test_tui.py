@@ -9,7 +9,15 @@ from pathlib import Path
 from libre_claw.config import load_config
 from libre_claw.core.agent import AgentPermissionRequest
 from libre_claw.core.tools import ToolCall
-from libre_claw.tui.app import ASSISTANT_ACCENT, LibreClawApp, TranscriptEntry, _effective_model, _replace_general
+from libre_claw.tui.app import (
+    ASSISTANT_ACCENT,
+    LibreClawApp,
+    STARTUP_ASCII,
+    TranscriptEntry,
+    _effective_model,
+    _replace_general,
+    _startup_message,
+)
 
 
 def test_tui_can_start_without_anthropic_api_key(monkeypatch, tmp_path: Path) -> None:
@@ -73,10 +81,10 @@ def test_effective_model_uses_provider_default_when_switching_to_openai(monkeypa
     assert _effective_model(config) == "gpt-4o"
 
 
-def test_effective_model_uses_provider_default_when_switching_to_local(monkeypatch, tmp_path: Path) -> None:
+def test_effective_model_uses_provider_default_when_switching_to_ollama(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    config = _replace_general(load_config(), default_provider="local")
+    config = _replace_general(load_config(), default_provider="ollama")
 
     assert _effective_model(config) == "qwen3:32b"
 
@@ -106,6 +114,14 @@ def test_assistant_label_uses_purple_accent(monkeypatch, tmp_path: Path) -> None
     renderable = app._format_entry(TranscriptEntry(role="assistant", content="hello"))
 
     assert ASSISTANT_ACCENT in str(renderable.renderables[0].style)
+
+
+def test_startup_message_includes_ascii_art_and_release_notes() -> None:
+    message = _startup_message()
+
+    assert STARTUP_ASCII.strip() in message
+    assert "## 0.1.0" in message
+    assert "Type /help for commands." in message
 
 
 def test_ctrl_c_binding_exits_app() -> None:
