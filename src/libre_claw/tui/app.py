@@ -200,9 +200,31 @@ class LibreClawApp(App[None]):
         background: #0f151c;
     }
 
+    #sidebar-rail {
+        width: 8;
+        height: 1fr;
+        background: #0f151c;
+        border: none;
+        padding: 1 0;
+    }
+
+    #sidebar-actions {
+        height: 1;
+        padding: 0 1;
+    }
+
+    #sidebar-show,
+    #sidebar-hide,
     #sidebar-up {
         height: 1;
-        margin: 0 1;
+        min-width: 6;
+    }
+
+    #sidebar-hide {
+        margin-right: 1;
+    }
+
+    #sidebar-up {
         min-width: 8;
     }
 
@@ -218,6 +240,11 @@ class LibreClawApp(App[None]):
     }
 
     Screen.light #sidebar {
+        background: #eef2f6;
+        border: none;
+    }
+
+    Screen.light #sidebar-rail {
         background: #eef2f6;
         border: none;
     }
@@ -320,6 +347,7 @@ class LibreClawApp(App[None]):
     }
 
     #workspace,
+    #sidebar-rail,
     #sidebar,
     #file-tree,
     #main,
@@ -340,6 +368,7 @@ class LibreClawApp(App[None]):
     }
 
     Screen.light #workspace,
+    Screen.light #sidebar-rail,
     Screen.light #sidebar,
     Screen.light #file-tree,
     Screen.light #main,
@@ -406,8 +435,12 @@ class LibreClawApp(App[None]):
             yield Static(self._status_text(), id="status")
 
         with Horizontal(id="workspace"):
+            with Vertical(id="sidebar-rail"):
+                yield Button("Files", id="sidebar-show", variant="primary", compact=True)
             with Vertical(id="sidebar"):
-                yield Button("Up", id="sidebar-up", variant="primary", compact=True)
+                with Horizontal(id="sidebar-actions"):
+                    yield Button("Hide", id="sidebar-hide", compact=True)
+                    yield Button("Up", id="sidebar-up", variant="primary", compact=True)
                 yield Static(self._sidebar_root_text(), id="sidebar-root")
                 yield DirectoryTree(self.config.general.working_directory, id="file-tree")
             with Vertical(id="main"):
@@ -472,6 +505,10 @@ class LibreClawApp(App[None]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
+        if button_id in {"sidebar-show", "sidebar-hide"}:
+            event.stop()
+            self.action_toggle_sidebar()
+            return
         if button_id == "sidebar-up":
             event.stop()
             self._go_up_directory()
@@ -1099,6 +1136,7 @@ class LibreClawApp(App[None]):
 
     def _sync_sidebar_visibility(self) -> None:
         self.query_one("#sidebar", Vertical).display = self.sidebar_visible
+        self.query_one("#sidebar-rail", Vertical).display = not self.sidebar_visible
 
     def _sidebar_root_text(self) -> str:
         return f"cwd: {self.config.general.working_directory}"

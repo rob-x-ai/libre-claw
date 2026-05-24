@@ -235,6 +235,8 @@ Legacy configs that still say `default_provider = "local"` or
 Useful keybindings:
 
 - `Ctrl+B` toggles the file tree.
+- The file tree also has a `Hide` button. When hidden, a left-side `Files`
+  button brings it back.
 - `Ctrl+P` opens the command palette.
 - `Ctrl+Shift+C` copies the last assistant response.
 - `Esc` or `/cancel` cancels active generation/tool execution.

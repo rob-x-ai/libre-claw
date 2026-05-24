@@ -177,8 +177,11 @@ async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None
     async with app.run_test():
         assert app.query_one("#chat")
         assert app.query_one("#input")
+        assert app.query_one("#sidebar-rail")
         assert app.query_one("#sidebar")
         assert app.query_one("#file-tree")
+        assert app.query_one("#sidebar-hide")
+        assert app.query_one("#sidebar-show")
         assert app.query_one("#sidebar-up")
         assert app.query_one("#palette")
         assert app.query_one("#permission-panel").has_class("hidden")
@@ -193,6 +196,7 @@ async def test_tui_main_panel_avoids_vertical_divider_drift(monkeypatch, tmp_pat
     async with app.run_test(size=(120, 45)):
         workspace = app.query_one("#workspace")
         sidebar = app.query_one("#sidebar")
+        sidebar_rail = app.query_one("#sidebar-rail")
         file_tree = app.query_one("#file-tree")
         main = app.query_one("#main")
         chat = app.query_one("#chat")
@@ -201,6 +205,7 @@ async def test_tui_main_panel_avoids_vertical_divider_drift(monkeypatch, tmp_pat
         assert workspace.styles.border.top[0] == "solid"
         assert workspace.styles.border.left[0] == ""
         assert workspace.styles.border.right[0] == ""
+        assert sidebar_rail.styles.border.top[0] == ""
         assert sidebar.styles.border.top[0] == ""
         assert sidebar.styles.border_right[0] == ""
         assert sidebar.region.height == main.region.height
@@ -210,6 +215,28 @@ async def test_tui_main_panel_avoids_vertical_divider_drift(monkeypatch, tmp_pat
         assert main.styles.border_left[0] == ""
         assert chat.styles.border.top[0] == ""
         assert input_box.styles.border.top[0] == "solid"
+
+
+async def test_tui_sidebar_left_rail_toggle(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test():
+        sidebar = app.query_one("#sidebar")
+        rail = app.query_one("#sidebar-rail")
+
+        assert sidebar.display is True
+        assert rail.display is False
+
+        app.action_toggle_sidebar()
+        assert sidebar.display is False
+        assert rail.display is True
+
+        app.action_toggle_sidebar()
+        assert sidebar.display is True
+        assert rail.display is False
 
 
 async def test_tui_scrollbars_use_blue_accent(monkeypatch, tmp_path: Path) -> None:
