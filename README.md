@@ -98,8 +98,8 @@ Ollama Cloud is supported through the same `ollama` provider. There are two
 correct modes.
 
 For direct access to `ollama.com`, create an Ollama API key, set
-`OLLAMA_API_KEY`, and point the provider at Ollama's cloud host. Use model
-names listed by the direct API; Ollama's direct API docs show `gpt-oss:120b`:
+`OLLAMA_API_KEY`, and point the provider at Ollama's cloud host. The current
+recommended cloud example is `kimi-k2.6:cloud`:
 
 ```bash
 export OLLAMA_API_KEY="..."
@@ -108,10 +108,11 @@ export OLLAMA_API_KEY="..."
 ```toml
 [general]
 default_provider = "ollama"
-default_model = "gpt-oss:120b"
+default_model = "kimi-k2.6:cloud"
 
 [providers.ollama]
 base_url = "https://ollama.com"
+default_model = "kimi-k2.6:cloud"
 api_format = "ollama"
 api_key_env = "OLLAMA_API_KEY"
 ```
@@ -133,21 +134,21 @@ api_key_env = "OLLAMA_API_KEY"
 
 If you want Ollama itself to handle cloud authentication, sign in with the
 Ollama CLI and keep Libre Claw pointed at the local daemon. In that mode, use
-the cloud model name shown by the Ollama model page, such as
-`gpt-oss:120b-cloud` or `kimi-k2.6:cloud`:
+the cloud model name shown by the Ollama model page, such as `kimi-k2.6:cloud`:
 
 ```bash
 ollama signin
-ollama pull gpt-oss:120b-cloud
+ollama pull kimi-k2.6:cloud
 ```
 
 ```toml
 [general]
 default_provider = "ollama"
-default_model = "gpt-oss:120b-cloud"
+default_model = "kimi-k2.6:cloud"
 
 [providers.ollama]
 base_url = "http://localhost:11434"
+default_model = "kimi-k2.6:cloud"
 api_format = "ollama"
 api_key_env = ""
 ```

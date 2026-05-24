@@ -100,7 +100,7 @@ def test_create_provider_requires_ollama_cloud_api_key(monkeypatch, tmp_path: Pa
             [
                 "[general]",
                 'default_provider = "ollama"',
-                'default_model = "gpt-oss:120b"',
+                'default_model = "kimi-k2.6:cloud"',
                 "",
                 "[providers.ollama]",
                 'base_url = "https://ollama.com"',
@@ -125,7 +125,7 @@ def test_create_provider_supports_ollama_cloud_api_key(monkeypatch, tmp_path: Pa
             [
                 "[general]",
                 'default_provider = "ollama"',
-                'default_model = "gpt-oss:120b"',
+                'default_model = "kimi-k2.6:cloud"',
                 "",
                 "[providers.ollama]",
                 'base_url = "https://ollama.com"',
@@ -143,5 +143,5 @@ def test_create_provider_supports_ollama_cloud_api_key(monkeypatch, tmp_path: Pa
 
     assert isinstance(provider, OllamaProvider)
     assert provider.base_url == "https://ollama.com"
-    assert provider.model == "gpt-oss:120b"
+    assert provider.model == "kimi-k2.6:cloud"
     assert provider.api_key == "cloud-key"

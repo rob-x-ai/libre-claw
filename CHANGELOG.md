@@ -7,7 +7,7 @@ Initial shippable Libre Claw release.
 ### Added
 
 - Textual terminal UI with streaming chat, status bar, file tree, command palette, slash-command suggestions, startup release notes, and interactive permission prompts.
-- Anthropic, OpenAI, and Ollama providers. Ollama supports local daemon use, Ollama Cloud, and Ollama/OpenAI-compatible endpoints.
+- Anthropic, OpenAI, and Ollama providers. Ollama supports local daemon use, Ollama Cloud with `kimi-k2.6:cloud`, and Ollama/OpenAI-compatible endpoints.
 - Native Ollama tool calling and XML tool-call fallback for models without native support.
 - ReAct-style async agent loop with concurrent tool execution.
 - Built-in `read_file`, `write_file`, `edit_file`, `list_directory`, and `bash` tools.

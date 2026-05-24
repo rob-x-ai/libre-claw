@@ -177,7 +177,7 @@ async def test_local_provider_supports_ollama_cloud_api_key() -> None:
     client = FakeHTTPClient([{"message": {"content": "cloud"}, "done": True}])
     provider = LocalProvider(
         base_url="https://ollama.com/api",
-        model="gpt-oss:120b",
+        model="kimi-k2.6:cloud",
         max_tokens=99,
         api_key="cloud-key",
         client=client,
