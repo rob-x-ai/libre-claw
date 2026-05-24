@@ -88,6 +88,8 @@ PERMISSION_KEYS: dict[str, PermissionResolution] = {
     "exclamation_mark": "always_allow_call",
 }
 
+ASSISTANT_ACCENT = "#8B5CF6"
+
 
 class LibreClawApp(App[None]):
     """Textual application with streaming providers, tools, memory, and Telegram status."""
@@ -107,6 +109,8 @@ class LibreClawApp(App[None]):
         scrollbar-background-hover: #101418;
         scrollbar-background-active: #101418;
         scrollbar-corner-color: #101418;
+        scrollbar-size-vertical: 1;
+        scrollbar-size-horizontal: 1;
     }
 
     Screen.light {
@@ -119,6 +123,8 @@ class LibreClawApp(App[None]):
         scrollbar-background-hover: #f7f7f2;
         scrollbar-background-active: #f7f7f2;
         scrollbar-corner-color: #f7f7f2;
+        scrollbar-size-vertical: 1;
+        scrollbar-size-horizontal: 1;
     }
 
     #status {
@@ -155,9 +161,30 @@ class LibreClawApp(App[None]):
         background: #0f151c;
     }
 
+    #sidebar-up {
+        height: 1;
+        margin: 0 1;
+        min-width: 8;
+    }
+
+    #sidebar-root {
+        height: auto;
+        padding: 0 1;
+        color: #8a96a3;
+    }
+
+    #file-tree {
+        height: 1fr;
+        background: #0f151c;
+    }
+
     Screen.light #sidebar {
         background: #eef2f6;
         border: none;
+    }
+
+    Screen.light #file-tree {
+        background: #eef2f6;
     }
 
     #main {
@@ -255,6 +282,7 @@ class LibreClawApp(App[None]):
 
     #workspace,
     #sidebar,
+    #file-tree,
     #main,
     #palette,
     #suggestions,
@@ -268,10 +296,13 @@ class LibreClawApp(App[None]):
         scrollbar-background-hover: #101418;
         scrollbar-background-active: #101418;
         scrollbar-corner-color: #101418;
+        scrollbar-size-vertical: 1;
+        scrollbar-size-horizontal: 1;
     }
 
     Screen.light #workspace,
     Screen.light #sidebar,
+    Screen.light #file-tree,
     Screen.light #main,
     Screen.light #palette,
     Screen.light #suggestions,
@@ -285,6 +316,8 @@ class LibreClawApp(App[None]):
         scrollbar-background-hover: #f7f7f2;
         scrollbar-background-active: #f7f7f2;
         scrollbar-corner-color: #f7f7f2;
+        scrollbar-size-vertical: 1;
+        scrollbar-size-horizontal: 1;
     }
 
     #input {
@@ -334,7 +367,10 @@ class LibreClawApp(App[None]):
             yield Static(self._status_text(), id="status")
 
         with Horizontal(id="workspace"):
-            yield DirectoryTree(self.config.general.working_directory, id="sidebar")
+            with Vertical(id="sidebar"):
+                yield Button("Up", id="sidebar-up", variant="primary", compact=True)
+                yield Static(self._sidebar_root_text(), id="sidebar-root")
+                yield DirectoryTree(self.config.general.working_directory, id="file-tree")
             with Vertical(id="main"):
                 yield Static("", id="palette", classes="hidden")
                 yield RichLog(id="chat", wrap=True, highlight=True, markup=True)
@@ -397,6 +433,11 @@ class LibreClawApp(App[None]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
+        if button_id == "sidebar-up":
+            event.stop()
+            self._go_up_directory()
+            return
+
         mapping: dict[str | None, PermissionResolution] = {
             "permission-allow-once": "allow_once",
             "permission-deny": "deny",
@@ -814,6 +855,20 @@ class LibreClawApp(App[None]):
 
         self._append_system("Usage: /tools expand|collapse|toggle <index>")
 
+    def _go_up_directory(self) -> None:
+        current = self.config.general.working_directory.resolve()
+        parent = current.parent
+        if parent == current:
+            self._append_system("Already at the filesystem root.")
+            return
+
+        self.config = _replace_general(self.config, working_directory=parent)
+        self.query_one("#file-tree", DirectoryTree).path = parent
+        self.query_one("#sidebar-root", Static).update(self._sidebar_root_text())
+        self._rebuild_agent()
+        self._update_status()
+        self._append_system(f"Explorer root and agent working directory set to {parent}.")
+
     def _append_user(self, text: str) -> int:
         return self._append_entry("user", text)
 
@@ -883,8 +938,8 @@ class LibreClawApp(App[None]):
             return Text.assemble(("User: ", "bold #0070F3"), entry.content)
         if entry.role == "assistant":
             if not entry.content:
-                return Text("Libre Claw: streaming...", style="bold green dim")
-            return Group(Text("Libre Claw:", style="bold green"), Markdown(entry.content))
+                return Text("Libre Claw: streaming...", style=f"bold {ASSISTANT_ACCENT} dim")
+            return Group(Text("Libre Claw:", style=f"bold {ASSISTANT_ACCENT}"), Markdown(entry.content))
         if entry.role == "tool":
             title = entry.title or "Tool"
             if entry.collapsed:
@@ -985,7 +1040,10 @@ class LibreClawApp(App[None]):
         return entries
 
     def _sync_sidebar_visibility(self) -> None:
-        self.query_one("#sidebar", DirectoryTree).display = self.sidebar_visible
+        self.query_one("#sidebar", Vertical).display = self.sidebar_visible
+
+    def _sidebar_root_text(self) -> str:
+        return f"cwd: {self.config.general.working_directory}"
 
     def _update_palette(self, query: str = "") -> None:
         palette = self.query_one("#palette", Static)
@@ -1094,7 +1152,7 @@ class LibreClawApp(App[None]):
         return "Type a message... (/help, Ctrl+B files, Ctrl+P palette, Ctrl+C exit)"
 
 
-def _replace_general(config: LibreClawConfig, **changes: str) -> LibreClawConfig:
+def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig:
     general_values = {
         "default_provider": config.general.default_provider,
         "default_model": config.general.default_model,
@@ -1103,6 +1161,7 @@ def _replace_general(config: LibreClawConfig, **changes: str) -> LibreClawConfig
         "log_level": config.general.log_level,
     }
     general_values.update(changes)
+    general_values["working_directory"] = Path(general_values["working_directory"]).expanduser().resolve()
     general = GeneralConfig(**general_values)
     return LibreClawConfig(
         general=general,

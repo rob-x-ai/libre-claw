@@ -9,7 +9,7 @@ from pathlib import Path
 from libre_claw.config import load_config
 from libre_claw.core.agent import AgentPermissionRequest
 from libre_claw.core.tools import ToolCall
-from libre_claw.tui.app import LibreClawApp, _effective_model, _replace_general
+from libre_claw.tui.app import ASSISTANT_ACCENT, LibreClawApp, TranscriptEntry, _effective_model, _replace_general
 
 
 def test_tui_can_start_without_anthropic_api_key(monkeypatch, tmp_path: Path) -> None:
@@ -97,6 +97,17 @@ def test_slash_suggestion_completion(monkeypatch, tmp_path: Path) -> None:
     assert app._should_complete_on_submit("/model") is False
 
 
+def test_assistant_label_uses_purple_accent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    renderable = app._format_entry(TranscriptEntry(role="assistant", content="hello"))
+
+    assert ASSISTANT_ACCENT in str(renderable.renderables[0].style)
+
+
 def test_ctrl_c_binding_exits_app() -> None:
     binding = next(binding for binding in LibreClawApp.BINDINGS if binding.key == "ctrl+c")
 
@@ -114,6 +125,8 @@ async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None
         assert app.query_one("#chat")
         assert app.query_one("#input")
         assert app.query_one("#sidebar")
+        assert app.query_one("#file-tree")
+        assert app.query_one("#sidebar-up")
         assert app.query_one("#palette")
         assert app.query_one("#permission-panel").has_class("hidden")
 
@@ -127,6 +140,7 @@ async def test_tui_main_panel_avoids_vertical_divider_drift(monkeypatch, tmp_pat
     async with app.run_test(size=(120, 45)):
         workspace = app.query_one("#workspace")
         sidebar = app.query_one("#sidebar")
+        file_tree = app.query_one("#file-tree")
         main = app.query_one("#main")
         chat = app.query_one("#chat")
         input_box = app.query_one("#input")
@@ -137,6 +151,7 @@ async def test_tui_main_panel_avoids_vertical_divider_drift(monkeypatch, tmp_pat
         assert sidebar.styles.border.top[0] == ""
         assert sidebar.styles.border_right[0] == ""
         assert sidebar.region.height == main.region.height
+        assert file_tree.region.x == sidebar.region.x
         assert chat.region.x == input_box.region.x
         assert chat.region.width == input_box.region.width
         assert main.styles.border_left[0] == ""
@@ -151,12 +166,31 @@ async def test_tui_scrollbars_use_blue_accent(monkeypatch, tmp_path: Path) -> No
     app = LibreClawApp(config=load_config())
 
     async with app.run_test(size=(120, 45)):
-        for selector in ("#workspace", "#sidebar", "#main", "#chat", "#input"):
+        for selector in ("#workspace", "#sidebar", "#file-tree", "#main", "#chat", "#input"):
             styles = app.query_one(selector).styles
 
             assert styles.scrollbar_color.hex == "#0070F3"
             assert styles.scrollbar_color_hover.hex == "#0070F3"
             assert styles.scrollbar_color_active.hex == "#0070F3"
+            assert styles.scrollbar_size_vertical == 1
+            assert styles.scrollbar_size_horizontal == 1
+
+
+async def test_file_tree_up_updates_agent_working_directory(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(project)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config(working_directory=project))
+
+    async with app.run_test(size=(120, 45)) as pilot:
+        app._go_up_directory()
+        await pilot.pause()
+
+        assert app.config.general.working_directory == tmp_path.resolve()
+        assert app.query_one("#file-tree").path == tmp_path.resolve()
+        assert app.query_one("#sidebar-root").content == f"cwd: {tmp_path.resolve()}"
 
 
 async def test_tui_permission_panel_resolves_exact_call(monkeypatch, tmp_path: Path) -> None:
