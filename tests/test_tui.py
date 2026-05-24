@@ -131,3 +131,18 @@ async def test_tui_main_panel_avoids_vertical_divider_drift(monkeypatch, tmp_pat
         assert main.styles.border_left[0] == ""
         assert chat.styles.border.top[0] == ""
         assert input_box.styles.border.top[0] == "solid"
+
+
+async def test_tui_scrollbars_use_blue_accent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        for selector in ("#workspace", "#sidebar", "#main", "#chat", "#input"):
+            styles = app.query_one(selector).styles
+
+            assert styles.scrollbar_color.hex == "#0070F3"
+            assert styles.scrollbar_color_hover.hex == "#0070F3"
+            assert styles.scrollbar_color_active.hex == "#0070F3"

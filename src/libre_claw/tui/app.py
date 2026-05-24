@@ -199,6 +199,38 @@ class LibreClawApp(App[None]):
         border: none;
     }
 
+    #workspace,
+    #sidebar,
+    #main,
+    #palette,
+    #suggestions,
+    #chat,
+    #input {
+        scrollbar-color: #0070F3;
+        scrollbar-color-hover: #0070F3;
+        scrollbar-color-active: #0070F3;
+        scrollbar-background: #101418;
+        scrollbar-background-hover: #101418;
+        scrollbar-background-active: #101418;
+        scrollbar-corner-color: #101418;
+    }
+
+    Screen.light #workspace,
+    Screen.light #sidebar,
+    Screen.light #main,
+    Screen.light #palette,
+    Screen.light #suggestions,
+    Screen.light #chat,
+    Screen.light #input {
+        scrollbar-color: #0070F3;
+        scrollbar-color-hover: #0070F3;
+        scrollbar-color-active: #0070F3;
+        scrollbar-background: #f7f7f2;
+        scrollbar-background-hover: #f7f7f2;
+        scrollbar-background-active: #f7f7f2;
+        scrollbar-corner-color: #f7f7f2;
+    }
+
     #input {
         height: 3;
         border: none;
