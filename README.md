@@ -178,6 +178,9 @@ python3 -m compileall src tests
 git diff --check
 ```
 
+GitHub Actions runs the same checks on `main` pushes and pull requests, plus a
+wheel/source distribution build.
+
 ## License
 
 Libre Claw is licensed under Apache-2.0.
