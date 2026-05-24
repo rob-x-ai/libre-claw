@@ -203,8 +203,6 @@ def _load_default_config() -> ConfigTable:
                 "base_url": "https://openrouter.ai/api/v1",
                 "default_model": "openrouter/auto",
                 "max_tokens": 16384,
-                "http_referer": "https://kroonen.ai",
-                "app_title": "Libre Claw",
             },
             "ollama": {
                 "base_url": "http://localhost:11434",

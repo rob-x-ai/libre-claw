@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
-from libre_claw.providers.openrouter import OpenRouterProvider
+from libre_claw.providers.openrouter import (
+    OPENROUTER_APP_TITLE,
+    OPENROUTER_CATEGORIES,
+    OPENROUTER_HTTP_REFERER,
+    OpenRouterProvider,
+)
 
 
 class FakeClient:
@@ -15,27 +20,26 @@ def test_openrouter_provider_uses_openai_compatible_defaults() -> None:
         api_key="test-key",
         model="openrouter/auto",
         max_tokens=99,
-        http_referer="https://kroonen.ai",
-        app_title="Libre Claw",
         client=FakeClient(),
     )
 
     assert provider.base_url == "https://openrouter.ai/api/v1"
     assert provider.display_name == "OpenRouter"
     assert provider.default_headers == {
-        "HTTP-Referer": "https://kroonen.ai",
-        "X-OpenRouter-Title": "Libre Claw",
+        "HTTP-Referer": OPENROUTER_HTTP_REFERER,
+        "X-OpenRouter-Title": OPENROUTER_APP_TITLE,
+        "X-OpenRouter-Categories": OPENROUTER_CATEGORIES,
     }
 
 
-def test_openrouter_provider_omits_empty_optional_headers() -> None:
+def test_openrouter_provider_always_uses_libre_claw_attribution() -> None:
     provider = OpenRouterProvider(
         api_key="test-key",
         model="openrouter/auto",
         max_tokens=99,
-        http_referer="",
-        app_title="",
         client=FakeClient(),
     )
 
-    assert provider.default_headers == {}
+    assert provider.default_headers["HTTP-Referer"] == "https://kroonen.ai"
+    assert provider.default_headers["X-OpenRouter-Title"] == "Libre Claw"
+    assert provider.default_headers["X-OpenRouter-Categories"] == "cli-agent"

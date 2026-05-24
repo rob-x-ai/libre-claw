@@ -51,8 +51,6 @@ def create_provider(config: LibreClawConfig, api_key_store: ApiKeyStore | None =
                 model=model,
                 max_tokens=max_tokens,
                 base_url=_str_provider_value(provider_config, "base_url", "https://openrouter.ai/api/v1"),
-                http_referer=_str_provider_value(provider_config, "http_referer", ""),
-                app_title=_str_provider_value(provider_config, "app_title", "Libre Claw"),
             )
         return OpenAIProvider(api_key=api_key_lookup.value, model=model, max_tokens=max_tokens)
     except RuntimeError as exc:

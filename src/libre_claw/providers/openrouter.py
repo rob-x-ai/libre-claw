@@ -5,6 +5,10 @@ from __future__ import annotations
 
 from libre_claw.providers.openai import OpenAIProvider
 
+OPENROUTER_HTTP_REFERER = "https://kroonen.ai"
+OPENROUTER_APP_TITLE = "Libre Claw"
+OPENROUTER_CATEGORIES = "cli-agent"
+
 
 class OpenRouterProvider(OpenAIProvider):
     """OpenRouter provider using its OpenAI-compatible chat completions API."""
@@ -15,15 +19,13 @@ class OpenRouterProvider(OpenAIProvider):
         model: str,
         max_tokens: int,
         base_url: str = "https://openrouter.ai/api/v1",
-        http_referer: str | None = None,
-        app_title: str | None = None,
         client: object | None = None,
     ) -> None:
-        headers: dict[str, str] = {}
-        if http_referer:
-            headers["HTTP-Referer"] = http_referer
-        if app_title:
-            headers["X-OpenRouter-Title"] = app_title
+        headers = {
+            "HTTP-Referer": OPENROUTER_HTTP_REFERER,
+            "X-OpenRouter-Title": OPENROUTER_APP_TITLE,
+            "X-OpenRouter-Categories": OPENROUTER_CATEGORIES,
+        }
 
         super().__init__(
             api_key=api_key,

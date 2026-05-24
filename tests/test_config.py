@@ -28,6 +28,8 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.providers["openrouter"]["api_key_env"] == "OPENROUTER_API_KEY"
     assert config.providers["openrouter"]["base_url"] == "https://openrouter.ai/api/v1"
     assert config.providers["openrouter"]["default_model"] == "openrouter/auto"
+    assert "http_referer" not in config.providers["openrouter"]
+    assert "app_title" not in config.providers["openrouter"]
     assert "local" not in config.providers
     assert config.providers["ollama"]["api_format"] == "ollama"
     assert config.providers["ollama"]["api_key_env"] == "OLLAMA_API_KEY"

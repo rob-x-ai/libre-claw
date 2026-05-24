@@ -86,9 +86,11 @@ default_model = "openrouter/auto"
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
 default_model = "openrouter/auto"
-http_referer = "https://kroonen.ai"
-app_title = "Libre Claw"
 ```
+
+Libre Claw always sends OpenRouter app attribution as `Libre Claw` from
+`https://kroonen.ai`, including the `cli-agent` category, so users do not need
+to configure product identity headers themselves.
 
 Ollama defaults to the local daemon at `http://localhost:11434`:
 
