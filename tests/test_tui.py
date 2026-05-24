@@ -72,7 +72,7 @@ def test_replace_general_updates_model(monkeypatch, tmp_path: Path) -> None:
     updated = _replace_general(config, default_model="claude-test")
 
     assert updated.general.default_model == "claude-test"
-    assert config.general.default_model == "claude-sonnet-4-6"
+    assert config.general.default_model == "claude-opus-4-6"
 
 
 def test_effective_model_uses_provider_default_when_switching_to_openai(monkeypatch, tmp_path: Path) -> None:
@@ -80,7 +80,7 @@ def test_effective_model_uses_provider_default_when_switching_to_openai(monkeypa
     monkeypatch.chdir(tmp_path)
     config = _replace_general(load_config(), default_provider="openai")
 
-    assert _effective_model(config) == "gpt-4o"
+    assert _effective_model(config) == "gpt-5.5"
 
 
 def test_effective_model_uses_provider_default_when_switching_to_ollama(monkeypatch, tmp_path: Path) -> None:
@@ -88,7 +88,7 @@ def test_effective_model_uses_provider_default_when_switching_to_ollama(monkeypa
     monkeypatch.chdir(tmp_path)
     config = _replace_general(load_config(), default_provider="ollama")
 
-    assert _effective_model(config) == "qwen3:32b"
+    assert _effective_model(config) == "qwen3.6:27b"
 
 
 def test_slash_suggestion_completion(monkeypatch, tmp_path: Path) -> None:
@@ -121,7 +121,7 @@ def test_model_help_includes_enrollment_commands(monkeypatch, tmp_path: Path) ->
 
     help_text = _model_help_text(config)
 
-    assert "Current model: anthropic:claude-sonnet-4-6" in help_text
+    assert "Current model: anthropic:claude-opus-4-6" in help_text
     assert "libre-claw auth set-key openrouter" in help_text
     assert "/model openrouter:openrouter/auto" in help_text
 

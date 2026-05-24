@@ -83,11 +83,13 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
 SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "ollama")
 MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
     "anthropic": (
+        ("claude-opus-4-6", "Claude Opus 4.6"),
         ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
         ("claude-opus-4-20250918", "Claude Opus 4"),
         ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
     ),
     "openai": (
+        ("gpt-5.5", "GPT-5.5"),
         ("gpt-4o", "GPT-4o"),
         ("gpt-4.1", "GPT-4.1"),
         ("o3", "o3 reasoning"),
@@ -97,11 +99,13 @@ MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
     "openrouter": (
         ("openrouter/auto", "OpenRouter automatic routing"),
         ("anthropic/claude-sonnet-4.5", "Claude through OpenRouter"),
+        ("openai/gpt-5.5", "GPT-5.5 through OpenRouter"),
         ("openai/gpt-4o", "GPT-4o through OpenRouter"),
         ("moonshotai/kimi-k2", "Kimi K2 through OpenRouter"),
     ),
     "ollama": (
         ("kimi-k2.6:cloud", "Kimi K2.6 on Ollama Cloud"),
+        ("qwen3.6:27b", "Qwen3.6 local daemon"),
         ("gpt-oss:120b", "GPT OSS 120B on Ollama"),
         ("qwen3:32b", "Qwen3 local daemon"),
     ),

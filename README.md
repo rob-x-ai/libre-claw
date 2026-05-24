@@ -170,7 +170,7 @@ Default model:
 ```toml
 [general]
 default_provider = "anthropic"
-default_model = "claude-sonnet-4-6"
+default_model = "claude-opus-4-6"
 ```
 
 ### OpenAI
@@ -185,7 +185,7 @@ Default example:
 ```toml
 [general]
 default_provider = "openai"
-default_model = "gpt-4o"
+default_model = "gpt-5.5"
 ```
 
 ## Model Switching

@@ -78,7 +78,7 @@ def test_create_provider_supports_openai(monkeypatch, tmp_path: Path) -> None:
     provider = create_provider(config)
 
     assert isinstance(provider, OpenAIProvider)
-    assert provider.model == "gpt-4o"
+    assert provider.model == "gpt-5.5"
 
 
 def test_create_provider_requires_openrouter_api_key(monkeypatch, tmp_path: Path) -> None:
@@ -123,7 +123,7 @@ def test_create_provider_supports_ollama_without_api_key(monkeypatch, tmp_path: 
     provider = create_provider(config)
 
     assert isinstance(provider, OllamaProvider)
-    assert provider.model == "qwen3:32b"
+    assert provider.model == "qwen3.6:27b"
 
 
 def test_create_provider_requires_ollama_cloud_api_key(monkeypatch, tmp_path: Path) -> None:

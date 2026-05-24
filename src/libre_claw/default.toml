@@ -3,7 +3,7 @@
 
 [general]
 default_provider = "anthropic"
-default_model = "claude-sonnet-4-6"
+default_model = "claude-opus-4-6"
 working_directory = "."
 theme = "dark"
 log_level = "info"
@@ -30,12 +30,12 @@ system_prompt_extra = ""
 
 [providers.anthropic]
 api_key_env = "ANTHROPIC_API_KEY"
-default_model = "claude-sonnet-4-6"
+default_model = "claude-opus-4-6"
 max_tokens = 16384
 
 [providers.openai]
 api_key_env = "OPENAI_API_KEY"
-default_model = "gpt-4o"
+default_model = "gpt-5.5"
 max_tokens = 16384
 
 [providers.openrouter]
@@ -46,7 +46,7 @@ max_tokens = 16384
 
 [providers.ollama]
 base_url = "http://localhost:11434"
-default_model = "qwen3:32b"
+default_model = "qwen3.6:27b"
 api_format = "ollama" # ollama | openai
 api_key_env = "OLLAMA_API_KEY" # optional locally, required for https://ollama.com
 max_tokens = 16384
@@ -97,4 +97,4 @@ allowed_user_ids = [123456789]
 max_message_length = 4000
 stream_update_interval = 1.5
 default_provider = "anthropic"
-default_model = "claude-sonnet-4-6"
+default_model = "claude-opus-4-6"

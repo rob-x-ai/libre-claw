@@ -162,7 +162,7 @@ def _load_default_config() -> ConfigTable:
     return {
         "general": {
             "default_provider": "anthropic",
-            "default_model": "claude-sonnet-4-6",
+            "default_model": "claude-opus-4-6",
             "working_directory": ".",
             "theme": "dark",
             "log_level": "info",
@@ -190,12 +190,12 @@ def _load_default_config() -> ConfigTable:
         "providers": {
             "anthropic": {
                 "api_key_env": "ANTHROPIC_API_KEY",
-                "default_model": "claude-sonnet-4-6",
+                "default_model": "claude-opus-4-6",
                 "max_tokens": 16384,
             },
             "openai": {
                 "api_key_env": "OPENAI_API_KEY",
-                "default_model": "gpt-4o",
+                "default_model": "gpt-5.5",
                 "max_tokens": 16384,
             },
             "openrouter": {
@@ -206,7 +206,7 @@ def _load_default_config() -> ConfigTable:
             },
             "ollama": {
                 "base_url": "http://localhost:11434",
-                "default_model": "qwen3:32b",
+                "default_model": "qwen3.6:27b",
                 "api_format": "ollama",
                 "api_key_env": "OLLAMA_API_KEY",
                 "max_tokens": 16384,
@@ -258,7 +258,7 @@ def _load_default_config() -> ConfigTable:
             "max_message_length": 4000,
             "stream_update_interval": 1.5,
             "default_provider": "anthropic",
-            "default_model": "claude-sonnet-4-6",
+            "default_model": "claude-opus-4-6",
         },
     }
 
