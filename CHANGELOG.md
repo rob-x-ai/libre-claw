@@ -6,17 +6,19 @@ Initial shippable Libre Claw release.
 
 ### Added
 
-- Textual terminal UI with streaming chat, status bar, file tree, command palette, slash-command suggestions, `/model` provider/model onboarding, startup release notes, and interactive permission prompts.
-- Anthropic, OpenAI, OpenRouter, and Ollama providers. Ollama supports local daemon use, Ollama Cloud with `kimi-k2.6:cloud`, and Ollama/OpenAI-compatible endpoints.
+- Textual terminal UI with streaming chat, status bar, file tree, command palette, slash-command suggestions, `/model` provider/model onboarding, startup ASCII art, startup release notes, and interactive permission prompts.
+- Anthropic, OpenAI, OpenRouter, and Ollama providers. Defaults are `claude-opus-4-6`, `gpt-5.5`, and `qwen3.6:27b`; Ollama supports local daemon use, Ollama Cloud with `kimi-k2.6:cloud`, and Ollama/OpenAI-compatible endpoints.
+- Fixed OpenRouter app attribution for Libre Claw with `https://kroonen.ai`, `Libre Claw`, and `cli-agent` headers.
 - Native Ollama tool calling and XML tool-call fallback for models without native support.
 - ReAct-style async agent loop with concurrent tool execution.
 - Built-in `read_file`, `write_file`, `edit_file`, `list_directory`, and `bash` tools.
 - Working-directory sandboxing, blocked shell command patterns, and approval gates for side-effecting tools.
-- File explorer parent navigation that updates the agent working directory.
-- TUI polish including thin blue scrollbars and purple Libre Claw assistant labels.
+- File explorer parent navigation that updates the agent working directory, plus visible hide/show controls and a left-side restore rail.
+- TUI polish including thin `#0070F3` scrollbars, blue user labels, purple `#8B5CF6` Libre Claw assistant labels, and cleaner panel borders.
 - SQLite memory for facts, sessions, summaries, and file edit logs.
 - Telegram daemon with allowlist auth, streaming updates, and inline permission prompts.
 - Key storage through environment variables, OS keyring, or encrypted local fallback.
 - OAuth 2.0 PKCE and JWT scaffolding for a future dashboard.
 - Apache-2.0 licensing with Kroonen AI Inc. source headers.
+- GitHub Actions test/build CI and expanded user-facing README documentation.
 - Test coverage for config, providers, tools, permissions, memory, Telegram, auth, and TUI helpers.
