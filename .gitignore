@@ -3,6 +3,20 @@ __pycache__/
 *$py.class
 .DS_Store
 
+.env
+.env.*
+!.env.example
+.libre-claw/
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.sqlite
+*.sqlite3
+memory.db
+sessions/
+
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
