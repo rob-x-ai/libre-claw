@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlparse
 
 from libre_claw.auth.api_keys import ApiKeyStore
 from libre_claw.config import LibreClawConfig
@@ -56,6 +57,13 @@ def _create_local_provider(
     api_key_env = _str_provider_value(provider_config, "api_key_env", "")
     store = api_key_store or ApiKeyStore.from_config(config.auth)
     api_key_lookup = store.get_api_key("local", api_key_env or None)
+    base_url = _str_provider_value(provider_config, "base_url", "http://localhost:11434")
+    if _is_ollama_cloud_url(base_url) and not api_key_lookup.value:
+        msg = (
+            "Missing Ollama Cloud API key. Set OLLAMA_API_KEY or run "
+            "`libre-claw auth set-key local` before using https://ollama.com."
+        )
+        raise ProviderConfigurationError(msg)
     api_key = api_key_lookup.value or "ollama"
     api_format = _str_provider_value(provider_config, "api_format", "ollama").lower()
     if api_format not in {"ollama", "openai"}:
@@ -65,7 +73,7 @@ def _create_local_provider(
         raise ProviderConfigurationError("[providers.local].tool_mode must be 'auto', 'native', or 'xml'.")
 
     return LocalProvider(
-        base_url=_str_provider_value(provider_config, "base_url", "http://localhost:11434"),
+        base_url=base_url,
         model=_resolve_model(config, "local", provider_config),
         max_tokens=_int_provider_value(provider_config, "max_tokens", 16384),
         api_format=api_format,  # type: ignore[arg-type]
@@ -125,3 +133,8 @@ def _fallback_model(provider_name: str) -> str:
     if provider_name == "local":
         return "qwen3:32b"
     return "claude-sonnet-4-6"
+
+
+def _is_ollama_cloud_url(base_url: str) -> bool:
+    parsed = urlparse(base_url if "://" in base_url else f"https://{base_url}")
+    return parsed.hostname == "ollama.com"

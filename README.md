@@ -94,9 +94,12 @@ Native local tool calling is used when the model/server supports it. XML
 tool-call fallback can be enabled with `tool_mode = "xml"` for local models
 without native tool support.
 
-Ollama Cloud is supported through the same `local` provider. For direct access
-to ollama.com, create an Ollama API key, set `OLLAMA_API_KEY`, and point the
-provider at Ollama's cloud host:
+Ollama Cloud is supported through the same `local` provider. There are two
+correct modes.
+
+For direct access to `ollama.com`, create an Ollama API key, set
+`OLLAMA_API_KEY`, and point the provider at Ollama's cloud host. Direct API
+model names do not use the `-cloud` suffix:
 
 ```bash
 export OLLAMA_API_KEY="..."
@@ -113,6 +116,12 @@ api_format = "ollama"
 api_key_env = "OLLAMA_API_KEY"
 ```
 
+Libre Claw also accepts a stored local-provider key:
+
+```bash
+libre-claw auth set-key local
+```
+
 For Ollama's OpenAI-compatible cloud API, use:
 
 ```toml
@@ -120,6 +129,26 @@ For Ollama's OpenAI-compatible cloud API, use:
 base_url = "https://ollama.com"
 api_format = "openai"
 api_key_env = "OLLAMA_API_KEY"
+```
+
+If you want Ollama itself to handle cloud authentication, sign in with the
+Ollama CLI and keep Libre Claw pointed at the local daemon. In that mode, use
+the `-cloud` model name:
+
+```bash
+ollama signin
+ollama pull gpt-oss:120b-cloud
+```
+
+```toml
+[general]
+default_provider = "local"
+default_model = "gpt-oss:120b-cloud"
+
+[providers.local]
+base_url = "http://localhost:11434"
+api_format = "ollama"
+api_key_env = ""
 ```
 
 ## TUI Commands
