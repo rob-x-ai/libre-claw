@@ -25,6 +25,9 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert "Current toolset: read_file, write_file, edit_file, list_directory, and bash." in config.agent.system_prompt
     assert config.agent.system_prompt_extra == ""
     assert "curl | bash" in config.sandbox.blocked_patterns
+    assert config.providers["openrouter"]["api_key_env"] == "OPENROUTER_API_KEY"
+    assert config.providers["openrouter"]["base_url"] == "https://openrouter.ai/api/v1"
+    assert config.providers["openrouter"]["default_model"] == "openrouter/auto"
     assert "local" not in config.providers
     assert config.providers["ollama"]["api_format"] == "ollama"
     assert config.providers["ollama"]["api_key_env"] == "OLLAMA_API_KEY"

@@ -154,7 +154,7 @@ def auth_status(ctx: click.Context) -> None:
     providers = [
         (name, _provider_api_key_env(provider_config))
         for name, provider_config in config.providers.items()
-        if name in {"anthropic", "openai", "ollama"}
+        if name in {"anthropic", "openai", "openrouter", "ollama"}
     ]
     try:
         statuses = store.key_status(providers)

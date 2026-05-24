@@ -9,6 +9,7 @@ __all__ = [
     "LocalProvider",
     "OllamaProvider",
     "OpenAIProvider",
+    "OpenRouterProvider",
     "ProviderConfigurationError",
     "ProviderError",
     "StreamEvent",
@@ -36,3 +37,4 @@ from libre_claw.providers.factory import create_provider
 from libre_claw.providers.local import LocalProvider
 from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.openai import OpenAIProvider
+from libre_claw.providers.openrouter import OpenRouterProvider

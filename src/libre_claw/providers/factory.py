@@ -13,14 +13,15 @@ from libre_claw.providers.anthropic import AnthropicProvider
 from libre_claw.providers.base import LLMProvider, ProviderConfigurationError
 from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.openai import OpenAIProvider
+from libre_claw.providers.openrouter import OpenRouterProvider
 
 
 def create_provider(config: LibreClawConfig, api_key_store: ApiKeyStore | None = None) -> LLMProvider:
     """Create the configured provider."""
     provider_name = _canonical_provider_name(config.general.default_provider)
     provider_config = config.providers.get(provider_name)
-    if provider_name not in {"anthropic", "openai", "ollama"}:
-        msg = f"Provider '{provider_name}' is not supported. Use 'anthropic', 'openai', or 'ollama'."
+    if provider_name not in {"anthropic", "openai", "openrouter", "ollama"}:
+        msg = f"Provider '{provider_name}' is not supported. Use 'anthropic', 'openai', 'openrouter', or 'ollama'."
         raise ProviderConfigurationError(msg)
     if provider_config is None:
         raise ProviderConfigurationError(f"Missing [providers.{provider_name}] configuration.")
@@ -32,7 +33,7 @@ def create_provider(config: LibreClawConfig, api_key_store: ApiKeyStore | None =
     store = api_key_store or ApiKeyStore.from_config(config.auth)
     api_key_lookup = store.get_api_key(provider_name, api_key_env)
     if not api_key_lookup.value:
-        provider_label = "Anthropic" if provider_name == "anthropic" else "OpenAI"
+        provider_label = _provider_label(provider_name)
         msg = (
             f"Missing {provider_label} API key. Set {api_key_env} or run "
             f"`libre-claw auth set-key {provider_name}` before sending a message."
@@ -44,6 +45,15 @@ def create_provider(config: LibreClawConfig, api_key_store: ApiKeyStore | None =
     try:
         if provider_name == "anthropic":
             return AnthropicProvider(api_key=api_key_lookup.value, model=model, max_tokens=max_tokens)
+        if provider_name == "openrouter":
+            return OpenRouterProvider(
+                api_key=api_key_lookup.value,
+                model=model,
+                max_tokens=max_tokens,
+                base_url=_str_provider_value(provider_config, "base_url", "https://openrouter.ai/api/v1"),
+                http_referer=_str_provider_value(provider_config, "http_referer", ""),
+                app_title=_str_provider_value(provider_config, "app_title", "Libre Claw"),
+            )
         return OpenAIProvider(api_key=api_key_lookup.value, model=model, max_tokens=max_tokens)
     except RuntimeError as exc:
         raise ProviderConfigurationError(str(exc)) from exc
@@ -114,9 +124,20 @@ def _bool_provider_value(config: Mapping[str, Any], key: str, default: bool) -> 
 
 
 def _default_api_key_env(provider_name: str) -> str:
+    if provider_name == "openrouter":
+        return "OPENROUTER_API_KEY"
     if provider_name == "openai":
         return "OPENAI_API_KEY"
     return "ANTHROPIC_API_KEY"
+
+
+def _provider_label(provider_name: str) -> str:
+    labels = {
+        "anthropic": "Anthropic",
+        "openai": "OpenAI",
+        "openrouter": "OpenRouter",
+    }
+    return labels.get(provider_name, provider_name)
 
 
 def _resolve_model(
@@ -139,6 +160,8 @@ def _resolve_model(
 def _fallback_model(provider_name: str) -> str:
     if provider_name == "openai":
         return "gpt-4o"
+    if provider_name == "openrouter":
+        return "openrouter/auto"
     if provider_name == "ollama":
         return "qwen3:32b"
     return "claude-sonnet-4-6"

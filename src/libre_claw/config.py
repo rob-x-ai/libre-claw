@@ -198,6 +198,14 @@ def _load_default_config() -> ConfigTable:
                 "default_model": "gpt-4o",
                 "max_tokens": 16384,
             },
+            "openrouter": {
+                "api_key_env": "OPENROUTER_API_KEY",
+                "base_url": "https://openrouter.ai/api/v1",
+                "default_model": "openrouter/auto",
+                "max_tokens": 16384,
+                "http_referer": "https://kroonen.ai",
+                "app_title": "Libre Claw",
+            },
             "ollama": {
                 "base_url": "http://localhost:11434",
                 "default_model": "qwen3:32b",

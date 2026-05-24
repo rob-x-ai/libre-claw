@@ -70,7 +70,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/cancel", "/cancel", "Cancel active generation or tool execution"),
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
     SlashCommand("/model", "/model <name>", "Switch Anthropic model for new turns"),
-    SlashCommand("/provider", "/provider anthropic|openai|ollama", "Switch provider for new turns"),
+    SlashCommand("/provider", "/provider anthropic|openai|openrouter|ollama", "Switch provider for new turns"),
     SlashCommand("/save", "/save [name]", "Save the current session"),
     SlashCommand("/load", "/load <name>", "Load a saved session"),
     SlashCommand("/compact", "/compact", "Compact older context into the session summary"),
@@ -758,7 +758,7 @@ class LibreClawApp(App[None]):
 
     def _set_provider(self, provider: str) -> None:
         if not provider:
-            self._append_system("Usage: /provider anthropic|openai|ollama")
+            self._append_system("Usage: /provider anthropic|openai|openrouter|ollama")
             return
         if provider == "local":
             provider = "ollama"

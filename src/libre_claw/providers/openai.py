@@ -62,12 +62,16 @@ class OpenAIProvider(LLMProvider):
         model: str,
         max_tokens: int,
         base_url: str | None = None,
+        default_headers: Mapping[str, str] | None = None,
+        display_name: str = "OpenAI",
         client: Any | None = None,
     ) -> None:
         self.api_key = api_key
         self.model = model
         self.max_tokens = max_tokens
         self.base_url = base_url
+        self.default_headers = dict(default_headers or {})
+        self.display_name = display_name
         if client is not None:
             self._client = client
         elif AsyncOpenAI is None:
@@ -77,6 +81,8 @@ class OpenAIProvider(LLMProvider):
             kwargs: dict[str, Any] = {"api_key": api_key}
             if base_url:
                 kwargs["base_url"] = base_url
+            if self.default_headers:
+                kwargs["default_headers"] = self.default_headers
             self._client = AsyncOpenAI(**kwargs)
         self._logger = structlog.get_logger(__name__)
 
@@ -138,7 +144,7 @@ class OpenAIProvider(LLMProvider):
             raise
         except Exception as exc:
             self._logger.warning("openai_stream_failed", error=str(exc))
-            yield ProviderError(f"OpenAI request failed: {exc}")
+            yield ProviderError(f"{self.display_name} request failed: {exc}")
             return
 
         yield Done(usage=usage, stop_reason=stop_reason)

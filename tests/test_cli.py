@@ -53,4 +53,5 @@ def test_cli_auth_status_does_not_print_keys(monkeypatch, tmp_path) -> None:
 
     assert result.exit_code == 0
     assert "anthropic: environment" in result.output
+    assert "openrouter: missing" in result.output
     assert "secret-anthropic-key" not in result.output

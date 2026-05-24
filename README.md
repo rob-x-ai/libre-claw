@@ -1,9 +1,10 @@
 # Libre Claw
 
 Libre Claw is a terminal-native AI agent harness from Kroonen AI Inc.
-(https://kroonen.ai). It provides a Textual TUI, Anthropic, OpenAI, and Ollama
-streaming providers, a permissioned coding toolset, SQLite-backed memory,
-Telegram daemon support, key storage, and sandbox hardening.
+(https://kroonen.ai). It provides a Textual TUI, Anthropic, OpenAI,
+OpenRouter, and Ollama streaming providers, a permissioned coding toolset,
+SQLite-backed memory, Telegram daemon support, key storage, and sandbox
+hardening.
 
 Version `0.1.0` is the first shippable CLI/TUI release. It is still early
 software, but it is functional end to end: launch the TUI, choose a provider,
@@ -42,6 +43,7 @@ Set provider keys with environment variables:
 ```bash
 export ANTHROPIC_API_KEY="..."
 export OPENAI_API_KEY="..."
+export OPENROUTER_API_KEY="..."
 ```
 
 or store them securely with OS keyring, falling back to
@@ -50,6 +52,7 @@ or store them securely with OS keyring, falling back to
 ```bash
 libre-claw auth set-key anthropic
 libre-claw auth set-key openai
+libre-claw auth set-key openrouter
 libre-claw auth set-key ollama
 libre-claw auth status
 ```
@@ -70,6 +73,21 @@ OpenAI can be selected with:
 [general]
 default_provider = "openai"
 default_model = "gpt-4o"
+```
+
+OpenRouter can be selected with:
+
+```toml
+[general]
+default_provider = "openrouter"
+default_model = "openrouter/auto"
+
+[providers.openrouter]
+api_key_env = "OPENROUTER_API_KEY"
+base_url = "https://openrouter.ai/api/v1"
+default_model = "openrouter/auto"
+http_referer = "https://kroonen.ai"
+app_title = "Libre Claw"
 ```
 
 Ollama defaults to the local daemon at `http://localhost:11434`:
@@ -163,7 +181,7 @@ are accepted and normalized to `ollama` at load time.
 - `/cancel`
 - `/cost`
 - `/model <name>`
-- `/provider anthropic|openai|ollama`
+- `/provider anthropic|openai|openrouter|ollama`
 - `/save [name]`
 - `/load <name>`
 - `/compact`
