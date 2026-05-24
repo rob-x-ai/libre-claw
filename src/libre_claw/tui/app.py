@@ -115,6 +115,7 @@ class LibreClawApp(App[None]):
     #sidebar {
         width: 30;
         min-width: 22;
+        height: 1fr;
         border: solid #2b3a48;
         background: #0f151c;
     }
@@ -126,6 +127,10 @@ class LibreClawApp(App[None]):
 
     #main {
         width: 1fr;
+        height: 1fr;
+        border: solid #2b3a48;
+        border-left: none;
+        background: #111820;
     }
 
     #palette {
@@ -157,24 +162,30 @@ class LibreClawApp(App[None]):
     #chat {
         height: 1fr;
         padding: 1 2;
-        border: solid #2b3a48;
+        border: none;
         background: #111820;
+    }
+
+    Screen.light #main {
+        background: #ffffff;
+        border: solid #a8b3bd;
+        border-left: none;
     }
 
     Screen.light #chat {
         background: #ffffff;
-        border: solid #a8b3bd;
+        border: none;
     }
 
     #input {
         height: 3;
-        border: solid #3a4c5e;
+        border: none;
         background: #121a22;
     }
 
     Screen.light #input {
         background: #ffffff;
-        border: solid #a8b3bd;
+        border: none;
     }
     """
 

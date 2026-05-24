@@ -105,3 +105,23 @@ async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None
         assert app.query_one("#input")
         assert app.query_one("#sidebar")
         assert app.query_one("#palette")
+
+
+async def test_tui_main_panel_uses_single_shared_divider(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        sidebar = app.query_one("#sidebar")
+        main = app.query_one("#main")
+        chat = app.query_one("#chat")
+        input_box = app.query_one("#input")
+
+        assert sidebar.region.height == main.region.height
+        assert chat.region.x == input_box.region.x
+        assert chat.region.width == input_box.region.width
+        assert main.styles.border_left[0] == ""
+        assert chat.styles.border.top[0] == ""
+        assert input_box.styles.border.top[0] == ""
