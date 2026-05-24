@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from libre_claw.config import load_config
+from libre_claw.core.agent import AgentPermissionRequest
+from libre_claw.core.tools import ToolCall
 from libre_claw.tui.app import LibreClawApp, _effective_model, _replace_general
 
 
@@ -94,6 +97,13 @@ def test_slash_suggestion_completion(monkeypatch, tmp_path: Path) -> None:
     assert app._should_complete_on_submit("/model") is False
 
 
+def test_ctrl_c_binding_exits_app() -> None:
+    binding = next(binding for binding in LibreClawApp.BINDINGS if binding.key == "ctrl+c")
+
+    assert binding.action == "quit_app"
+    assert binding.description == "Exit"
+
+
 async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -105,6 +115,7 @@ async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None
         assert app.query_one("#input")
         assert app.query_one("#sidebar")
         assert app.query_one("#palette")
+        assert app.query_one("#permission-panel").has_class("hidden")
 
 
 async def test_tui_main_panel_avoids_vertical_divider_drift(monkeypatch, tmp_path: Path) -> None:
@@ -146,3 +157,63 @@ async def test_tui_scrollbars_use_blue_accent(monkeypatch, tmp_path: Path) -> No
             assert styles.scrollbar_color.hex == "#0070F3"
             assert styles.scrollbar_color_hover.hex == "#0070F3"
             assert styles.scrollbar_color_active.hex == "#0070F3"
+
+
+async def test_tui_permission_panel_resolves_exact_call(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        request = AgentPermissionRequest(
+            call=ToolCall(id="toolu_1", name="bash", arguments={"command": "pwd"}),
+            future=future,
+        )
+
+        app._pending_permission = request
+        app._show_permission_prompt(request)
+
+        assert not app.query_one("#permission-panel").has_class("hidden")
+        assert app.query_one("#permission-warning").content == (
+            "Choose once, always for this tool, or always for this exact command."
+        )
+
+        app._resolve_pending_permission("always_allow_call")
+
+        assert future.result() == "always_allow_call"
+        assert app.query_one("#permission-panel").has_class("hidden")
+
+
+async def test_tui_permission_panel_warns_for_dangerous_commands(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        request = AgentPermissionRequest(
+            call=ToolCall(id="toolu_1", name="bash", arguments={"command": "rm -rf /"}),
+            future=future,
+        )
+
+        app._pending_permission = request
+        app._show_permission_prompt(request)
+
+        assert "Warning: Command blocked by sandbox pattern: rm -rf /" in str(
+            app.query_one("#permission-warning").content
+        )
+        assert app.query_one("#permission-always-tool").disabled is True
+        assert app.query_one("#permission-always-call").disabled is True
+
+        app._resolve_pending_permission("always_allow_call")
+
+        assert future.done() is False
+        assert app.query_one("#permission-panel").has_class("hidden") is False
+
+        app._resolve_pending_permission("allow_once")
+
+        assert future.result() == "allow_once"
+        assert app.query_one("#permission-panel").has_class("hidden")

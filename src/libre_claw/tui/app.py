@@ -17,10 +17,11 @@ from rich.markdown import Markdown
 from rich.markup import escape
 from rich.syntax import Syntax
 from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import DirectoryTree, Input, RichLog, Static
+from textual.widgets import Button, DirectoryTree, Input, RichLog, Static
 
 from libre_claw import __version__
 from libre_claw.config import GeneralConfig, LibreClawConfig, load_config
@@ -36,6 +37,7 @@ from libre_claw.core import (
 )
 from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
+from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
 from libre_claw.core.session import ChatMessage
 from libre_claw.core.tools import ToolCall, ToolResult
 from libre_claw.providers import ProviderConfigurationError, Usage, create_provider
@@ -76,6 +78,15 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/tools", "/tools expand|collapse|toggle <index>", "Control tool call details"),
     SlashCommand("/exit", "/exit", "Exit Libre Claw"),
 )
+
+
+PERMISSION_KEYS: dict[str, PermissionResolution] = {
+    "y": "allow_once",
+    "n": "deny",
+    "a": "always_allow_tool",
+    "!": "always_allow_call",
+    "exclamation_mark": "always_allow_call",
+}
 
 
 class LibreClawApp(App[None]):
@@ -199,11 +210,55 @@ class LibreClawApp(App[None]):
         border: none;
     }
 
+    #permission-panel {
+        height: auto;
+        padding: 1 2;
+        border-top: solid #0070F3;
+        background: #0b1726;
+        color: #dbeafe;
+    }
+
+    #permission-panel.hidden {
+        display: none;
+    }
+
+    #permission-title {
+        height: auto;
+        color: #ffffff;
+        text-style: bold;
+    }
+
+    #permission-warning {
+        height: auto;
+        color: #ffcc66;
+        text-style: bold;
+    }
+
+    #permission-actions {
+        height: 3;
+        padding-top: 1;
+    }
+
+    #permission-actions Button {
+        margin-right: 1;
+        min-width: 14;
+    }
+
+    Screen.light #permission-panel {
+        background: #edf5ff;
+        color: #101418;
+    }
+
+    Screen.light #permission-title {
+        color: #101418;
+    }
+
     #workspace,
     #sidebar,
     #main,
     #palette,
     #suggestions,
+    #permission-panel,
     #chat,
     #input {
         scrollbar-color: #0070F3;
@@ -220,6 +275,7 @@ class LibreClawApp(App[None]):
     Screen.light #main,
     Screen.light #palette,
     Screen.light #suggestions,
+    Screen.light #permission-panel,
     Screen.light #chat,
     Screen.light #input {
         scrollbar-color: #0070F3;
@@ -245,7 +301,7 @@ class LibreClawApp(App[None]):
     """
 
     BINDINGS = [
-        Binding("ctrl+c", "interrupt", "Interrupt", show=True),
+        Binding("ctrl+c", "quit_app", "Exit", show=True),
         Binding("escape", "interrupt", "Interrupt", show=False),
         Binding("ctrl+b", "toggle_sidebar", "Files", show=True),
         Binding("ctrl+p", "command_palette", "Palette", show=True),
@@ -283,6 +339,14 @@ class LibreClawApp(App[None]):
                 yield Static("", id="palette", classes="hidden")
                 yield RichLog(id="chat", wrap=True, highlight=True, markup=True)
                 yield Static("", id="suggestions", classes="hidden")
+                with Vertical(id="permission-panel", classes="hidden"):
+                    yield Static("", id="permission-title")
+                    yield Static("", id="permission-warning")
+                    with Horizontal(id="permission-actions"):
+                        yield Button("Approve", id="permission-allow-once", variant="success", compact=True)
+                        yield Button("Deny", id="permission-deny", variant="error", compact=True)
+                        yield Button("Always Tool", id="permission-always-tool", compact=True)
+                        yield Button("Always Command", id="permission-always-call", compact=True)
                 yield Input(placeholder=self._input_placeholder(), id="input")
 
     async def on_mount(self) -> None:
@@ -319,6 +383,32 @@ class LibreClawApp(App[None]):
             self._update_palette(event.value)
             return
         self._update_slash_suggestions(event.value)
+
+    def on_key(self, event: events.Key) -> None:
+        if self._pending_permission is None:
+            return
+
+        resolution = PERMISSION_KEYS.get(event.key) or PERMISSION_KEYS.get(event.character or "")
+        if resolution is None:
+            return
+
+        event.stop()
+        self._resolve_pending_permission(resolution)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id
+        mapping: dict[str | None, PermissionResolution] = {
+            "permission-allow-once": "allow_once",
+            "permission-deny": "deny",
+            "permission-always-tool": "always_allow_tool",
+            "permission-always-call": "always_allow_call",
+        }
+        resolution = mapping.get(button_id)
+        if resolution is None:
+            return
+
+        event.stop()
+        self._resolve_pending_permission(resolution)
 
     async def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         event.stop()
@@ -426,6 +516,10 @@ class LibreClawApp(App[None]):
             return
         self._cancel_active_generation()
 
+    def action_quit_app(self) -> None:
+        self._cancel_active_generation(quiet=True)
+        self.exit()
+
     def action_toggle_sidebar(self) -> None:
         self.sidebar_visible = not self.sidebar_visible
         self._sync_sidebar_visibility()
@@ -469,10 +563,7 @@ class LibreClawApp(App[None]):
 
                 if isinstance(event, AgentPermissionRequest):
                     self._pending_permission = event
-                    self._append_permission(
-                        f"Approve {event.call.name} {self._format_arguments(event.call.arguments)}? "
-                        "[y]es [n]o [a]lways tool [!] this exact call"
-                    )
+                    self._show_permission_prompt(event)
                     continue
 
                 if isinstance(event, AgentToolResult):
@@ -495,23 +586,22 @@ class LibreClawApp(App[None]):
             self._append_system("Generation cancelled.")
         finally:
             self._pending_permission = None
+            self._hide_permission_prompt()
             self._active_task = None
             self.query_one("#input", Input).focus()
 
-    def _cancel_active_generation(self) -> None:
+    def _cancel_active_generation(self, quiet: bool = False) -> None:
         if self._pending_permission is not None and not self._pending_permission.future.done():
             self._pending_permission.future.set_result("deny")
             self._pending_permission = None
+            self._hide_permission_prompt()
         if self._active_task is None or self._active_task.done():
-            self._append_system("No active generation to cancel.")
+            if not quiet:
+                self._append_system("No active generation to cancel.")
             return
         self._active_task.cancel()
 
     def _handle_permission_input(self, text: str) -> None:
-        request = self._pending_permission
-        if request is None:
-            return
-
         normalized = text.strip().lower()
         mapping: dict[str, PermissionResolution] = {
             "y": "allow_once",
@@ -526,10 +616,77 @@ class LibreClawApp(App[None]):
             self._append_permission("Please answer y, n, a, or !")
             return
 
+        self._resolve_pending_permission(resolution)
+
+    def _show_permission_prompt(self, request: AgentPermissionRequest) -> None:
+        panel = self.query_one("#permission-panel", Vertical)
+        title = self.query_one("#permission-title", Static)
+        warning = self.query_one("#permission-warning", Static)
+        allow_once = self.query_one("#permission-allow-once", Button)
+        always_tool = self.query_one("#permission-always-tool", Button)
+        always_call = self.query_one("#permission-always-call", Button)
+
+        danger = self._dangerous_permission_warning(request.call)
+        title.update(
+            f"{request.call.name} wants permission\n"
+            f"{self._format_arguments(request.call.arguments)}"
+        )
+        warning.update(
+            f"Warning: {danger}\nDangerous commands require one-time approval."
+            if danger is not None
+            else "Choose once, always for this tool, or always for this exact command."
+        )
+        always_tool.disabled = danger is not None
+        always_call.disabled = danger is not None
+        panel.remove_class("hidden")
+        self.query_one("#input", Input).placeholder = self._input_placeholder()
+        allow_once.focus()
+
+    def _hide_permission_prompt(self) -> None:
+        panel = self.query_one("#permission-panel", Vertical)
+        panel.add_class("hidden")
+        self.query_one("#permission-title", Static).update("")
+        self.query_one("#permission-warning", Static).update("")
+        for button_id in ("#permission-always-tool", "#permission-always-call"):
+            self.query_one(button_id, Button).disabled = False
+        self.query_one("#input", Input).placeholder = self._input_placeholder()
+
+    def _resolve_pending_permission(self, resolution: PermissionResolution) -> None:
+        request = self._pending_permission
+        if request is None:
+            return
+
+        danger = self._dangerous_permission_warning(request.call)
+        if danger is not None and resolution in {"always_allow_tool", "always_allow_call"}:
+            self._append_permission("Dangerous commands can only be approved once or denied.")
+            return
+
         if not request.future.done():
             request.future.set_result(resolution)
         self._pending_permission = None
-        self._append_system(f"Permission response recorded for {request.call.name}: {normalized}")
+        self._hide_permission_prompt()
+        self._append_system(f"Permission response recorded for {request.call.name}: {_permission_label(resolution)}")
+
+    def _dangerous_permission_warning(self, call: ToolCall) -> str | None:
+        if call.name != "bash":
+            return None
+
+        command = call.arguments.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return None
+
+        policy = SandboxPolicy(
+            working_directory=self.config.general.working_directory,
+            restrict_to_working_dir=self.config.sandbox.restrict_to_working_dir,
+            command_timeout=self.config.sandbox.command_timeout,
+            allow_sudo=self.config.sandbox.allow_sudo,
+            blocked_patterns=self.config.sandbox.blocked_patterns,
+        )
+        try:
+            policy.validate_command(command)
+        except SandboxViolation as exc:
+            return str(exc)
+        return None
 
     def _clear_transcript(self) -> None:
         if self._active_task is not None and not self._active_task.done():
@@ -861,7 +1018,7 @@ class LibreClawApp(App[None]):
 
     def _help_text(self) -> str:
         command_lines = "\n".join(f"{command.usage} - {command.description}" for command in SLASH_COMMANDS)
-        return f"{command_lines}\nPermission choices: y, n, a, !"
+        return f"{command_lines}\nCtrl+C exits. Esc or /cancel interrupts. Permission prompts support buttons plus y, n, a, ! shortcuts."
 
     def _update_slash_suggestions(self, text: str) -> None:
         self._slash_suggestions = self._slash_suggestion_matches(text)
@@ -933,8 +1090,8 @@ class LibreClawApp(App[None]):
         if self.palette_open:
             return "Command palette query..."
         if self._pending_permission is not None:
-            return "Permission: y, n, a, or !"
-        return "Type a message... (/help, Ctrl+B files, Ctrl+P palette)"
+            return "Permission prompt active: click a choice or press y/n/a/!"
+        return "Type a message... (/help, Ctrl+B files, Ctrl+P palette, Ctrl+C exit)"
 
 
 def _replace_general(config: LibreClawConfig, **changes: str) -> LibreClawConfig:
@@ -976,3 +1133,13 @@ def _effective_model(config: LibreClawConfig) -> str:
 
 def _usage_requires_argument(usage: str) -> bool:
     return " " in usage
+
+
+def _permission_label(resolution: PermissionResolution) -> str:
+    labels = {
+        "allow_once": "approved once",
+        "deny": "denied",
+        "always_allow_tool": "always allowed for this tool",
+        "always_allow_call": "always allowed for this exact command",
+    }
+    return labels[resolution]
