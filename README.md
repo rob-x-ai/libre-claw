@@ -10,6 +10,8 @@ you can launch the TUI, choose Anthropic, OpenAI, OpenRouter, Ollama, or Codex, 
 with the agent, approve tool calls, browse files, save sessions, use memory,
 and run the Telegram daemon.
 
+![Libre Claw terminal UI](docs/assets/libre-claw-terminal-screenshot.png)
+
 ## What You Get
 
 - Textual terminal UI with streaming Markdown chat.
