@@ -720,6 +720,8 @@ Click the header to reveal the latest release notes from `RELEASE.md`.
 
 ## Telegram
 
+<img src="docs/assets/libre-claw-telegram-screenshot.jpeg" alt="Libre Claw Telegram bot screenshot" width="360">
+
 The simple setup flow stores the bot token securely through keyring or Libre
 Claw's encrypted fallback file, enables Telegram, allowlists your Telegram user
 ID, and defaults Telegram runs to daemon mode:
