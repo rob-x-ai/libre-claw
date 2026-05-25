@@ -11,12 +11,13 @@ from libre_claw.config import LibreClawConfig
 from libre_claw.daemon import DaemonClient, daemon_base_url
 from libre_claw.telegram.auth import TelegramAuth
 from libre_claw.telegram.bridge import TelegramBridge
-from libre_claw.telegram.handlers import TelegramHandlers
+from libre_claw.telegram.handlers import TelegramHandlers, telegram_command_specs
 
 try:
+    from telegram import BotCommand
     from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 except ImportError:  # pragma: no cover - dependency availability is tested by imports after install.
-    Application = CallbackQueryHandler = CommandHandler = MessageHandler = filters = None  # type: ignore[assignment]
+    BotCommand = Application = CallbackQueryHandler = CommandHandler = MessageHandler = filters = None  # type: ignore[assignment]
 
 
 class TelegramBot:
@@ -58,6 +59,10 @@ class TelegramBot:
             raise RuntimeError("Telegram polling is unavailable for this application.")
 
         await application.initialize()
+        if BotCommand is not None:
+            await application.bot.set_my_commands(
+                [BotCommand(command, description) for command, description in telegram_command_specs()]
+            )
         app_started = False
         polling_started = False
         try:

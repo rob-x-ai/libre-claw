@@ -763,6 +763,10 @@ Useful bot slash commands:
 /cancel - Cancel the active generation
 ```
 
+Libre Claw registers these commands with Telegram on startup, so supported
+commands should appear in the Telegram client when you type `/`. Sending `/`
+by itself also prints the command list.
+
 Telegram authorization uses the numeric user ID, not the `@username`. If a user
 messages the bot while blocked, Libre Claw replies with the numeric ID and the
 exact `libre-claw telegram allow ...` command to run.

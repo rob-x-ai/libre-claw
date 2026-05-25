@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import asyncio
-import html
 import time
+from collections.abc import Sequence
+from typing import Any
 
 from libre_claw.telegram.auth import TelegramAuth
 from libre_claw.telegram.bridge import (
@@ -16,6 +17,8 @@ from libre_claw.telegram.bridge import (
     TelegramText,
     TelegramToolNotice,
 )
+
+TELEGRAM_HARD_MESSAGE_LIMIT = 4096
 
 try:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -37,7 +40,7 @@ class TelegramHandlers:
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
-        await update.effective_message.reply_text(_telegram_help_text())
+        await _reply_text_chunks(update.effective_message, _telegram_help_text(), self.bridge.config.telegram.max_message_length)
 
     async def new(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
@@ -91,12 +94,15 @@ class TelegramHandlers:
             return
         text = " ".join(context.args or [])
         response = await self.bridge.schedule_text(update.effective_chat.id, text)
-        await update.effective_message.reply_text(_truncate(response, self.bridge.config.telegram.max_message_length))
+        await _reply_text_chunks(update.effective_message, response, self.bridge.config.telegram.max_message_length)
 
     async def message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
         text = update.effective_message.text or ""
+        if text.strip() == "/":
+            await _reply_text_chunks(update.effective_message, _telegram_help_text(), self.bridge.config.telegram.max_message_length)
+            return
         chat_id = update.effective_chat.id
         placeholder = await update.effective_message.reply_text("Libre Claw is thinking...")
         accumulated = ""
@@ -104,39 +110,44 @@ class TelegramHandlers:
 
         async def runner() -> None:
             nonlocal accumulated, last_update
-            async for event in self.bridge.stream_message(chat_id, text):
-                if isinstance(event, TelegramText):
-                    accumulated += event.text
-                    should_update = len(accumulated) % 100 == 0 or time.monotonic() - last_update >= self.bridge.config.telegram.stream_update_interval
-                    if should_update:
-                        await placeholder.edit_text(_truncate(accumulated, self.bridge.config.telegram.max_message_length))
-                        last_update = time.monotonic()
-                    continue
-                if isinstance(event, TelegramToolNotice):
-                    await update.effective_message.reply_text(event.text)
-                    continue
-                if isinstance(event, TelegramPermissionPrompt):
-                    await update.effective_message.reply_text(
-                        event.text,
-                        reply_markup=InlineKeyboardMarkup(
-                            [
+            try:
+                async for event in self.bridge.stream_message(chat_id, text):
+                    if isinstance(event, TelegramText):
+                        accumulated += event.text
+                        should_update = len(accumulated) % 100 == 0 or time.monotonic() - last_update >= self.bridge.config.telegram.stream_update_interval
+                        if should_update:
+                            await placeholder.edit_text(_truncate(accumulated, self.bridge.config.telegram.max_message_length))
+                            last_update = time.monotonic()
+                        continue
+                    if isinstance(event, TelegramToolNotice):
+                        await _reply_text_chunks(update.effective_message, event.text, self.bridge.config.telegram.max_message_length)
+                        continue
+                    if isinstance(event, TelegramPermissionPrompt):
+                        await _reply_text_chunks(
+                            update.effective_message,
+                            event.text,
+                            self.bridge.config.telegram.max_message_length,
+                            reply_markup=InlineKeyboardMarkup(
                                 [
-                                    InlineKeyboardButton("Approve", callback_data=f"perm:yes:{event.prompt_id}"),
-                                    InlineKeyboardButton("Deny", callback_data=f"perm:no:{event.prompt_id}"),
+                                    [
+                                        InlineKeyboardButton("Approve", callback_data=f"perm:yes:{event.prompt_id}"),
+                                        InlineKeyboardButton("Deny", callback_data=f"perm:no:{event.prompt_id}"),
+                                    ]
                                 ]
-                            ]
-                        ),
-                    )
-                    continue
-                if isinstance(event, TelegramDone):
-                    if accumulated:
-                        await placeholder.edit_text(_truncate(accumulated, self.bridge.config.telegram.max_message_length))
-                    else:
-                        await placeholder.edit_text("Done.")
-                    continue
-                if isinstance(event, TelegramError):
-                    await placeholder.edit_text(_truncate(event.text, self.bridge.config.telegram.max_message_length))
-                    continue
+                            ),
+                        )
+                        continue
+                    if isinstance(event, TelegramDone):
+                        if accumulated:
+                            await placeholder.edit_text(_truncate(accumulated, self.bridge.config.telegram.max_message_length))
+                        else:
+                            await placeholder.edit_text("Done.")
+                        continue
+                    if isinstance(event, TelegramError):
+                        await placeholder.edit_text(_truncate(event.text, self.bridge.config.telegram.max_message_length))
+                        continue
+            except Exception as exc:
+                await placeholder.edit_text(_truncate(f"Telegram bridge error: {exc}", self.bridge.config.telegram.max_message_length))
 
         task = asyncio.create_task(runner())
         self.bridge.state_for(chat_id).task = task
@@ -146,7 +157,11 @@ class TelegramHandlers:
             return
         text = update.effective_message.text or "that command"
         command = text.split(maxsplit=1)[0]
-        await update.effective_message.reply_text(f"Unknown Telegram command: {command}\n\n{_telegram_help_text()}")
+        await _reply_text_chunks(
+            update.effective_message,
+            f"Unknown Telegram command: {command}\n\n{_telegram_help_text()}",
+            self.bridge.config.telegram.max_message_length,
+        )
 
     async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
@@ -177,9 +192,42 @@ class TelegramHandlers:
 
 
 def _truncate(text: str, limit: int) -> str:
+    limit = _telegram_message_limit(limit)
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 20)] + "\n...[truncated]"
+
+
+def _telegram_message_limit(configured_limit: int) -> int:
+    return max(1, min(configured_limit, TELEGRAM_HARD_MESSAGE_LIMIT))
+
+
+async def _reply_text_chunks(
+    message: Any,
+    text: str,
+    configured_limit: int,
+    *,
+    reply_markup: Any | None = None,
+) -> None:
+    chunks = _message_chunks(text, configured_limit)
+    for index, chunk in enumerate(chunks):
+        markup = reply_markup if index == len(chunks) - 1 else None
+        await message.reply_text(chunk, reply_markup=markup)
+
+
+def _message_chunks(text: str, configured_limit: int) -> list[str]:
+    limit = _telegram_message_limit(configured_limit)
+    remaining = text or " "
+    chunks: list[str] = []
+    while len(remaining) > limit:
+        chunk = remaining[:limit]
+        cut = max(chunk.rfind("\n"), chunk.rfind(" "))
+        if cut < max(1, limit // 2):
+            cut = limit
+        chunks.append(remaining[:cut].rstrip() or remaining[:limit])
+        remaining = remaining[cut:].lstrip()
+    chunks.append(remaining or " ")
+    return chunks
 
 
 def _unauthorized_text(user_id: int | None, username: str | None) -> str:
@@ -216,6 +264,20 @@ def _telegram_help_text() -> str:
             "",
             "Send a normal message to start an agent run.",
         ]
+    )
+
+
+def telegram_command_specs() -> Sequence[tuple[str, str]]:
+    return (
+        ("start", "Check that Libre Claw is ready"),
+        ("help", "Show Telegram slash commands"),
+        ("new", "Start a fresh chat session"),
+        ("model", "Switch the current model"),
+        ("provider", "Switch provider"),
+        ("cost", "Show token and cost usage"),
+        ("compact", "Compact the current context"),
+        ("schedule", "Manage recurring runs"),
+        ("cancel", "Cancel active generation"),
     )
 
 

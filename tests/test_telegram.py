@@ -19,7 +19,7 @@ from libre_claw.telegram.bridge import (
     TelegramText,
     TelegramToolNotice,
 )
-from libre_claw.telegram.handlers import _telegram_help_text, _unauthorized_text
+from libre_claw.telegram.handlers import _message_chunks, _telegram_help_text, _unauthorized_text, telegram_command_specs
 
 
 class FakeProvider(LLMProvider):
@@ -125,6 +125,22 @@ def test_telegram_help_text_lists_slash_commands() -> None:
     assert "Send a normal message" in text
 
 
+def test_telegram_message_chunks_respect_config_and_hard_limits() -> None:
+    chunks = _message_chunks("a" * 4500, configured_limit=5000)
+
+    assert len(chunks) == 2
+    assert all(0 < len(chunk) <= 4096 for chunk in chunks)
+    assert "".join(chunks) == "a" * 4500
+
+
+def test_telegram_command_specs_drive_bot_menu() -> None:
+    commands = dict(telegram_command_specs())
+
+    assert commands["help"] == "Show Telegram slash commands"
+    assert "start" in commands
+    assert "schedule" in commands
+
+
 def test_telegram_bot_reads_secure_stored_token(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -161,9 +177,15 @@ async def test_telegram_bot_run_uses_polling_lifecycle(monkeypatch, tmp_path: Pa
         async def stop(self) -> None:
             calls.append("stop_polling")
 
+    class FakeBot:
+        async def set_my_commands(self, commands: list[object]) -> None:
+            assert len(commands) >= 8
+            calls.append("set_my_commands")
+
     class FakeApplication:
         def __init__(self) -> None:
             self.updater = FakeUpdater()
+            self.bot = FakeBot()
 
         def add_handler(self, handler: object) -> None:
             del handler
