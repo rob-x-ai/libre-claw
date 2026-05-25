@@ -36,9 +36,12 @@ First shippable Libre Claw release from Kroonen AI Inc.
 - ReAct-style async agent loop with tool calling, concurrent tool execution,
   interrupt handling, context compaction, and configurable system prompt from
   TOML.
-- Built-in `read_file`, `write_file`, `edit_file`, `list_directory`, and
-  `bash` tools, with bounded reads/listing, atomic writes/edits, occurrence
-  targeting, diffs, and bounded shell output.
+- Built-in `read_file`, `write_file`, `edit_file`, `list_directory`, `glob`,
+  `search_files`, `git_status`, `git_commit`, `think`, `browser_navigate`,
+  `browser_read`, `browser_screenshot`, and `bash` tools, with bounded
+  reads/listing/search, atomic writes/edits, occurrence targeting, diffs,
+  git inspection/commit support, browser scaffolding with graceful dependency
+  errors, scratchpad thinking, and bounded shell output.
 - Interactive TUI permission panel with approve, deny, always allow tool, and
   always allow exact command options. Dangerous sandbox-blocked commands show a
   warning and require one-time approval or denial.
@@ -58,8 +61,11 @@ First shippable Libre Claw release from Kroonen AI Inc.
 
 - Cost display depends on provider-reported usage. OpenRouter returns cost when
   usage accounting is available; other providers may only return token counts.
-- Search, browser, git PR helpers, and richer diff UX are not yet at full
-  parity with larger agent harnesses.
+- Browser tools require the optional `browser` extra plus Chromium from
+  Playwright; without that dependency, Libre Claw returns a friendly tool error
+  and keeps running.
+- Git PR helpers and richer diff UX are not yet at full parity with larger
+  agent harnesses.
 - The Codex provider delegates to `codex exec`; richer native Codex event
   rendering and Libre Claw tool unification are still future polish.
 - GitLab `main` may remain protected; mirrored updates currently target the

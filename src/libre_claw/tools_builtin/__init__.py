@@ -10,8 +10,12 @@ from libre_claw.core.memory import MemoryStore
 from libre_claw.core.tools import ToolContext, ToolRegistry, registered_tool_types
 
 # Import modules for their @register_tool side effects.
+from libre_claw.tools_builtin import browser as _browser  # noqa: F401
 from libre_claw.tools_builtin import filesystem as _filesystem  # noqa: F401
+from libre_claw.tools_builtin import git as _git  # noqa: F401
+from libre_claw.tools_builtin import search as _search  # noqa: F401
 from libre_claw.tools_builtin import shell as _shell  # noqa: F401
+from libre_claw.tools_builtin import think as _think  # noqa: F401
 
 
 def create_builtin_registry(config: LibreClawConfig, memory_store: MemoryStore | None = None) -> ToolRegistry:

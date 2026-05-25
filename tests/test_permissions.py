@@ -59,5 +59,14 @@ def test_read_tools_auto_allowed_by_config() -> None:
     context = ToolContext(working_directory=Path.cwd())
     manager = PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=True))
 
-    assert manager.check(ToolCall(id="1", name="read_file"), AskTool(context)) == "allow"
-    assert manager.check(ToolCall(id="2", name="list_directory"), AskTool(context)) == "allow"
+    for name in (
+        "read_file",
+        "list_directory",
+        "glob",
+        "search_files",
+        "git_status",
+        "think",
+        "browser_read",
+        "browser_screenshot",
+    ):
+        assert manager.check(ToolCall(id=name, name=name), AskTool(context)) == "allow"

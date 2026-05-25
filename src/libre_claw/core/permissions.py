@@ -27,7 +27,16 @@ class PermissionManager:
         if call.name in self.always_allowed_tools or call.fingerprint() in self.always_allowed_calls:
             return "allow"
 
-        if self.config.auto_approve_read and call.name in {"read_file", "list_directory"}:
+        if self.config.auto_approve_read and call.name in {
+            "read_file",
+            "list_directory",
+            "glob",
+            "search_files",
+            "git_status",
+            "think",
+            "browser_read",
+            "browser_screenshot",
+        }:
             return "allow"
 
         if tool.permission_level in {"allow", "ask", "deny"}:

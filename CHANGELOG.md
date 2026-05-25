@@ -18,7 +18,9 @@ Initial shippable Libre Claw release.
   provider-reported request cost, cached tokens, and reasoning tokens.
 - Native Ollama tool calling and XML tool-call fallback for models without native support.
 - ReAct-style async agent loop with concurrent tool execution.
-- Built-in `read_file`, `write_file`, `edit_file`, `list_directory`, and `bash` tools.
+- Built-in `read_file`, `write_file`, `edit_file`, `list_directory`, `glob`,
+  `search_files`, `git_status`, `git_commit`, `think`, `browser_navigate`,
+  `browser_read`, `browser_screenshot`, and `bash` tools.
 - Working-directory sandboxing, blocked shell command patterns, and approval gates for side-effecting tools.
 - File explorer parent navigation that updates the agent working directory, plus visible hide/show controls and a left-side restore rail.
 - TUI polish including thin `#0070F3` scrollbars, blue user labels, purple `#8B5CF6` Libre Claw assistant labels, and cleaner panel borders.

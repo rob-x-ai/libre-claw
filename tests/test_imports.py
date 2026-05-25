@@ -31,8 +31,12 @@ def test_phase_one_modules_import() -> None:
         "libre_claw.telegram.bot",
         "libre_claw.telegram.bridge",
         "libre_claw.telegram.handlers",
+        "libre_claw.tools_builtin.browser",
         "libre_claw.tools_builtin.filesystem",
+        "libre_claw.tools_builtin.git",
+        "libre_claw.tools_builtin.search",
         "libre_claw.tools_builtin.shell",
+        "libre_claw.tools_builtin.think",
         "libre_claw.tui.app",
     ):
         assert importlib.import_module(module_name)

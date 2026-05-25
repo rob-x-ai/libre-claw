@@ -17,7 +17,8 @@ and run the Telegram daemon.
 - Ollama support for local daemon use, Ollama Cloud, and OpenAI-compatible
   Ollama endpoints.
 - Built-in tools: `read_file`, `write_file`, `edit_file`, `list_directory`,
-  and `bash`.
+  `glob`, `search_files`, `git_status`, `git_commit`, `think`,
+  `browser_navigate`, `browser_read`, `browser_screenshot`, and `bash`.
 - `/goal` supervised mode that keeps the agent working for up to a bounded
   number of turns until a separate judge model marks the objective complete.
 - Interactive permission prompts for write/edit/shell actions.
@@ -33,6 +34,7 @@ and run the Telegram daemon.
 - A provider API key if you use a cloud provider.
 - Optional: Ollama installed locally if you want local daemon mode.
 - Optional: a Telegram bot token if you use the Telegram daemon.
+- Optional: Playwright installed if you want headless browser tools.
 
 ## Install From This Repo
 
@@ -46,6 +48,13 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
+```
+
+For browser tools:
+
+```bash
+python -m pip install -e ".[browser]"
+python -m playwright install chromium
 ```
 
 Run the app:
@@ -334,8 +343,8 @@ session total.
 
 ## Tool Permissions
 
-Read/list tools run without prompting. File writes, file edits, and shell
-commands ask first.
+Read/list/search/status/think tools run without prompting. File writes, file
+edits, git commits, browser navigation, and shell commands ask first.
 
 Permission prompts render as an interactive panel with:
 

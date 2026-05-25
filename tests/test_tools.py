@@ -5,14 +5,22 @@ from __future__ import annotations
 
 import asyncio
 import shlex
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from libre_claw.core.tools import BaseTool, ToolCall, ToolContext, ToolRegistry, ToolRegistryError, ToolResult
+from libre_claw.tools_builtin import browser as browser_tools
+from libre_claw.tools_builtin import create_builtin_registry
+from libre_claw.tools_builtin.browser import BrowserNavigateTool, BrowserReadTool, BrowserScreenshotTool
 from libre_claw.tools_builtin.filesystem import EditFileTool, ListDirectoryTool, ReadFileTool, WriteFileTool
+from libre_claw.tools_builtin.git import GitCommitTool, GitStatusTool
+from libre_claw.tools_builtin.search import GlobTool, SearchFilesTool
 from libre_claw.tools_builtin.shell import BashTool
+from libre_claw.tools_builtin.think import ThinkTool
 
 
 class ExampleTool(BaseTool):
@@ -59,6 +67,29 @@ async def test_tool_registry_schema_duplicate_missing_and_execute(tmp_path: Path
         registry.register(ExampleTool(context(tmp_path)))
     with pytest.raises(ToolRegistryError):
         registry.get("missing")
+
+
+def test_builtin_registry_exposes_production_toolset(tmp_path: Path) -> None:
+    from libre_claw.config import load_config
+
+    registry = create_builtin_registry(load_config(working_directory=tmp_path))
+    names = {schema["name"] for schema in registry.schemas()}
+
+    assert {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_directory",
+        "glob",
+        "search_files",
+        "git_status",
+        "git_commit",
+        "think",
+        "browser_navigate",
+        "browser_read",
+        "browser_screenshot",
+        "bash",
+    }.issubset(names)
 
 
 async def test_read_file_with_offset_and_limit(tmp_path: Path) -> None:
@@ -110,6 +141,48 @@ async def test_list_directory_can_limit_entries_and_skip_hidden(tmp_path: Path) 
     assert ".hidden" not in hidden.content
     assert limited.metadata["truncated"] is True
     assert "... truncated after 1 entries" in limited.content
+
+
+async def test_glob_finds_paths_and_respects_hidden_and_limit(tmp_path: Path) -> None:
+    (tmp_path / "src" / "nested").mkdir(parents=True)
+    (tmp_path / "src" / "app.py").write_text("print('hi')", encoding="utf-8")
+    (tmp_path / "src" / "nested" / "test_app.py").write_text("x", encoding="utf-8")
+    (tmp_path / ".hidden.py").write_text("x", encoding="utf-8")
+
+    visible = await GlobTool(context(tmp_path)).execute(pattern="**/*.py")
+    limited = await GlobTool(context(tmp_path)).execute(pattern="*.py", max_results=1, include_hidden=True)
+
+    assert "src/app.py" in visible.content
+    assert "src/nested/test_app.py" in visible.content
+    assert ".hidden.py" not in visible.content
+    assert limited.metadata["truncated"] is True
+
+
+async def test_search_files_uses_python_fallback_when_rg_is_unavailable(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("Alpha\nbeta\nALPHA again\n", encoding="utf-8")
+
+    result = await SearchFilesTool(context(tmp_path)).execute(
+        query="alpha",
+        path="src",
+        glob="*.py",
+        case_sensitive=False,
+        max_matches=1,
+    )
+
+    assert result.error is None
+    assert "app.py:1:Alpha" in result.content
+    assert result.metadata["engine"] == "python"
+    assert result.metadata["truncated"] is True
+
+
+async def test_search_files_reports_validation_errors(tmp_path: Path) -> None:
+    tool = SearchFilesTool(context(tmp_path))
+
+    assert (await tool.execute(query="")).error == "query must not be empty"
+    assert (await tool.execute(query="x", context=99)).error == "context must be <= 5"
+    assert (await tool.execute(query="x", max_matches=0)).error == "max_matches must be >= 1"
 
 
 async def test_write_file(tmp_path: Path) -> None:
@@ -261,6 +334,73 @@ async def test_bash_blocks_sudo_remote_install_and_root_rm_variants(tmp_path: Pa
     assert sudo.error == "Command blocked by sandbox: sudo is disabled"
     assert remote_install.error == "Command blocked by sandbox: remote install pipe is disabled"
     assert root_rm.error == "Command blocked by sandbox: recursive removal of root is disabled"
+
+
+async def test_git_status_and_commit_tools(tmp_path: Path) -> None:
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(
+        ["git", "config", "user.name", "Libre Claw Test"],
+        cwd=tmp_path,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@kroonen.ai"],
+        cwd=tmp_path,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    (tmp_path / "README.md").write_text("hello\n", encoding="utf-8")
+
+    status = await GitStatusTool(context(tmp_path)).execute(show_diff=True, log_count=0)
+    commit = await GitCommitTool(context(tmp_path)).execute(message="Initial commit", paths=["README.md"])
+    clean = await GitStatusTool(context(tmp_path)).execute(show_diff=False, log_count=1)
+
+    assert status.error is None
+    assert "README.md" in status.content
+    assert commit.error is None
+    assert commit.metadata["pushed"] is False
+    assert commit.metadata["commit"]
+    assert "Initial commit" in clean.content
+
+
+async def test_git_commit_requires_paths_or_all(tmp_path: Path) -> None:
+    tool = GitCommitTool(context(tmp_path))
+    result = await tool.execute(message="nope")
+    invalid_paths = await tool.execute(message="nope", paths="README.md")  # type: ignore[arg-type]
+
+    assert result.error == "provide paths or set all=true"
+    assert invalid_paths.error == "paths must be a list of strings"
+
+
+async def test_think_tool_has_no_side_effects(tmp_path: Path) -> None:
+    result = await ThinkTool(context(tmp_path)).execute(thought="Plan the next edit.")
+
+    assert result.content == "Thought noted."
+    assert result.metadata["side_effects"] is False
+
+
+async def test_browser_tools_gracefully_handle_missing_session_or_dependency(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(browser_tools._BROWSER_STATE, "page", None)
+
+    def missing_playwright(name: str):
+        raise ModuleNotFoundError(name)
+
+    monkeypatch.setattr(browser_tools.importlib, "import_module", missing_playwright)
+
+    navigate = await BrowserNavigateTool(context(tmp_path)).execute(url="https://example.com")
+    read = await BrowserReadTool(context(tmp_path)).execute()
+    screenshot = await BrowserScreenshotTool(context(tmp_path)).execute()
+
+    assert navigate.error is not None
+    assert "Playwright is not installed" in navigate.error or "Executable doesn't exist" in navigate.error
+    assert read.error == "No browser page is open. Use browser_navigate first."
+    assert screenshot.error == "No browser page is open. Use browser_navigate first."
 
 
 async def test_file_tools_restrict_paths_to_working_directory(tmp_path: Path) -> None:

@@ -36,7 +36,8 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.goal.judge_temperature == 0.0
     assert config.goal.judge_max_tokens == 1024
     assert "Kroonen AI Inc. (https://kroonen.ai)" in config.agent.system_prompt
-    assert "Current toolset: read_file, write_file, edit_file, list_directory, and bash." in config.agent.system_prompt
+    assert "search_files" in config.agent.system_prompt
+    assert "browser_screenshot" in config.agent.system_prompt
     assert config.agent.system_prompt_extra == ""
     assert "curl | bash" in config.sandbox.blocked_patterns
     assert config.providers["openrouter"]["api_key_env"] == "OPENROUTER_API_KEY"
