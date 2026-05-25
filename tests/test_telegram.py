@@ -19,7 +19,7 @@ from libre_claw.telegram.bridge import (
     TelegramText,
     TelegramToolNotice,
 )
-from libre_claw.telegram.handlers import _unauthorized_text
+from libre_claw.telegram.handlers import _telegram_help_text, _unauthorized_text
 
 
 class FakeProvider(LLMProvider):
@@ -108,6 +108,16 @@ def test_telegram_unauthorized_text_shows_numeric_user_id() -> None:
     assert "@rob_x_ai" in text
     assert "8720905071" in text
     assert "libre-claw telegram allow 8720905071" in text
+
+
+def test_telegram_help_text_lists_slash_commands() -> None:
+    text = _telegram_help_text()
+
+    assert "/help" in text
+    assert "/start" in text
+    assert "/model <name>" in text
+    assert "/provider anthropic|openai|openrouter|ollama|codex" in text
+    assert "Send a normal message" in text
 
 
 def test_telegram_bot_reads_secure_stored_token(monkeypatch, tmp_path: Path) -> None:

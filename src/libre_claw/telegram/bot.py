@@ -41,6 +41,7 @@ class TelegramBot:
         handlers = TelegramHandlers(self.bridge, self.auth)
         application = Application.builder().token(token).build()
         application.add_handler(CommandHandler("start", handlers.start))
+        application.add_handler(CommandHandler("help", handlers.help))
         application.add_handler(CommandHandler("new", handlers.new))
         application.add_handler(CommandHandler("cost", handlers.cost))
         application.add_handler(CommandHandler("compact", handlers.compact))
@@ -49,6 +50,7 @@ class TelegramBot:
         application.add_handler(CommandHandler("provider", handlers.provider))
         application.add_handler(CommandHandler("schedule", handlers.schedule))
         application.add_handler(CallbackQueryHandler(handlers.callback))
+        application.add_handler(MessageHandler(filters.COMMAND, handlers.unknown_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.message))
 
         updater = application.updater

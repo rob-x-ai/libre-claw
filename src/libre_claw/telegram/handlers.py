@@ -34,6 +34,11 @@ class TelegramHandlers:
             return
         await update.effective_message.reply_text("Libre Claw is ready.")
 
+    async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        await update.effective_message.reply_text(_telegram_help_text())
+
     async def new(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
@@ -136,6 +141,13 @@ class TelegramHandlers:
         task = asyncio.create_task(runner())
         self.bridge.state_for(chat_id).task = task
 
+    async def unknown_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        text = update.effective_message.text or "that command"
+        command = text.split(maxsplit=1)[0]
+        await update.effective_message.reply_text(f"Unknown Telegram command: {command}\n\n{_telegram_help_text()}")
+
     async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
         if query is None:
@@ -186,6 +198,25 @@ def _unauthorized_text(user_id: int | None, username: str | None) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _telegram_help_text() -> str:
+    return "\n".join(
+        [
+            "Libre Claw Telegram commands:",
+            "/start - Check that the bot is ready",
+            "/help - Show this command list",
+            "/new - Start a fresh chat session",
+            "/model <name> - Switch the current model",
+            "/provider anthropic|openai|openrouter|ollama|codex - Switch provider",
+            "/cost - Show token and cost usage",
+            "/compact - Compact the current context",
+            "/schedule examples|list|add ... - Manage recurring runs",
+            "/cancel - Cancel the active generation",
+            "",
+            "Send a normal message to start an agent run.",
+        ]
+    )
 
 
 def _replace_general(config, **changes):

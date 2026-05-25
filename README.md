@@ -749,6 +749,20 @@ libre-claw telegram run   # bot only
 libre-claw telegram up    # daemon + bot together
 ```
 
+Useful bot slash commands:
+
+```text
+/start - Check that the bot is ready
+/help - Show Telegram slash commands
+/new - Start a fresh chat session
+/model <name> - Switch the current model
+/provider anthropic|openai|openrouter|ollama|codex - Switch provider
+/cost - Show token and cost usage
+/compact - Compact the current context
+/schedule examples|list|add ... - Manage recurring runs
+/cancel - Cancel the active generation
+```
+
 Telegram authorization uses the numeric user ID, not the `@username`. If a user
 messages the bot while blocked, Libre Claw replies with the numeric ID and the
 exact `libre-claw telegram allow ...` command to run.
