@@ -455,6 +455,34 @@ async def test_approvals_command_lists_blocked_runs(monkeypatch, tmp_path: Path)
     assert any("toolu_1" in entry.content for entry in app.transcript)
 
 
+async def test_usage_command_reports_openrouter_run_rollups(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+    app.run_store = RunStore(tmp_path / "runs")
+    run = await app.run_store.create_run(
+        "usage run",
+        kind="chat",
+        provider="openrouter",
+        model="qwen/qwen3.7-max",
+    )
+    await app.run_store.append_event(run.run_id, "run_started", {"surface": "tui:chat"})
+    await app.run_store.append_event(run.run_id, "usage", {"input_tokens": 7, "output_tokens": 3, "cost": 0.0001})
+
+    async with app.run_test():
+        await app._handle_command("/usage openrouter")
+        await app._handle_command("/usage openrouter attribution")
+        await app._handle_command("/usage openrouter presets")
+
+    system_text = "\n".join(entry.content for entry in app.transcript if entry.role == "system")
+    assert "OpenRouter usage" in system_text
+    assert "qwen/qwen3.7-max" in system_text
+    assert "tui:chat" in system_text
+    assert "https://openrouter.ai/apps?url=https://kroonen.ai" in system_text
+    assert "/model openrouter:qwen/qwen3.7-max --global" in system_text
+
+
 async def test_transcript_from_run_events_reconstructs_tool_entries(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "runs")
     run = await store.create_run("tools", kind="chat", provider="openai", model="gpt-5.5")

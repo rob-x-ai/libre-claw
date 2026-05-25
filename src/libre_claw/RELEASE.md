@@ -60,6 +60,10 @@ First shippable Libre Claw release from Kroonen AI Inc.
   then used through `/provider codex` or `/model codex:gpt-5.5`.
 - OpenRouter support with fixed Libre Claw app attribution headers:
   `https://kroonen.ai`, `Libre Claw`, and the `cli-agent` category.
+- OpenRouter growth analytics through `/usage openrouter`, attribution
+  verification, an analytics link to
+  `https://openrouter.ai/apps?url=https://kroonen.ai`, and recommended
+  OpenRouter model presets.
 - Cumulative session token tracking in the status bar, TUI `/cost`, and
   Telegram `/cost`. OpenRouter requests usage accounting so provider-reported
   cost, cached tokens, and reasoning tokens appear when OpenRouter returns

@@ -35,6 +35,13 @@ from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, run_plan_text
 from libre_claw.core.skills import SkillStore
 from libre_claw.core.tools import ToolRegistry
+from libre_claw.core.usage import (
+    load_usage_records,
+    openrouter_attribution_payload,
+    usage_record_payload,
+    usage_report_text,
+    usage_summary_payload,
+)
 from libre_claw.providers import LLMProvider, Usage, create_provider
 from libre_claw.tools_builtin import create_builtin_registry
 
@@ -83,6 +90,7 @@ class DaemonServer:
                 web.get("/runs/{run_id}/events", self.get_events),
                 web.post("/runs/{run_id}/cancel", self.cancel_run),
                 web.post("/runs/{run_id}/permissions/{tool_call_id}", self.resolve_permission),
+                web.get("/usage", self.usage),
                 web.get("/automations", self.list_automations),
                 web.post("/automations", self.create_automation),
                 web.get("/automations/{automation_id}", self.get_automation),
@@ -163,6 +171,19 @@ class DaemonServer:
         filtered = [event for event in events if event.event_id > after]
         return web.json_response({"events": [_event_payload(event) for event in filtered]})
 
+    async def usage(self, request: web.Request) -> web.Response:
+        provider = str(request.query.get("provider", "")).strip().lower() or None
+        limit = _positive_int(request.query.get("limit"), default=250, maximum=1000)
+        records = await load_usage_records(self.run_store, provider=provider, limit=limit)
+        return web.json_response(
+            {
+                "summary": usage_summary_payload(records),
+                "records": [usage_record_payload(record) for record in records[:100]],
+                "attribution": openrouter_attribution_payload() if provider == "openrouter" else {},
+                "text": usage_report_text(records, provider=provider or "all"),
+            }
+        )
+
     async def start_run(self, request: web.Request) -> web.Response:
         try:
             payload = await request.json()
@@ -189,7 +210,8 @@ class DaemonServer:
             working_directory=run_config.general.working_directory,
             state="queued",
         )
-        task = asyncio.create_task(self._run_agent(run, message, run_config))
+        surface = str(payload.get("surface", "daemon")).strip() or "daemon"
+        task = asyncio.create_task(self._run_agent(run, message, run_config, surface=surface))
         active = ActiveRun(run_id=run.run_id, task=task)
         self.active_runs[run.run_id] = active
         task.add_done_callback(lambda _task, run_id=run.run_id: self.active_runs.pop(run_id, None))
@@ -327,7 +349,14 @@ class DaemonServer:
             source_paths=self.config.source_paths,
         )
 
-    async def _run_agent(self, run: RunRecord, message: str, config: LibreClawConfig) -> None:
+    async def _run_agent(
+        self,
+        run: RunRecord,
+        message: str,
+        config: LibreClawConfig,
+        *,
+        surface: str = "daemon",
+    ) -> None:
         assistant_chunks: list[str] = []
         state: RunState = "done"
         try:
@@ -340,7 +369,7 @@ class DaemonServer:
                     "provider": run.provider,
                     "model": run.model,
                     "working_directory": run.working_directory,
-                    "surface": "daemon",
+                    "surface": surface,
                 },
             )
             await self.run_store.append_event(run.run_id, "user_message", {"content": message})
@@ -388,7 +417,11 @@ class DaemonServer:
                     continue
                 if isinstance(event, AgentDone):
                     if event.usage is not None:
-                        await self.run_store.append_event(run.run_id, "usage", _usage_payload(event.usage))
+                        await self.run_store.append_event(
+                            run.run_id,
+                            "usage",
+                            _usage_payload(event.usage, provider=run.provider, model=run.model, surface=surface),
+                        )
                     continue
                 if isinstance(event, AgentError):
                     state = "failed"
@@ -466,7 +499,7 @@ class DaemonServer:
         config: LibreClawConfig,
         report_path: Path,
     ) -> None:
-        await self._run_agent(run, automation.prompt, config)
+        await self._run_agent(run, automation.prompt, config, surface=f"automation:{automation.route}")
         await asyncio.to_thread(_write_automation_report, automation, run, report_path)
 
     def _config_for_automation(self, automation: AutomationRecord) -> LibreClawConfig:
@@ -583,6 +616,12 @@ class DaemonClient:
             f"/runs/{run_id}/permissions/{tool_call_id}",
             json={"resolution": resolution},
         )
+
+    async def usage(self, *, provider: str = "", limit: int = 250) -> dict[str, Any]:
+        query = f"limit={limit}"
+        if provider:
+            query += f"&provider={provider}"
+        return await self._request("GET", f"/usage?{query}")
 
     async def list_automations(self, limit: int = 50) -> dict[str, Any]:
         return await self._request("GET", f"/automations?limit={limit}")
@@ -717,14 +756,21 @@ def _read_artifact(run: RunRecord, name: str) -> str:
         return ""
 
 
-def _usage_payload(usage: Usage) -> dict[str, Any]:
-    return {
+def _usage_payload(usage: Usage, *, provider: str = "", model: str = "", surface: str = "") -> dict[str, Any]:
+    payload = {
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
         "cached_tokens": usage.cached_tokens,
         "reasoning_tokens": usage.reasoning_tokens,
         "cost": usage.cost,
     }
+    if provider:
+        payload["provider"] = provider
+    if model:
+        payload["model"] = model
+    if surface:
+        payload["surface"] = surface
+    return payload
 
 
 def _write_automation_report(automation: AutomationRecord, run: RunRecord, report_path: Path) -> None:

@@ -67,6 +67,12 @@ from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
 from libre_claw.core.session import ChatMessage, estimate_context_tokens
 from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore
 from libre_claw.core.tools import ToolCall, ToolResult
+from libre_claw.core.usage import (
+    load_usage_records,
+    openrouter_attribution_text,
+    openrouter_model_presets_text,
+    usage_report_text,
+)
 from libre_claw.daemon import DaemonClient, daemon_base_url
 from libre_claw.providers import LLMProvider, ProviderConfigurationError, Usage, combine_usage, create_provider
 from libre_claw.release import latest_release_notes
@@ -164,6 +170,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/clear", "/clear", "Clear transcript and session history"),
     SlashCommand("/cancel", "/cancel", "Cancel active generation or tool execution"),
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
+    SlashCommand("/usage", "/usage openrouter|attribution|presets", "Show provider usage analytics"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
     SlashCommand("/provider", "/provider anthropic|openai|openrouter|ollama|codex", "Switch provider for new turns"),
     SlashCommand("/codex", "/codex login|status|logout|use [model]", "Manage Codex/ChatGPT login"),
@@ -819,6 +826,9 @@ class LibreClawApp(App[None]):
         if command == "/cost":
             self._append_system(self._cost_text())
             return
+        if command == "/usage":
+            await self._handle_usage_command(argument)
+            return
         if command == "/model":
             self._set_model(argument)
             return
@@ -973,6 +983,7 @@ class LibreClawApp(App[None]):
                 kind="chat",
                 provider=_canonical_tui_provider(self.config.general.default_provider),
                 model=_effective_model(self.config),
+                surface="tui:daemon",
             )
             run = _object_payload(started.get("run"))
             run_id = str(run.get("run_id", ""))
@@ -1129,6 +1140,15 @@ class LibreClawApp(App[None]):
                     self._last_goal_decision = event.decision
                     if event.usage is not None:
                         self.usage = combine_usage(self.usage, event.usage) or self.usage
+                        self._record_run_event_later(
+                            "usage",
+                            _usage_payload(
+                                event.usage,
+                                provider=_canonical_tui_provider(self.config.general.default_provider),
+                                model=_effective_model(self.config),
+                                surface="tui:goal:judge",
+                            ),
+                        )
                     self._append_system(_goal_judge_text(event.turn, event.decision))
                     self._record_run_event_later(
                         "goal_judge",
@@ -1236,7 +1256,15 @@ class LibreClawApp(App[None]):
             self._flush_stream_buffer(assistant_index, stream_buffer)
             if event.usage is not None:
                 self.usage = combine_usage(self.usage, event.usage) or self.usage
-                self._record_run_event_later("usage", _usage_payload(event.usage))
+                self._record_run_event_later(
+                    "usage",
+                    _usage_payload(
+                        event.usage,
+                        provider=_canonical_tui_provider(self.config.general.default_provider),
+                        model=_effective_model(self.config),
+                        surface=self._current_user_surface(),
+                    ),
+                )
                 self._update_status()
             return True, False
 
@@ -1260,6 +1288,9 @@ class LibreClawApp(App[None]):
         self._active_run_summary = self.transcript[assistant_index].content
         self._record_run_event_later("assistant_delta", {"text": text})
 
+    def _current_user_surface(self) -> str:
+        return "tui:goal" if self._goal_description is not None else "tui:chat"
+
     async def _start_run(self, kind: str, title: str) -> RunRecord:
         run = await self.run_store.create_run(
             title,
@@ -1278,6 +1309,7 @@ class LibreClawApp(App[None]):
                 "provider": run.provider,
                 "model": run.model,
                 "working_directory": run.working_directory,
+                "surface": f"tui:{kind}",
             },
         )
         return run
@@ -2648,6 +2680,35 @@ class LibreClawApp(App[None]):
             )
         return "\n".join(lines)
 
+    async def _handle_usage_command(self, argument: str) -> None:
+        normalized = argument.strip().lower()
+        if normalized in {"", "help"}:
+            self._append_system(_usage_help_text())
+            return
+        if normalized in {"openrouter attribution", "attribution", "verify", "openrouter verify"}:
+            self._append_system(openrouter_attribution_text())
+            return
+        if normalized in {"openrouter presets", "presets", "models", "openrouter models"}:
+            self._append_system(openrouter_model_presets_text())
+            return
+        if normalized not in {"openrouter", "all"}:
+            self._append_system(_usage_help_text())
+            return
+
+        provider = None if normalized == "all" else "openrouter"
+        if self.daemon_client is not None:
+            try:
+                payload = await self.daemon_client.usage(provider=provider or "", limit=250)
+                text = str(payload.get("text", "")).strip()
+                if text:
+                    self._append_system(text)
+                    return
+            except Exception:
+                pass
+
+        records = await load_usage_records(self.run_store, provider=provider, limit=250)
+        self._append_system(usage_report_text(records, provider=provider or "all"))
+
     def _context_meter(self) -> ContextMeter:
         extra_texts = tuple(
             text
@@ -2979,6 +3040,19 @@ def _schedule_help_text() -> str:
     )
 
 
+def _usage_help_text() -> str:
+    return "\n".join(
+        [
+            "Usage:",
+            "/usage openrouter",
+            "/usage openrouter attribution",
+            "/usage openrouter presets",
+            "",
+            "Shows persistent provider usage from durable runs: tokens, cost, model, run, and user surface.",
+        ]
+    )
+
+
 def _schedule_examples_text() -> str:
     lines = ["Schedule examples:"]
     for name, schedule, prompt in automation_examples():
@@ -3027,14 +3101,21 @@ def _automation_record_payload(record: AutomationRecord) -> dict[str, Any]:
     }
 
 
-def _usage_payload(usage: Usage) -> dict[str, Any]:
-    return {
+def _usage_payload(usage: Usage, *, provider: str = "", model: str = "", surface: str = "") -> dict[str, Any]:
+    payload = {
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
         "cached_tokens": usage.cached_tokens,
         "reasoning_tokens": usage.reasoning_tokens,
         "cost": usage.cost,
     }
+    if provider:
+        payload["provider"] = provider
+    if model:
+        payload["model"] = model
+    if surface:
+        payload["surface"] = surface
+    return payload
 
 
 def _usage_from_payload(payload: dict[str, Any]) -> Usage:

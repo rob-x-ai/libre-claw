@@ -313,6 +313,7 @@ class TelegramBridge:
                 provider=self.config.general.default_provider,
                 model=self.config.general.default_model,
                 working_directory=str(self.config.general.working_directory),
+                surface="telegram:daemon",
             )
         except Exception as exc:
             yield TelegramError(f"Could not start daemon run: {exc}")

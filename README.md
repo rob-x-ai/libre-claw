@@ -35,6 +35,9 @@ and run the Telegram daemon.
   execution, saved reports, and TUI/Telegram route metadata.
 - Browser/computer-use tools with persistent profiles, CSS selector actions,
   downloads, screenshots, browser artifacts, and domain allow/deny policy.
+- OpenRouter growth analytics with app-attribution verification, recommended
+  model presets, and persistent `/usage openrouter` rollups by model, run, and
+  user surface.
 - MCP stdio integration for explicitly configured and allowlisted external
   tools, surfaced through the normal tool registry and permission system.
 - User and project skills loaded from `~/.libre-claw/skills/` and
@@ -144,6 +147,14 @@ Inside the TUI:
 Libre Claw always sends OpenRouter app attribution as `Libre Claw` from
 `https://kroonen.ai`, including the `cli-agent` category. Users do not configure
 those product identity headers.
+
+Useful OpenRouter commands:
+
+```text
+/usage openrouter
+/usage openrouter attribution
+/usage openrouter presets
+```
 
 ### Ollama Cloud With Kimi K2.6
 
@@ -287,6 +298,7 @@ Legacy configs that still say `default_provider = "local"` or
 - `/clear`
 - `/cancel`
 - `/cost`
+- `/usage openrouter|attribution|presets`
 - `/model [provider:]<name>|list [--global]`
 - `/provider anthropic|openai|openrouter|ollama|codex`
 - `/codex login|status|logout|use [model]`
@@ -365,6 +377,20 @@ For OpenRouter, Libre Claw requests OpenRouter usage accounting on every
 OpenRouter call, so `/cost` also shows the provider-reported request cost when
 OpenRouter returns it. The status bar updates live with the same cumulative
 session total.
+
+Use `/usage openrouter` for persistent usage analytics from durable runs. It
+rolls up provider-reported input/output/cached/reasoning tokens and cost by
+OpenRouter model, run, and user surface such as `tui:chat`, `tui:goal`,
+`daemon`, `telegram:daemon`, or `automation:report`.
+
+OpenRouter-specific helpers:
+
+- `/usage openrouter attribution` verifies Libre Claw is sending
+  `HTTP-Referer: https://kroonen.ai`, `X-OpenRouter-Title: Libre Claw`, and
+  `X-OpenRouter-Categories: cli-agent`.
+- `/usage openrouter presets` prints recommended `/model openrouter:...`
+  commands for higher-value coding, goal, and scheduled-check workflows.
+- Analytics link: https://openrouter.ai/apps?url=https://kroonen.ai
 
 ## Tool Permissions
 

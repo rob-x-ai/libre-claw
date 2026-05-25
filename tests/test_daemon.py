@@ -332,3 +332,25 @@ async def test_daemon_tick_runs_due_automation_and_writes_report(monkeypatch, tm
     assert updated.report_path is not None
     assert Path(updated.report_path).exists()
     assert any(event.type == "automation_triggered" for event in events)
+
+
+async def test_daemon_usage_endpoint_reports_provider_rollups(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: ScriptedProvider([[TextDelta("ok"), Done()]]),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+    run = await server.run_store.create_run("usage", kind="chat", provider="openrouter", model="openrouter/auto")
+    await server.run_store.append_event(run.run_id, "run_started", {"surface": "daemon"})
+    await server.run_store.append_event(run.run_id, "usage", {"input_tokens": 11, "output_tokens": 4, "cost": 0.0002})
+
+    response = await server.usage(RequestStub(query={"provider": "openrouter"}))  # type: ignore[arg-type]
+    payload = _response_payload(response)
+
+    assert payload["summary"]["total_tokens"] == 15
+    assert payload["summary"]["by_surface"][0]["name"] == "daemon"
+    assert payload["attribution"]["analytics_url"] == "https://openrouter.ai/apps?url=https://kroonen.ai"
+    assert "OpenRouter usage" in payload["text"]

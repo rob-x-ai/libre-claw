@@ -25,6 +25,7 @@ def test_phase_one_modules_import() -> None:
         "libre_claw.core.sandbox",
         "libre_claw.core.skills",
         "libre_claw.core.tools",
+        "libre_claw.core.usage",
         "libre_claw.providers.anthropic",
         "libre_claw.providers.codex",
         "libre_claw.providers.factory",
