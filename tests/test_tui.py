@@ -14,6 +14,7 @@ from libre_claw.core.tools import ToolCall, ToolResult
 from libre_claw.providers import Usage
 from libre_claw.tui.app import (
     ASSISTANT_ACCENT,
+    ContextMeter,
     LibreClawApp,
     PROJECT_NOTICE,
     STARTUP_ASCII,
@@ -21,6 +22,8 @@ from libre_claw.tui.app import (
     StreamRenderBuffer,
     TranscriptEntry,
     _effective_model,
+    _context_bar,
+    _format_token_count,
     _model_help_text,
     _parse_compact_options,
     _parse_model_argument,
@@ -275,7 +278,36 @@ def test_cost_text_shows_cumulative_provider_usage(monkeypatch, tmp_path: Path) 
     assert "Cached input: 3" in text
     assert "Reasoning output: 2" in text
     assert "Cost: $0.000071" in text
+    assert "Context estimate:" in text
     assert "$0.000071" in app._status_text()
+    assert "15 provider tokens" in app._status_text()
+
+
+def test_status_text_falls_back_to_estimated_tokens(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+    app.session.add_user_message("hello context")
+
+    status = app._status_text()
+
+    assert "est tokens" in status
+    assert "ctx [" in status
+
+
+def test_context_bar_shows_small_nonzero_usage() -> None:
+    meter = ContextMeter(estimated_tokens=1, context_window_tokens=200000, ratio=1 / 200000)
+
+    assert _context_bar(meter) == "[#---------]"
+    assert meter.display_percent == "<1%"
+
+
+def test_format_token_count_compacts_large_values() -> None:
+    assert _format_token_count(999) == "999"
+    assert _format_token_count(1200) == "1.2k"
+    assert _format_token_count(200000) == "200k"
+    assert _format_token_count(1200000) == "1.2M"
 
 
 def test_context_report_and_compact_option_helpers(monkeypatch, tmp_path: Path) -> None:

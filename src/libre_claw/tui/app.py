@@ -82,6 +82,12 @@ class ContextMeter:
     def percent(self) -> int:
         return min(999, int(round(self.ratio * 100)))
 
+    @property
+    def display_percent(self) -> str:
+        if self.estimated_tokens > 0 and self.ratio < 0.01:
+            return "<1%"
+        return f"{self.percent}%"
+
 
 @dataclass(frozen=True)
 class CompactOptions:
@@ -1509,6 +1515,7 @@ class LibreClawApp(App[None]):
         return command.name + (" " if _usage_requires_argument(command.usage) else "")
 
     def _cost_text(self) -> str:
+        meter = self._context_meter()
         lines = [
             "Session usage:",
             f"- Tokens: {self.usage.total_tokens} total",
@@ -1520,8 +1527,15 @@ class LibreClawApp(App[None]):
         if self.usage.reasoning_tokens:
             lines.append(f"- Reasoning output: {self.usage.reasoning_tokens}")
         lines.append(f"- Cost: {_format_usage_cost(self.usage)}")
+        lines.append(
+            f"- Context estimate: {_format_token_count(meter.estimated_tokens)}/"
+            f"{_format_token_count(meter.context_window_tokens)} tokens ({meter.display_percent})"
+        )
         if self.usage.cost is None:
-            lines.append("Cost is shown when the provider reports it. OpenRouter reports cost when usage accounting is enabled.")
+            lines.append(
+                "Provider token/cost totals are shown when the provider reports them. "
+                "Codex CLI currently does not return usage, so Libre Claw shows estimated context tokens instead."
+            )
         return "\n".join(lines)
 
     def _context_meter(self) -> ContextMeter:
@@ -1549,8 +1563,9 @@ class LibreClawApp(App[None]):
     def _context_report(self) -> str:
         meter = self._context_meter()
         return (
-            f"Context: {_context_bar(meter)} {meter.percent}% "
-            f"({meter.estimated_tokens}/{meter.context_window_tokens} estimated tokens). "
+            f"Context: {_context_status_text(meter)} "
+            f"({_format_token_count(meter.estimated_tokens)}/"
+            f"{_format_token_count(meter.context_window_tokens)} estimated tokens). "
             f"Auto compact threshold: {int(self.config.agent.auto_compact_threshold * 100)}%."
         )
 
@@ -1564,11 +1579,12 @@ class LibreClawApp(App[None]):
     def _status_text(self) -> str:
         provider = self.config.general.default_provider
         model = _effective_model(self.config)
+        meter = self._context_meter()
         elapsed = int(time.monotonic() - self._started_at)
         active = "running" if self._active_task is not None and not self._active_task.done() else "idle"
         return (
             f"Libre Claw v{__version__} | {provider}:{model} | {_format_usage_cost(self.usage)} | "
-            f"{self.usage.total_tokens} tokens | ctx {_context_bar(self._context_meter())} | {elapsed}s | {active}"
+            f"{_token_status_text(self.usage, meter)} | ctx {_context_status_text(meter)} | {elapsed}s | {active}"
         )
 
     def _update_status(self) -> None:
@@ -1719,8 +1735,28 @@ def _format_usage_cost(usage: Usage) -> str:
     return f"${usage.cost:.2f}"
 
 
+def _format_token_count(value: int) -> str:
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}".rstrip("0").rstrip(".") + "k"
+    return str(value)
+
+
+def _token_status_text(usage: Usage, meter: ContextMeter) -> str:
+    if usage.total_tokens:
+        return f"{_format_token_count(usage.total_tokens)} provider tokens"
+    return f"~{_format_token_count(meter.estimated_tokens)} est tokens"
+
+
+def _context_status_text(meter: ContextMeter) -> str:
+    return f"{_context_bar(meter)} {meter.display_percent}"
+
+
 def _context_bar(meter: ContextMeter, width: int = 10) -> str:
     filled = max(0, min(width, int(round(min(meter.ratio, 1.0) * width))))
+    if meter.estimated_tokens > 0 and filled == 0:
+        filled = 1
     return "[" + ("#" * filled) + ("-" * (width - filled)) + "]"
 
 
