@@ -120,6 +120,76 @@ def test_telegram_bot_reads_secure_stored_token(monkeypatch, tmp_path: Path) -> 
     assert TelegramBot(load_config())._bot_token() == "stored-telegram-token"
 
 
+async def test_telegram_bot_run_uses_polling_lifecycle(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.chdir(tmp_path)
+    calls: list[str] = []
+
+    class FakeBridge:
+        async def initialize(self) -> None:
+            calls.append("bridge_initialize")
+
+    class FakeUpdater:
+        async def start_polling(self) -> None:
+            calls.append("start_polling")
+
+        async def stop(self) -> None:
+            calls.append("stop_polling")
+
+    class FakeApplication:
+        def __init__(self) -> None:
+            self.updater = FakeUpdater()
+
+        def add_handler(self, handler: object) -> None:
+            del handler
+            calls.append("add_handler")
+
+        async def initialize(self) -> None:
+            calls.append("initialize")
+
+        async def start(self) -> None:
+            calls.append("start")
+
+        async def stop(self) -> None:
+            calls.append("stop")
+
+        async def shutdown(self) -> None:
+            calls.append("shutdown")
+
+    fake_application = FakeApplication()
+
+    class FakeBuilder:
+        def token(self, token: str) -> FakeBuilder:
+            assert token == "test-token"
+            calls.append("token")
+            return self
+
+        def build(self) -> FakeApplication:
+            calls.append("build")
+            return fake_application
+
+    class FakeApplicationFactory:
+        @staticmethod
+        def builder() -> FakeBuilder:
+            calls.append("builder")
+            return FakeBuilder()
+
+    monkeypatch.setattr("libre_claw.telegram.bot.Application", FakeApplicationFactory)
+    bot = TelegramBot(load_config(), bridge=FakeBridge())  # type: ignore[arg-type]
+
+    async def stop_after_polling_starts() -> None:
+        calls.append("wait")
+
+    monkeypatch.setattr(bot, "_wait_until_stopped", stop_after_polling_starts)
+
+    await bot.run()
+
+    assert "wait_until_closed" not in calls
+    assert calls[:5] == ["bridge_initialize", "builder", "token", "build", "add_handler"]
+    assert calls[-5:] == ["start_polling", "wait", "stop_polling", "stop", "shutdown"]
+
+
 async def test_telegram_bridge_streams_text(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

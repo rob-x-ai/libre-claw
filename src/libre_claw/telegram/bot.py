@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 from libre_claw.auth.api_keys import ApiKeyStore, KeyStorageError
@@ -50,14 +51,24 @@ class TelegramBot:
         application.add_handler(CallbackQueryHandler(handlers.callback))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.message))
 
+        updater = application.updater
+        if updater is None:
+            raise RuntimeError("Telegram polling is unavailable for this application.")
+
         await application.initialize()
-        await application.start()
-        await application.updater.start_polling()
+        app_started = False
+        polling_started = False
         try:
-            await application.updater.wait_until_closed()
+            await application.start()
+            app_started = True
+            await updater.start_polling()
+            polling_started = True
+            await self._wait_until_stopped()
         finally:
-            await application.updater.stop()
-            await application.stop()
+            if polling_started:
+                await updater.stop()
+            if app_started:
+                await application.stop()
             await application.shutdown()
 
     def _bot_token(self) -> str | None:
@@ -69,3 +80,6 @@ class TelegramBot:
         except KeyStorageError:
             return None
         return lookup.value
+
+    async def _wait_until_stopped(self) -> None:
+        await asyncio.Event().wait()
