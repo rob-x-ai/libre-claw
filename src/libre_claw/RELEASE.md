@@ -44,7 +44,8 @@ First shippable Libre Claw release from Kroonen AI Inc.
   `browser_click`, `browser_type`, `browser_wait`, and `browser_download`,
   selector-aware reads/screenshots, cookie-consent dismissal, safe `[browser]`
   domain allow/deny rules, saved downloads/screenshots, and `/artifacts
-  browser` screenshot previews.
+  browser` screenshot previews. Live browser pages are kept in a process-level
+  state pool so sessions survive follow-up tool calls and registry rebuilds.
 - Direct `http_request` tool for API calls, image/file fetches, sandboxed
   downloads, and HTTP GET/POST-style workflows without shelling out to `bash`.
 - MCP stdio bridge with `[mcp]` config, explicit server/tool allowlisting,

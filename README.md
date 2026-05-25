@@ -609,8 +609,9 @@ Available browser tools:
 - `browser_screenshot`: capture the full page or a CSS selector.
 
 `browser_navigate` tries to dismiss common cookie banners after page load by
-default. Browser state is kept per tool registry/run profile. The default
-profile is `default`, and login/session storage lives under:
+default. Browser state is kept in a process-level pool per profile/config so
+the live Playwright page survives registry rebuilds and follow-up tool calls.
+The default profile is `default`, and login/session storage lives under:
 
 ```text
 ~/.libre-claw/browser/profiles/<profile>/

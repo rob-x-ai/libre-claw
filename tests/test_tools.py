@@ -480,11 +480,9 @@ async def test_browser_tools_gracefully_handle_missing_session_or_dependency(mon
 
     assert navigate.error is not None
     assert "Playwright is not installed" in navigate.error or "Executable doesn't exist" in navigate.error
-    assert read.error == "No browser page is open. Use browser_navigate first."
-    assert extract.error == "No browser page is open. Use browser_navigate first."
-    assert execute.error == "No browser page is open. Use browser_navigate first."
-    assert dismiss.error == "No browser page is open. Use browser_navigate first."
-    assert screenshot.error == "No browser page is open. Use browser_navigate first."
+    for result in (read, extract, execute, dismiss, screenshot):
+        assert result.error is not None
+        assert "No browser page is open" in result.error or "Playwright is not installed" in result.error
 
 
 async def test_browser_policy_blocks_denied_domains(tmp_path: Path) -> None:
@@ -536,6 +534,21 @@ async def test_browser_selector_actions_and_artifacts_use_shared_profile(tmp_pat
     assert Path(str(download.metadata["path"])).exists()
     assert outside.error is not None
     assert "outside the working directory" in outside.error
+
+
+async def test_browser_state_survives_new_tool_context_for_same_profile(tmp_path: Path) -> None:
+    first_context = context(tmp_path)
+    second_context = context(tmp_path)
+    page = FakePage()
+    state = browser_tools._browser_state(BrowserReadTool(first_context), "default")
+    state.page = page
+    state.last_url = page.url
+
+    result = await BrowserReadTool(second_context).execute(selector="main")
+
+    assert result.error is None
+    assert "text for main" in result.content
+    assert second_context.shared_state["browser_states"]["default"] is state
 
 
 class FakeHTTPResponse:

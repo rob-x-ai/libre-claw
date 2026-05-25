@@ -35,6 +35,8 @@ COOKIE_CONSENT_SELECTORS = (
     ".cc-accept",
     ".cookie-accept",
 )
+BrowserPoolKey = tuple[str, str, str, bool]
+_GLOBAL_BROWSER_STATES: dict[BrowserPoolKey, dict[str, "BrowserState"]] = {}
 
 
 class BrowserState:
@@ -46,14 +48,23 @@ class BrowserState:
         self.playwright: Any | None = None
         self.context: Any | None = None
         self.page: Any | None = None
+        self.last_url = ""
 
-    async def ensure_page(self) -> tuple[Any | None, str | None]:
+    async def ensure_page(self, restore_last_url: bool = False) -> tuple[Any | None, str | None]:
+        if self.page is not None and not _is_closed(self.page):
+            return self.page, None
+
         try:
             async_api = importlib.import_module("playwright.async_api")
         except ModuleNotFoundError:
             return None, "Playwright is not installed. Install the browser extra before using browser tools."
 
         try:
+            if _is_closed(self.context):
+                self.context = None
+                self.page = None
+            if _is_closed(self.page):
+                self.page = None
             if self.playwright is None:
                 self.playwright = await async_api.async_playwright().start()
             if self.context is None:
@@ -68,22 +79,28 @@ class BrowserState:
                     headless=self.tool.context.browser_headless,
                 )
             if self.page is None:
-                self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+                pages = [page for page in self.context.pages if not _is_closed(page)]
+                self.page = pages[0] if pages else await self.context.new_page()
+                if restore_last_url and self.last_url and _is_blank_page(self.page):
+                    await self.page.goto(
+                        self.last_url,
+                        wait_until="domcontentloaded",
+                        timeout=self.tool.context.browser_default_timeout_ms,
+                    )
             return self.page, None
         except Exception as exc:
             return None, str(exc)
 
 
 def _browser_state(tool: BaseTool, profile: str) -> BrowserState:
-    states = tool.context.shared_state.setdefault("browser_states", {})
-    if not isinstance(states, dict):
-        states = {}
-        tool.context.shared_state["browser_states"] = states
+    states = _browser_states(tool)
     key = _safe_profile(profile)
     state = states.get(key)
     if not isinstance(state, BrowserState):
         state = BrowserState(tool, key)
         states[key] = state
+    else:
+        state.tool = tool
     return state
 
 
@@ -123,6 +140,7 @@ class BrowserNavigateTool(BaseTool):
             response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
             dismissed = await _dismiss_cookie_banners(page) if dismiss_cookies else []
             title = await page.title()
+            _remember_page(state, page)
         except Exception as exc:
             return ToolResult(error=str(exc))
 
@@ -173,13 +191,14 @@ class BrowserReadTool(BaseTool):
             return ToolResult(error="max_chars must be >= 1")
         if max_chars > MAX_BROWSER_TEXT_CHARS:
             return ToolResult(error=f"max_chars must be <= {MAX_BROWSER_TEXT_CHARS}")
-        page = _current_page(self, profile)
-        if page is None:
-            return ToolResult(error="No browser page is open. Use browser_navigate first.")
+        state, page, error = await _require_page(self, profile)
+        if error is not None:
+            return ToolResult(error=error)
         try:
             title = await page.title()
             locator = page.locator(selector or "body").first
             text = await locator.inner_text(timeout=_timeout(timeout_ms, 5000))
+            _remember_page(state, page)
         except ValueError as exc:
             return ToolResult(error=str(exc))
         except Exception as exc:
@@ -232,13 +251,14 @@ class BrowserExtractTool(BaseTool):
         if max_chars > MAX_BROWSER_EXTRACT_CHARS:
             return ToolResult(error=f"max_chars must be <= {MAX_BROWSER_EXTRACT_CHARS}")
 
-        page = _current_page(self, profile)
-        if page is None:
-            return ToolResult(error="No browser page is open. Use browser_navigate first.")
+        state, page, error = await _require_page(self, profile)
+        if error is not None:
+            return ToolResult(error=error)
 
         try:
             data = await page.evaluate(_BROWSER_EXTRACT_SCRIPT, {"kind": kind, "selector": selector or "document", "maxItems": max_items})
             title = await page.title()
+            _remember_page(state, page)
         except Exception as exc:
             return ToolResult(error=str(exc))
 
@@ -289,11 +309,12 @@ class BrowserExecuteTool(BaseTool):
             timeout = _timeout(timeout_ms, 5000)
         except ValueError as exc:
             return ToolResult(error=str(exc))
-        page = _current_page(self, profile)
-        if page is None:
-            return ToolResult(error="No browser page is open. Use browser_navigate first.")
+        state, page, error = await _require_page(self, profile)
+        if error is not None:
+            return ToolResult(error=error)
         try:
             result = await asyncio.wait_for(page.evaluate(script, arg or {}), timeout=timeout / 1000)
+            _remember_page(state, page)
         except TimeoutError:
             return ToolResult(error=f"JavaScript execution timed out after {timeout} ms")
         except Exception as exc:
@@ -321,10 +342,11 @@ class BrowserDismissCookiesTool(BaseTool):
     permission_level = "allow"
 
     async def execute(self, profile: str = DEFAULT_PROFILE) -> ToolResult:
-        page = _current_page(self, profile)
-        if page is None:
-            return ToolResult(error="No browser page is open. Use browser_navigate first.")
+        state, page, error = await _require_page(self, profile)
+        if error is not None:
+            return ToolResult(error=error)
         dismissed = await _dismiss_cookie_banners(page)
+        _remember_page(state, page)
         return ToolResult(
             content=f"Dismissed {len(dismissed)} cookie consent element(s).",
             metadata={"artifact_type": "browser_action", "profile": _safe_profile(profile), "url": page.url, "action": "dismiss_cookies", "selectors": dismissed},
@@ -344,12 +366,13 @@ class BrowserClickTool(BaseTool):
     permission_level = "ask"
 
     async def execute(self, selector: str, profile: str = DEFAULT_PROFILE, timeout_ms: int | None = None) -> ToolResult:
-        page = _current_page(self, profile)
-        if page is None:
-            return ToolResult(error="No browser page is open. Use browser_navigate first.")
+        state, page, error = await _require_page(self, profile)
+        if error is not None:
+            return ToolResult(error=error)
         try:
             await page.locator(selector).first.click(timeout=_timeout(timeout_ms, self.context.browser_default_timeout_ms))
             title = await page.title()
+            _remember_page(state, page)
         except ValueError as exc:
             return ToolResult(error=str(exc))
         except Exception as exc:
@@ -387,9 +410,9 @@ class BrowserTypeTool(BaseTool):
         press_enter: bool = False,
         timeout_ms: int | None = None,
     ) -> ToolResult:
-        page = _current_page(self, profile)
-        if page is None:
-            return ToolResult(error="No browser page is open. Use browser_navigate first.")
+        state, page, error = await _require_page(self, profile)
+        if error is not None:
+            return ToolResult(error=error)
         try:
             locator = page.locator(selector).first
             timeout = _timeout(timeout_ms, self.context.browser_default_timeout_ms)
@@ -400,6 +423,7 @@ class BrowserTypeTool(BaseTool):
                 await locator.type(text, timeout=timeout)
             if press_enter:
                 await locator.press("Enter", timeout=timeout)
+            _remember_page(state, page)
         except ValueError as exc:
             return ToolResult(error=str(exc))
         except Exception as exc:
@@ -436,9 +460,9 @@ class BrowserWaitTool(BaseTool):
         profile: str = DEFAULT_PROFILE,
         timeout_ms: int | None = None,
     ) -> ToolResult:
-        page = _current_page(self, profile)
-        if page is None:
-            return ToolResult(error="No browser page is open. Use browser_navigate first.")
+        browser_state, page, error = await _require_page(self, profile)
+        if error is not None:
+            return ToolResult(error=error)
         try:
             timeout = _timeout(timeout_ms, self.context.browser_default_timeout_ms)
         except ValueError as exc:
@@ -454,6 +478,7 @@ class BrowserWaitTool(BaseTool):
                     return ToolResult(error="page load state must be load, domcontentloaded, or networkidle")
                 await page.wait_for_load_state(state, timeout=timeout)
                 target = f"page {state}"
+            _remember_page(browser_state, page)
         except Exception as exc:
             return ToolResult(error=str(exc))
         return ToolResult(
@@ -482,9 +507,9 @@ class BrowserDownloadTool(BaseTool):
         profile: str = DEFAULT_PROFILE,
         timeout_ms: int | None = None,
     ) -> ToolResult:
-        page = _current_page(self, profile)
-        if page is None:
-            return ToolResult(error="No browser page is open. Use browser_navigate first.")
+        state, page, error = await _require_page(self, profile)
+        if error is not None:
+            return ToolResult(error=error)
         try:
             timeout = _timeout(timeout_ms, self.context.browser_default_timeout_ms)
         except ValueError as exc:
@@ -497,6 +522,7 @@ class BrowserDownloadTool(BaseTool):
             resolved = _resolve_browser_file(self, path, self.context.browser_downloads_dir, suggested)
             resolved.parent.mkdir(parents=True, exist_ok=True)
             await download.save_as(str(resolved))
+            _remember_page(state, page)
         except SandboxViolation as exc:
             return ToolResult(error=str(exc))
         except Exception as exc:
@@ -535,9 +561,9 @@ class BrowserScreenshotTool(BaseTool):
         profile: str = DEFAULT_PROFILE,
         full_page: bool = True,
     ) -> ToolResult:
-        page = _current_page(self, profile)
-        if page is None:
-            return ToolResult(error="No browser page is open. Use browser_navigate first.")
+        state, page, error = await _require_page(self, profile)
+        if error is not None:
+            return ToolResult(error=error)
         try:
             default_name = f"screenshot-{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
             resolved = _resolve_browser_file(self, path, self.context.browser_screenshots_dir, default_name)
@@ -546,6 +572,7 @@ class BrowserScreenshotTool(BaseTool):
                 await page.locator(selector).first.screenshot(path=str(resolved))
             else:
                 await page.screenshot(path=str(resolved), full_page=full_page)
+            _remember_page(state, page)
         except SandboxViolation as exc:
             return ToolResult(error=str(exc))
         except Exception as exc:
@@ -567,13 +594,77 @@ class BrowserScreenshotTool(BaseTool):
 
 
 def _current_page(tool: BaseTool, profile: str) -> Any | None:
-    states = tool.context.shared_state.get("browser_states")
-    if not isinstance(states, dict):
-        return None
-    state = states.get(_safe_profile(profile))
+    state = _existing_browser_state(tool, profile)
     if not isinstance(state, BrowserState):
         return None
     return state.page
+
+
+async def _require_page(tool: BaseTool, profile: str) -> tuple[BrowserState | None, Any | None, str | None]:
+    state = _existing_browser_state(tool, profile)
+    if state is None:
+        return None, None, "No browser page is open. Use browser_navigate first."
+    state.tool = tool
+    page, error = await state.ensure_page(restore_last_url=True)
+    if error is not None:
+        return state, None, error
+    return state, page, None
+
+
+def _existing_browser_state(tool: BaseTool, profile: str) -> BrowserState | None:
+    states = _browser_states(tool)
+    state = states.get(_safe_profile(profile))
+    return state if isinstance(state, BrowserState) else None
+
+
+def _browser_states(tool: BaseTool) -> dict[str, BrowserState]:
+    states = tool.context.shared_state.get("browser_states")
+    if isinstance(states, dict):
+        return states
+
+    states = _GLOBAL_BROWSER_STATES.setdefault(_browser_pool_key(tool), {})
+    tool.context.shared_state["browser_states"] = states
+    return states
+
+
+def _browser_pool_key(tool: BaseTool) -> BrowserPoolKey:
+    return (
+        str(_context_path(tool, tool.context.browser_profile_dir)),
+        str(_context_path(tool, tool.context.browser_downloads_dir)),
+        str(_context_path(tool, tool.context.working_directory)),
+        tool.context.browser_headless,
+    )
+
+
+def _context_path(tool: BaseTool, path: Path) -> Path:
+    candidate = path.expanduser()
+    if not candidate.is_absolute():
+        candidate = tool.context.working_directory / candidate
+    return candidate.resolve(strict=False)
+
+
+def _remember_page(state: BrowserState | None, page: Any) -> None:
+    if state is None:
+        return
+    url = str(getattr(page, "url", "") or "")
+    if url and url != "about:blank":
+        state.last_url = url
+
+
+def _is_closed(value: Any | None) -> bool:
+    if value is None:
+        return False
+    checker = getattr(value, "is_closed", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(checker())
+    except Exception:
+        return True
+
+
+def _is_blank_page(page: Any) -> bool:
+    return str(getattr(page, "url", "") or "") in {"", "about:blank"}
 
 
 async def _dismiss_cookie_banners(page: Any) -> list[str]:
