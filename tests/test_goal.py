@@ -13,6 +13,9 @@ from libre_claw.core.goal import (
     GoalRunner,
     GoalStopped,
     GoalTurnStarted,
+    MAX_JUDGE_TRANSCRIPT_CHARS,
+    MAX_JUDGE_RECENT_MESSAGES,
+    _judge_prompt,
     parse_judge_decision,
 )
 from libre_claw.core.session import ChatMessage, Session
@@ -119,3 +122,19 @@ def test_parse_judge_decision_handles_invalid_json() -> None:
     assert decision.confidence == 0.0
     assert "not valid JSON" in decision.reason
     assert decision.next_prompt
+
+
+def test_judge_prompt_is_bounded_and_recent_state_focused() -> None:
+    session = Session(summary="summary " * 2000)
+    for index in range(MAX_JUDGE_RECENT_MESSAGES + 5):
+        session.add_user_message(f"old request {index}")
+        session.add_assistant_message("assistant output " + ("x" * 2000))
+
+    prompt = _judge_prompt("finish everything", turn=3, max_turns=20, session=session)
+
+    assert len(prompt) <= MAX_JUDGE_TRANSCRIPT_CHARS + 200
+    assert "Summary:" in prompt
+    assert "older message(s) omitted" in prompt
+    assert "old request 0" not in prompt
+    assert f"old request {MAX_JUDGE_RECENT_MESSAGES + 4}" in prompt
+    assert "Decide whether the goal is fully complete." in prompt

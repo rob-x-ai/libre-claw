@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import shlex
+import sys
 from pathlib import Path
 
 import pytest
@@ -205,6 +208,41 @@ async def test_bash_validates_and_truncates_output(tmp_path: Path) -> None:
     assert invalid_limit.error == "max_output_chars must be >= 1"
     assert "abc\n... truncated 3 characters ..." in truncated.content
     assert truncated.metadata["stdout_truncated"] is True
+    assert truncated.metadata["stdout"] == "abc\n... truncated 3 characters ..."
+    assert truncated.metadata["stdout_chars"] == 6
+    assert truncated.metadata["stdout_bytes"] == 6
+
+
+async def test_bash_caps_large_stdout_stderr_metadata(tmp_path: Path) -> None:
+    script = "import sys; sys.stdout.write('x' * 5000); sys.stderr.write('e' * 4000)"
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+
+    result = await BashTool(context(tmp_path)).execute(command=command, max_output_chars=25)
+
+    assert result.error is None
+    assert result.metadata["stdout_truncated"] is True
+    assert result.metadata["stderr_truncated"] is True
+    assert result.metadata["stdout_chars"] == 5000
+    assert result.metadata["stderr_chars"] == 4000
+    assert result.metadata["stdout_bytes"] == 5000
+    assert result.metadata["stderr_bytes"] == 4000
+    assert result.metadata["stdout"].startswith("x" * 25)
+    assert result.metadata["stderr"].startswith("e" * 25)
+    assert len(result.metadata["stdout"]) < 100
+    assert len(result.metadata["stderr"]) < 100
+    assert "truncated 4975 characters" in result.content
+    assert "truncated 3975 characters" in result.content
+
+
+async def test_bash_cancellation_cleans_up_reader_tasks(tmp_path: Path) -> None:
+    tool = BashTool(context(tmp_path, timeout=5))
+    task = asyncio.create_task(tool.execute(command="sleep 5"))
+
+    await asyncio.sleep(0.05)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2)
 
 
 async def test_bash_blocks_configured_patterns(tmp_path: Path) -> None:

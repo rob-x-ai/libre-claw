@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import os
 import signal
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from libre_claw.core.sandbox import SandboxViolation
@@ -15,6 +17,15 @@ from libre_claw.core.tools import BaseTool, ToolResult, register_tool
 
 DEFAULT_MAX_OUTPUT_CHARS = 20000
 MAX_OUTPUT_CHARS = 100000
+STREAM_READ_CHUNK_SIZE = 8192
+
+
+@dataclass(frozen=True)
+class CapturedOutput:
+    text: str
+    total_chars: int
+    total_bytes: int
+    truncated: bool
 
 
 @register_tool
@@ -63,7 +74,16 @@ class BashTool(BaseTool):
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=os.name != "nt",
             )
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout_value)
+            stdout_task = asyncio.create_task(_read_stream(process.stdout, max_output_chars))
+            stderr_task = asyncio.create_task(_read_stream(process.stderr, max_output_chars))
+            try:
+                await asyncio.wait_for(process.wait(), timeout=timeout_value)
+            except asyncio.TimeoutError:
+                _terminate_process(process)
+                await process.wait()
+                await _cancel_reader_tasks(stdout_task, stderr_task)
+                return ToolResult(error=f"Command timed out after {timeout_value} seconds")
+            stdout_capture, stderr_capture = await asyncio.gather(stdout_task, stderr_task)
         except asyncio.TimeoutError:
             if process is not None:
                 _terminate_process(process)
@@ -73,24 +93,28 @@ class BashTool(BaseTool):
             if process is not None and process.returncode is None:
                 _terminate_process(process)
                 await process.wait()
+            if "stdout_task" in locals() and "stderr_task" in locals():
+                await _cancel_reader_tasks(stdout_task, stderr_task)
             raise
         except OSError as exc:
             return ToolResult(error=str(exc))
 
-        stdout = stdout_bytes.decode("utf-8", errors="replace")
-        stderr = stderr_bytes.decode("utf-8", errors="replace")
-        stdout_display, stdout_truncated = _truncate_output(stdout, max_output_chars)
-        stderr_display, stderr_truncated = _truncate_output(stderr, max_output_chars)
+        stdout_display = _display_output(stdout_capture)
+        stderr_display = _display_output(stderr_capture)
         duration_ms = int((time.monotonic() - started_at) * 1000)
         content = _format_command_output(process.returncode or 0, stdout_display, stderr_display, duration_ms)
         return ToolResult(
             content=content,
             metadata={
                 "exit_code": process.returncode,
-                "stdout": stdout,
-                "stderr": stderr,
-                "stdout_truncated": stdout_truncated,
-                "stderr_truncated": stderr_truncated,
+                "stdout": stdout_display,
+                "stderr": stderr_display,
+                "stdout_truncated": stdout_capture.truncated,
+                "stderr_truncated": stderr_capture.truncated,
+                "stdout_chars": stdout_capture.total_chars,
+                "stderr_chars": stderr_capture.total_chars,
+                "stdout_bytes": stdout_capture.total_bytes,
+                "stderr_bytes": stderr_capture.total_bytes,
                 "duration_ms": duration_ms,
             },
         )
@@ -105,12 +129,64 @@ def _format_command_output(exit_code: int, stdout: str, stderr: str, duration_ms
     return "\n".join(sections)
 
 
-def _truncate_output(output: str, max_chars: int) -> tuple[str, bool]:
-    if len(output) <= max_chars:
-        return output, False
-    omitted = len(output) - max_chars
+async def _read_stream(
+    stream: asyncio.StreamReader | None,
+    max_chars: int,
+) -> CapturedOutput:
+    if stream is None:
+        return CapturedOutput(text="", total_chars=0, total_bytes=0, truncated=False)
+
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    parts: list[str] = []
+    stored_chars = 0
+    total_chars = 0
+    total_bytes = 0
+
+    while True:
+        chunk = await stream.read(STREAM_READ_CHUNK_SIZE)
+        if not chunk:
+            break
+        total_bytes += len(chunk)
+        text = decoder.decode(chunk, final=False)
+        total_chars += len(text)
+        stored_chars = _append_capped(parts, text, stored_chars, max_chars)
+
+    tail = decoder.decode(b"", final=True)
+    if tail:
+        total_chars += len(tail)
+        stored_chars = _append_capped(parts, tail, stored_chars, max_chars)
+
+    return CapturedOutput(
+        text="".join(parts),
+        total_chars=total_chars,
+        total_bytes=total_bytes,
+        truncated=total_chars > stored_chars,
+    )
+
+
+def _append_capped(parts: list[str], text: str, stored_chars: int, max_chars: int) -> int:
+    if not text or stored_chars >= max_chars:
+        return stored_chars
+
+    available = max_chars - stored_chars
+    chunk = text[:available]
+    parts.append(chunk)
+    return stored_chars + len(chunk)
+
+
+def _display_output(output: CapturedOutput) -> str:
+    if not output.truncated:
+        return output.text
+    omitted = output.total_chars - len(output.text)
     suffix = f"\n... truncated {omitted} characters ..."
-    return output[:max_chars] + suffix, True
+    return output.text + suffix
+
+
+async def _cancel_reader_tasks(*tasks: asyncio.Task[CapturedOutput]) -> None:
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _terminate_process(process: asyncio.subprocess.Process) -> None:

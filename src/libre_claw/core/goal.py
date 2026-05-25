@@ -27,6 +27,9 @@ Rules:
 """
 
 MAX_JUDGE_TRANSCRIPT_CHARS = 24000
+MAX_JUDGE_RECENT_MESSAGES = 12
+MAX_JUDGE_SUMMARY_CHARS = 4000
+MAX_JUDGE_MESSAGE_CHARS = 6000
 
 
 class AgentLike(Protocol):
@@ -259,19 +262,39 @@ def _judge_prompt(goal: str, turn: int, max_turns: int, session: Session) -> str
 
 
 def _session_transcript(session: Session) -> str:
-    parts: list[str] = []
+    summary_part = ""
     if session.summary:
-        parts.append("Summary:\n" + session.summary)
+        summary_part = "Summary:\n" + _clip_text(session.summary, MAX_JUDGE_SUMMARY_CHARS)
 
-    for message in session.messages:
+    body_parts: list[str] = []
+    omitted_messages = max(0, len(session.messages) - MAX_JUDGE_RECENT_MESSAGES)
+    if omitted_messages:
+        body_parts.append(
+            f"{omitted_messages} older message(s) omitted; latest "
+            f"{MAX_JUDGE_RECENT_MESSAGES} message(s) follow."
+        )
+
+    for message in session.messages[-MAX_JUDGE_RECENT_MESSAGES:]:
         text = _message_text(message.content)
         if text:
-            parts.append(f"{message.role.upper()}:\n{text}")
+            body_parts.append(f"{message.role.upper()}:\n{_clip_text(text, MAX_JUDGE_MESSAGE_CHARS)}")
 
-    transcript = "\n\n".join(parts)
+    return _bounded_transcript(summary_part, body_parts)
+
+
+def _bounded_transcript(summary_part: str, body_parts: list[str]) -> str:
+    transcript = "\n\n".join(part for part in (summary_part, "\n\n".join(body_parts)) if part)
     if len(transcript) <= MAX_JUDGE_TRANSCRIPT_CHARS:
         return transcript
-    return "... transcript truncated ...\n" + transcript[-MAX_JUDGE_TRANSCRIPT_CHARS:]
+
+    marker = "... judge transcript clipped to recent state ...\n"
+    if summary_part:
+        remaining = MAX_JUDGE_TRANSCRIPT_CHARS - len(summary_part) - 2
+        if remaining <= len(marker):
+            return summary_part[:MAX_JUDGE_TRANSCRIPT_CHARS]
+        body = "\n\n".join(body_parts)
+        return summary_part + "\n\n" + marker + body[-(remaining - len(marker)) :]
+    return marker + transcript[-(MAX_JUDGE_TRANSCRIPT_CHARS - len(marker)) :]
 
 
 def _message_text(blocks: list[ContentBlock]) -> str:
@@ -287,5 +310,15 @@ def _message_text(blocks: list[ContentBlock]) -> str:
             )
         elif block_type == "tool_result":
             status = "error" if block.get("is_error") else "result"
-            parts.append(f"Tool {status} {block.get('tool_use_id', '')}: {block.get('content', '')}")
+            content = _clip_text(str(block.get("content", "")), MAX_JUDGE_MESSAGE_CHARS)
+            parts.append(f"Tool {status} {block.get('tool_use_id', '')}: {content}")
     return "\n".join(part for part in parts if part)
+
+
+def _clip_text(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    marker = f"\n... clipped {len(text) - max_chars} characters ...\n"
+    head_chars = max(0, (max_chars - len(marker)) // 2)
+    tail_chars = max(0, max_chars - len(marker) - head_chars)
+    return text[:head_chars] + marker + text[-tail_chars:]

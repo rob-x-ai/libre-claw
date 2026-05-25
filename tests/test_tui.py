@@ -9,7 +9,14 @@ from pathlib import Path
 from rich.console import Console
 
 from libre_claw.config import load_config
-from libre_claw.core.agent import AgentPermissionRequest
+from libre_claw.core.agent import (
+    AgentDone,
+    AgentError,
+    AgentPermissionRequest,
+    AgentTextDelta,
+    AgentToolCall,
+    AgentToolResult,
+)
 from libre_claw.core.tools import ToolCall, ToolResult
 from libre_claw.providers import Usage
 from libre_claw.tui.app import (
@@ -277,6 +284,102 @@ def test_stream_render_buffer_flushes_large_batches() -> None:
     buffer.append("de")
 
     assert buffer.should_flush(2.0) is True
+
+
+async def test_streaming_tail_updates_avoid_full_transcript_rerender(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        index = app._append_assistant("")
+        full_renders = 0
+
+        def count_full_render() -> None:
+            nonlocal full_renders
+            full_renders += 1
+
+        monkeypatch.setattr(app, "_render_transcript", count_full_render)
+
+        app._append_to_entry(index, "hello")
+        app._append_to_entry(index, " world")
+
+        assert app.transcript[index].content == "hello world"
+        assert full_renders == 0
+
+
+async def test_non_tail_entry_updates_fall_back_to_full_render(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        assistant_index = app._append_assistant("hello")
+        app._append_system("after")
+        full_renders = 0
+
+        def count_full_render() -> None:
+            nonlocal full_renders
+            full_renders += 1
+
+        monkeypatch.setattr(app, "_render_transcript", count_full_render)
+
+        app._append_to_entry(assistant_index, " world")
+
+        assert app.transcript[assistant_index].content == "hello world"
+        assert full_renders == 1
+
+
+async def test_shared_agent_stream_event_handler_renders_tools_usage_and_errors(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        assistant_index = app._append_assistant("")
+        buffer = StreamRenderBuffer(interval=0.0, max_buffered_chars=10)
+        call = ToolCall(id="toolu_1", name="bash", arguments={"command": "pwd"})
+
+        assert app._handle_agent_stream_event(
+            AgentTextDelta("hello"),
+            assistant_index,
+            buffer,
+            stop_on_error=True,
+        ) == (True, False)
+        app._flush_stream_buffer(assistant_index, buffer)
+        assert app.transcript[assistant_index].content == "hello"
+
+        assert app._handle_agent_stream_event(AgentToolCall(call), assistant_index, buffer, stop_on_error=True) == (
+            True,
+            False,
+        )
+        assert app._handle_agent_stream_event(
+            AgentToolResult(call, ToolResult(content="ok")),
+            assistant_index,
+            buffer,
+            stop_on_error=True,
+        ) == (True, False)
+        assert [entry.title for entry in app.transcript if entry.role == "tool"] == ["bash result"]
+
+        assert app._handle_agent_stream_event(
+            AgentDone(Usage(input_tokens=2, output_tokens=3)),
+            assistant_index,
+            buffer,
+            stop_on_error=True,
+        ) == (True, False)
+        assert app.usage.input_tokens == 2
+        assert app.usage.output_tokens == 3
+
+        assert app._handle_agent_stream_event(
+            AgentError("provider down"),
+            assistant_index,
+            buffer,
+            stop_on_error=True,
+        ) == (True, True)
+        assert any(entry.content == "provider down" for entry in app.transcript)
 
 
 def test_cost_text_shows_cumulative_provider_usage(monkeypatch, tmp_path: Path) -> None:

@@ -201,8 +201,8 @@ PERMISSION_KEYS: dict[str, PermissionResolution] = {
 
 ASSISTANT_ACCENT = "#8B5CF6"
 PROJECT_NOTICE = "Apache-2.0 | Kroonen AI Inc. | hello@kroonen.ai"
-STREAM_RENDER_INTERVAL = 1 / 30
-STREAM_RENDER_MAX_BUFFERED_CHARS = 180
+STREAM_RENDER_INTERVAL = 0.05
+STREAM_RENDER_MAX_BUFFERED_CHARS = 240
 STARTUP_ASCII = r"""
  █████        ███  █████                             █████████  ████
 ░░███        ░░░  ░░███                             ███░░░░░███░░███
@@ -524,6 +524,7 @@ class LibreClawApp(App[None]):
         self._active_task: asyncio.Task[None] | None = None
         self._pending_permission: AgentPermissionRequest | None = None
         self._tool_entry_by_call_id: dict[str, int] = {}
+        self._chat_entry_spans: dict[int, tuple[int, int]] = {}
         self._started_at = time.monotonic()
         self._last_assistant_response = ""
         self._goal_description: str | None = None
@@ -792,41 +793,13 @@ class LibreClawApp(App[None]):
 
         try:
             async for event in self.agent.run(user_message):
-                if isinstance(event, AgentTextDelta):
-                    stream_buffer.append(event.text)
-                    if stream_buffer.should_flush(time.monotonic()):
-                        self._flush_stream_buffer(assistant_index, stream_buffer)
-                    continue
-
-                if isinstance(event, AgentToolCall):
-                    self._flush_stream_buffer(assistant_index, stream_buffer)
-                    self._append_tool_call(event.call)
-                    continue
-
-                if isinstance(event, AgentPermissionRequest):
-                    self._flush_stream_buffer(assistant_index, stream_buffer)
-                    self._pending_permission = event
-                    self._show_permission_prompt(event)
-                    continue
-
-                if isinstance(event, AgentToolResult):
-                    self._flush_stream_buffer(assistant_index, stream_buffer)
-                    self._append_tool_result(event.call, event.result)
-                    continue
-
-                if isinstance(event, AgentDone):
-                    self._flush_stream_buffer(assistant_index, stream_buffer)
-                    if event.usage is not None:
-                        self.usage = combine_usage(self.usage, event.usage) or self.usage
-                        self._update_status()
-                    continue
-
-                if isinstance(event, AgentError):
-                    self._flush_stream_buffer(assistant_index, stream_buffer)
-                    if not self.transcript[assistant_index].content:
-                        self.transcript.pop(assistant_index)
-                        self._render_transcript()
-                    self._append_system(event.message)
+                handled, should_stop = self._handle_agent_stream_event(
+                    event,
+                    assistant_index,
+                    stream_buffer,
+                    stop_on_error=True,
+                )
+                if handled and should_stop:
                     break
         except asyncio.CancelledError:
             self._flush_stream_buffer(assistant_index, stream_buffer)
@@ -868,41 +841,13 @@ class LibreClawApp(App[None]):
                     self._update_status()
                     continue
 
-                if isinstance(event, AgentTextDelta):
-                    stream_buffer.append(event.text)
-                    if stream_buffer.should_flush(time.monotonic()):
-                        self._flush_stream_buffer(current_assistant_index, stream_buffer)
-                    continue
-
-                if isinstance(event, AgentToolCall):
-                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
-                    self._append_tool_call(event.call)
-                    continue
-
-                if isinstance(event, AgentPermissionRequest):
-                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
-                    self._pending_permission = event
-                    self._show_permission_prompt(event)
-                    continue
-
-                if isinstance(event, AgentToolResult):
-                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
-                    self._append_tool_result(event.call, event.result)
-                    continue
-
-                if isinstance(event, AgentDone):
-                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
-                    if event.usage is not None:
-                        self.usage = combine_usage(self.usage, event.usage) or self.usage
-                        self._update_status()
-                    continue
-
-                if isinstance(event, AgentError):
-                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
-                    if current_assistant_index < len(self.transcript) and not self.transcript[current_assistant_index].content:
-                        self.transcript.pop(current_assistant_index)
-                        self._render_transcript()
-                    self._append_system(event.message)
+                handled, _ = self._handle_agent_stream_event(
+                    event,
+                    current_assistant_index,
+                    stream_buffer,
+                    stop_on_error=False,
+                )
+                if handled:
                     continue
 
                 if isinstance(event, GoalJudgeResult):
@@ -937,6 +882,53 @@ class LibreClawApp(App[None]):
             self._goal_turn = 0
             self._update_status()
             self.query_one("#input", Input).focus()
+
+    def _handle_agent_stream_event(
+        self,
+        event: object,
+        assistant_index: int,
+        stream_buffer: StreamRenderBuffer,
+        *,
+        stop_on_error: bool,
+    ) -> tuple[bool, bool]:
+        if isinstance(event, AgentTextDelta):
+            stream_buffer.append(event.text)
+            if stream_buffer.should_flush(time.monotonic()):
+                self._flush_stream_buffer(assistant_index, stream_buffer)
+            return True, False
+
+        if isinstance(event, AgentToolCall):
+            self._flush_stream_buffer(assistant_index, stream_buffer)
+            self._append_tool_call(event.call)
+            return True, False
+
+        if isinstance(event, AgentPermissionRequest):
+            self._flush_stream_buffer(assistant_index, stream_buffer)
+            self._pending_permission = event
+            self._show_permission_prompt(event)
+            return True, False
+
+        if isinstance(event, AgentToolResult):
+            self._flush_stream_buffer(assistant_index, stream_buffer)
+            self._append_tool_result(event.call, event.result)
+            return True, False
+
+        if isinstance(event, AgentDone):
+            self._flush_stream_buffer(assistant_index, stream_buffer)
+            if event.usage is not None:
+                self.usage = combine_usage(self.usage, event.usage) or self.usage
+                self._update_status()
+            return True, False
+
+        if isinstance(event, AgentError):
+            self._flush_stream_buffer(assistant_index, stream_buffer)
+            if assistant_index < len(self.transcript) and not self.transcript[assistant_index].content:
+                self.transcript.pop(assistant_index)
+                self._render_transcript()
+            self._append_system(event.message)
+            return True, stop_on_error
+
+        return False, False
 
     def _flush_stream_buffer(self, assistant_index: int, stream_buffer: StreamRenderBuffer) -> None:
         text = stream_buffer.flush(time.monotonic())
@@ -1455,13 +1447,37 @@ class LibreClawApp(App[None]):
 
     def _append_to_entry(self, index: int, text: str) -> None:
         self.transcript[index].content += text
-        self._render_transcript()
+        if not self._replace_rendered_tail_entry(index):
+            self._render_transcript()
 
     def _render_transcript(self) -> None:
         chat = self.query_one("#chat", RichLog)
         chat.clear()
+        self._chat_entry_spans.clear()
         for index, entry in enumerate(self.transcript):
+            start_line = len(chat.lines)
             chat.write(self._format_entry(entry, index), scroll_end=True)
+            self._chat_entry_spans[index] = (start_line, len(chat.lines))
+
+    def _replace_rendered_tail_entry(self, index: int) -> bool:
+        if index != len(self.transcript) - 1:
+            return False
+
+        span = self._chat_entry_spans.get(index)
+        if span is None:
+            return False
+
+        chat = self.query_one("#chat", RichLog)
+        start_line, end_line = span
+        if start_line < 0 or end_line < start_line or end_line > len(chat.lines):
+            return False
+
+        del chat.lines[start_line:end_line]
+        if hasattr(chat, "_line_cache"):
+            chat._line_cache.clear()
+        chat.write(self._format_entry(self.transcript[index], index), scroll_end=True)
+        self._chat_entry_spans[index] = (start_line, len(chat.lines))
+        return True
 
     def _format_entry(self, entry: TranscriptEntry, index: int = 0) -> RenderableType:
         if entry.role == "user":
