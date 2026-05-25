@@ -13,6 +13,7 @@ from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
 from libre_claw.providers.openrouter_catalog import OPENROUTER_MODEL_PRESETS
+from libre_claw.core.heartbeat import HeartbeatError, heartbeat_prompt, parse_heartbeat_interval
 from libre_claw.telegram.auth import TelegramAuth
 from libre_claw.telegram.bridge import (
     TelegramBridge,
@@ -75,6 +76,8 @@ class TelegramHandlers:
     def __init__(self, bridge: TelegramBridge, auth: TelegramAuth) -> None:
         self.bridge = bridge
         self.auth = auth
+        self._heartbeat_tasks: dict[int, asyncio.Task[None]] = {}
+        self._heartbeat_intervals: dict[int, int] = {}
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
@@ -148,6 +151,51 @@ class TelegramHandlers:
         text = " ".join(context.args or [])
         response = await self.bridge.schedule_text(update.effective_chat.id, text)
         await _reply_text_chunks(update.effective_message, response, self.bridge.config.telegram.max_message_length)
+
+    async def heartbeat(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        chat_id = update.effective_chat.id
+        text = " ".join(context.args or [])
+        parts = text.split(maxsplit=1)
+        action = parts[0].lower() if parts else "status"
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if action in {"status", ""}:
+            active = chat_id in self._heartbeat_tasks and not self._heartbeat_tasks[chat_id].done()
+            interval = self._heartbeat_intervals.get(chat_id, self.bridge.config.heartbeat.interval_minutes)
+            await update.effective_message.reply_text(
+                f"Heartbeat active: {active}\n"
+                f"Interval: every {interval} minutes\n"
+                "Use /heartbeat once, /heartbeat start every 30 minutes, or /heartbeat stop."
+            )
+            return
+
+        if action in {"once", "run", "now"}:
+            await update.effective_message.reply_text("Heartbeat check started.")
+            await self._run_telegram_heartbeat_once(context, chat_id)
+            return
+
+        if action in {"start", "on", "every"}:
+            interval_text = rest if action != "every" else text
+            try:
+                minutes = parse_heartbeat_interval(interval_text, self.bridge.config.heartbeat.interval_minutes)
+            except HeartbeatError as exc:
+                await update.effective_message.reply_text(str(exc))
+                return
+            self._start_telegram_heartbeat(context, chat_id, minutes)
+            await update.effective_message.reply_text(f"Heartbeat started: every {minutes} minutes.")
+            return
+
+        if action in {"stop", "off", "pause"}:
+            task = self._heartbeat_tasks.pop(chat_id, None)
+            if task is not None and not task.done():
+                task.cancel()
+            self._heartbeat_intervals.pop(chat_id, None)
+            await update.effective_message.reply_text("Heartbeat stopped.")
+            return
+
+        await update.effective_message.reply_text("Usage: /heartbeat status|once|start [every 30 minutes|1h]|stop")
 
     async def message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
@@ -230,6 +278,61 @@ class TelegramHandlers:
             f"Unknown Telegram command: {command}\n\n{_telegram_help_text()}",
             self.bridge.config.telegram.max_message_length,
         )
+
+    def _start_telegram_heartbeat(self, context: ContextTypes.DEFAULT_TYPE, chat_id: int, interval_minutes: int) -> None:
+        existing = self._heartbeat_tasks.get(chat_id)
+        if existing is not None and not existing.done():
+            existing.cancel()
+        self._heartbeat_intervals[chat_id] = max(1, interval_minutes)
+        self._heartbeat_tasks[chat_id] = asyncio.create_task(
+            self._telegram_heartbeat_loop(context, chat_id),
+            name=f"libre-claw-telegram-heartbeat-{chat_id}",
+        )
+
+    async def _telegram_heartbeat_loop(self, context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self._heartbeat_intervals.get(chat_id, 60) * 60)
+                await context.bot.send_message(chat_id=chat_id, text="Heartbeat check started.")
+                await self._run_telegram_heartbeat_once(context, chat_id)
+        except asyncio.CancelledError:
+            raise
+
+    async def _run_telegram_heartbeat_once(self, context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+        prompt = heartbeat_prompt(self.bridge.config, surface="telegram")
+        accumulated = ""
+        async for event in self.bridge.stream_message(chat_id, prompt):
+            if isinstance(event, TelegramText):
+                accumulated += event.text
+                continue
+            if isinstance(event, TelegramToolNotice):
+                await _send_text_chunks(context.bot, chat_id, event.text, self.bridge.config.telegram.max_message_length)
+                continue
+            if isinstance(event, TelegramPermissionPrompt):
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=event.text,
+                    reply_markup=InlineKeyboardMarkup(
+                        [
+                            [
+                                InlineKeyboardButton("Approve", callback_data=f"perm:yes:{event.prompt_id}"),
+                                InlineKeyboardButton("Deny", callback_data=f"perm:no:{event.prompt_id}"),
+                            ]
+                        ]
+                    ),
+                )
+                continue
+            if isinstance(event, TelegramDone):
+                await _send_text_chunks(
+                    context.bot,
+                    chat_id,
+                    accumulated or "Heartbeat done.",
+                    self.bridge.config.telegram.max_message_length,
+                )
+                continue
+            if isinstance(event, TelegramError):
+                await _send_text_chunks(context.bot, chat_id, event.text, self.bridge.config.telegram.max_message_length)
+                return
 
     async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
@@ -366,6 +469,11 @@ async def _reply_text_chunk(message: Any, chunk: str, configured_limit: int, *, 
             await _reply_text_chunk(message, smaller_chunk, smaller_limit, reply_markup=markup)
 
 
+async def _send_text_chunks(bot: Any, chat_id: int, text: str, configured_limit: int) -> None:
+    for chunk in _message_chunks(text, configured_limit):
+        await bot.send_message(chat_id=chat_id, text=chunk)
+
+
 def _message_chunks(text: str, configured_limit: int) -> list[str]:
     limit = _telegram_message_limit(configured_limit)
     remaining = text or " "
@@ -422,6 +530,7 @@ def _telegram_help_text() -> str:
             "/status - Show token and cost usage",
             "/compact - Compact the current context",
             "/schedule examples|list|add ... - Manage recurring runs",
+            "/heartbeat status|once|start|stop - Recurring check-ins",
             "/cancel - Cancel the active generation",
             "/stop - Cancel the active generation",
             "",
@@ -442,6 +551,7 @@ def telegram_command_specs() -> Sequence[tuple[str, str]]:
         ("status", "Show session info"),
         ("compact", "Compact the current context"),
         ("schedule", "Manage recurring runs"),
+        ("heartbeat", "Recurring check-ins"),
         ("cancel", "Cancel active generation"),
         ("stop", "Cancel active generation"),
     )

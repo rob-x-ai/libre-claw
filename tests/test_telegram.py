@@ -222,6 +222,7 @@ def test_telegram_command_specs_drive_bot_menu() -> None:
     assert commands["status"] == "Show session info"
     assert commands["stop"] == "Cancel active generation"
     assert "schedule" in commands
+    assert commands["heartbeat"] == "Recurring check-ins"
 
 
 def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monkeypatch) -> None:

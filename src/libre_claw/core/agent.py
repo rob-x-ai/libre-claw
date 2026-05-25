@@ -56,7 +56,21 @@ class AgentError:
     message: str
 
 
-AgentEvent = AgentTextDelta | AgentToolCall | AgentToolResult | AgentPermissionRequest | AgentDone | AgentError
+@dataclass(frozen=True)
+class AgentFallback:
+    provider_label: str
+    reason: str
+
+
+AgentEvent = (
+    AgentTextDelta
+    | AgentToolCall
+    | AgentToolResult
+    | AgentPermissionRequest
+    | AgentDone
+    | AgentError
+    | AgentFallback
+)
 SkillProvider = Callable[[str], Sequence[str] | Awaitable[Sequence[str]]]
 SoulProvider = Callable[[], Sequence[str] | Awaitable[Sequence[str]]]
 
@@ -78,6 +92,7 @@ class Agent:
         system_prompt_extra: str = "",
         skill_provider: SkillProvider | None = None,
         soul_provider: SoulProvider | None = None,
+        fallback_providers: Sequence[tuple[str, LLMProvider]] | None = None,
     ) -> None:
         self.session = session
         self.provider = provider
@@ -91,6 +106,7 @@ class Agent:
         self.system_prompt_extra = system_prompt_extra
         self.skill_provider = skill_provider
         self.soul_provider = soul_provider
+        self.fallback_providers = tuple(fallback_providers or ())
         self._active_skills: list[str] = []
         self._active_soul: list[str] = []
         self._logger = structlog.get_logger(__name__)
@@ -101,46 +117,62 @@ class Agent:
         self._active_skills = await self._load_skills(user_message)
         total_tool_calls = 0
         turn_usage: Usage | None = None
+        active_provider = self.provider
+        fallback_queue = list(self.fallback_providers)
 
         while True:
             assistant_chunks: list[str] = []
             tool_calls: list[ToolCall] = []
             provider_failed = False
+            provider_error = ""
 
-            try:
-                self._maybe_compact_session()
-                async for event in self.provider.complete(
-                    messages=self.session.messages,
-                    tools=self.tool_registry.schemas(),
-                    system=self._build_system_prompt(),
-                ):
-                    if isinstance(event, TextDelta):
-                        assistant_chunks.append(event.text)
-                        yield AgentTextDelta(event.text)
-                        continue
+            while True:
+                try:
+                    self._maybe_compact_session()
+                    async for event in active_provider.complete(
+                        messages=self.session.messages,
+                        tools=self.tool_registry.schemas(),
+                        system=self._build_system_prompt(),
+                    ):
+                        if isinstance(event, TextDelta):
+                            assistant_chunks.append(event.text)
+                            yield AgentTextDelta(event.text)
+                            continue
 
-                    if isinstance(event, ToolCallReady):
-                        call = ToolCall(id=event.tool_call_id, name=event.name, arguments=event.input)
-                        tool_calls.append(call)
-                        yield AgentToolCall(call)
-                        continue
+                        if isinstance(event, ToolCallReady):
+                            call = ToolCall(id=event.tool_call_id, name=event.name, arguments=event.input)
+                            tool_calls.append(call)
+                            yield AgentToolCall(call)
+                            continue
 
-                    if isinstance(event, Done):
-                        turn_usage = combine_usage(turn_usage, event.usage)
-                        continue
+                        if isinstance(event, Done):
+                            turn_usage = combine_usage(turn_usage, event.usage)
+                            continue
 
-                    if isinstance(event, ProviderError):
-                        provider_failed = True
-                        self._save_assistant_text(assistant_chunks)
-                        yield AgentError(event.message)
-                        break
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                provider_failed = True
-                self._logger.warning("agent_stream_failed", error=str(exc))
-                self._save_assistant_text(assistant_chunks)
-                yield AgentError(str(exc))
+                        if isinstance(event, ProviderError):
+                            provider_failed = True
+                            provider_error = event.message
+                            break
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    provider_failed = True
+                    provider_error = str(exc)
+                    self._logger.warning("agent_stream_failed", error=provider_error)
+
+                if not provider_failed:
+                    break
+
+                if assistant_chunks or tool_calls or not fallback_queue:
+                    self._save_assistant_text(assistant_chunks)
+                    yield AgentError(provider_error)
+                    break
+
+                fallback = fallback_queue.pop(0)
+                active_provider = fallback[1]
+                yield AgentFallback(provider_label=fallback[0], reason=provider_error)
+                provider_failed = False
+                provider_error = ""
 
             if provider_failed:
                 return

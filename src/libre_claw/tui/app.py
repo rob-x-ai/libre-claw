@@ -40,6 +40,7 @@ from libre_claw.core import (
     Agent,
     AgentDone,
     AgentError,
+    AgentFallback,
     AgentPermissionRequest,
     AgentTextDelta,
     AgentToolCall,
@@ -53,6 +54,7 @@ from libre_claw.core import (
     GoalRunner,
     GoalStopped,
     GoalTurnStarted,
+    HeartbeatError,
     JudgeDecision,
     RunEvent,
     RunRecord,
@@ -60,6 +62,8 @@ from libre_claw.core import (
     RunStore,
     Session,
     automation_examples,
+    heartbeat_prompt,
+    parse_heartbeat_interval,
 )
 from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
@@ -76,7 +80,14 @@ from libre_claw.core.usage import (
     usage_report_text,
 )
 from libre_claw.daemon import DaemonClient, daemon_base_url
-from libre_claw.providers import LLMProvider, ProviderConfigurationError, Usage, combine_usage, create_provider
+from libre_claw.providers import (
+    LLMProvider,
+    ProviderConfigurationError,
+    Usage,
+    combine_usage,
+    create_fallback_providers,
+    create_provider,
+)
 from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
@@ -199,6 +210,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/skills", "/skills list|add|edit|delete", "Manage Libre Claw skills"),
     SlashCommand("/soul", "/soul status|show|init|reload", "Manage soul.md persona injection"),
     SlashCommand("/schedule", "/schedule list|add|pause|resume|delete|examples", "Manage recurring local runs"),
+    SlashCommand("/heartbeat", "/heartbeat status|once|start [every 30 minutes]|stop", "Run recurring check-ins"),
     SlashCommand("/memory", "/memory list|add <fact>|forget <id>", "Manage persistent memory facts"),
     SlashCommand("/telegram", "/telegram", "Show Telegram bridge status"),
     SlashCommand("/tools", "/tools list|expand|collapse|toggle <index>", "Inspect and control tool details"),
@@ -631,6 +643,8 @@ class LibreClawApp(App[None]):
         self._artifact_tab: ArtifactTab = "summary"
         self._artifact_visible = False
         self._run_background_tasks: set[asyncio.Task[Any]] = set()
+        self._heartbeat_task: asyncio.Task[None] | None = None
+        self._heartbeat_interval_minutes = max(1, self.config.heartbeat.interval_minutes)
 
         self._rebuild_agent()
 
@@ -687,10 +701,14 @@ class LibreClawApp(App[None]):
         if self.provider_error is not None:
             self._append_system(self.provider_error)
             self._append_system(_setup_first_run_hint())
+        if self.config.heartbeat.enabled and self.config.heartbeat.route == "tui":
+            self._start_tui_heartbeat(self._heartbeat_interval_minutes)
 
     async def on_unmount(self) -> None:
         if self._active_task is not None and not self._active_task.done():
             self._active_task.cancel()
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -886,6 +904,9 @@ class LibreClawApp(App[None]):
             return
         if command == "/schedule":
             await self._handle_schedule_command(argument)
+            return
+        if command == "/heartbeat":
+            await self._handle_heartbeat_command(argument)
             return
         if command == "/memory":
             await self._handle_memory_command(argument)
@@ -1093,6 +1114,12 @@ class LibreClawApp(App[None]):
         if event_type == "error":
             self._append_system(str(data.get("message", "Daemon run error.")))
             return
+        if event_type == "provider_fallback":
+            self._append_system(
+                f"Provider fallback engaged: {data.get('provider', 'fallback')}\n"
+                f"Reason: {data.get('reason', '')}"
+            )
+            return
         if event_type == "run_finished":
             self._append_system(f"Daemon run {run_id} finished: {data.get('state', 'done')}")
 
@@ -1289,6 +1316,15 @@ class LibreClawApp(App[None]):
             self._append_system(event.message)
             self._record_run_event_later("error", {"message": event.message})
             return True, stop_on_error
+
+        if isinstance(event, AgentFallback):
+            self._flush_stream_buffer(assistant_index, stream_buffer)
+            self._append_system(f"Provider fallback engaged: {event.provider_label}\nReason: {event.reason}")
+            self._record_run_event_later(
+                "provider_fallback",
+                {"provider": event.provider_label, "reason": event.reason},
+            )
+            return True, False
 
         return False, False
 
@@ -1916,6 +1952,72 @@ class LibreClawApp(App[None]):
             return
 
         self._append_system(_schedule_help_text())
+
+    async def _handle_heartbeat_command(self, argument: str) -> None:
+        parts = argument.split(maxsplit=1)
+        action = parts[0].lower() if parts else "status"
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if action in {"status", ""}:
+            active = self._heartbeat_task is not None and not self._heartbeat_task.done()
+            self._append_system(
+                "Heartbeat status:\n"
+                f"- Active in this TUI: {active}\n"
+                f"- Interval: every {self._heartbeat_interval_minutes} minutes\n"
+                f"- Config route: {self.config.heartbeat.route}\n"
+                f"- Config enabled: {self.config.heartbeat.enabled}\n"
+                "- Use `/heartbeat once`, `/heartbeat start every 30 minutes`, or `/heartbeat stop`."
+            )
+            return
+
+        if action in {"once", "run", "now"}:
+            await self._run_tui_heartbeat_once()
+            return
+
+        if action in {"start", "on", "every"}:
+            interval_text = rest if action != "every" else argument
+            try:
+                minutes = parse_heartbeat_interval(interval_text, self.config.heartbeat.interval_minutes)
+            except HeartbeatError as exc:
+                self._append_system(str(exc))
+                return
+            self._start_tui_heartbeat(minutes)
+            self._append_system(f"Heartbeat started in this TUI: every {minutes} minutes.")
+            return
+
+        if action in {"stop", "off", "pause"}:
+            if self._heartbeat_task is not None and not self._heartbeat_task.done():
+                self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+            self._append_system("Heartbeat stopped for this TUI session.")
+            return
+
+        self._append_system("Usage: /heartbeat status|once|start [every 30 minutes|1h]|stop")
+
+    def _start_tui_heartbeat(self, interval_minutes: int) -> None:
+        self._heartbeat_interval_minutes = max(1, interval_minutes)
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+        self._heartbeat_task = asyncio.create_task(self._tui_heartbeat_loop(), name="libre-claw-tui-heartbeat")
+
+    async def _tui_heartbeat_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self._heartbeat_interval_minutes * 60)
+                await self._run_tui_heartbeat_once()
+        except asyncio.CancelledError:
+            raise
+
+    async def _run_tui_heartbeat_once(self) -> None:
+        if self._active_task is not None and not self._active_task.done():
+            self._append_system("Heartbeat skipped: an agent response is already active.")
+            return
+        if self._pending_permission is not None:
+            self._append_system("Heartbeat skipped: a permission prompt is waiting.")
+            return
+        prompt = heartbeat_prompt(self.config, surface="tui")
+        self._append_system("Heartbeat check started.")
+        await self.handle_user_input(prompt)
 
     async def _list_schedule_payloads(self) -> list[dict[str, Any]]:
         if self.daemon_client is not None:
@@ -2551,6 +2653,7 @@ class LibreClawApp(App[None]):
             return
         try:
             provider = create_provider(self.config)
+            fallbacks = create_fallback_providers(self.config)
         except ProviderConfigurationError as exc:
             self.provider_error = str(exc)
             return
@@ -2573,6 +2676,7 @@ class LibreClawApp(App[None]):
             system_prompt_extra=self.config.agent.system_prompt_extra,
             skill_provider=self.skill_store.relevant_skill_texts,
             soul_provider=self.soul_store.soul_texts,
+            fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
         )
 
     async def _initialize_memory(self) -> None:
@@ -2829,6 +2933,20 @@ class LibreClawApp(App[None]):
                 for suggestion in suggestions
                 if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
             ][:6]
+        if lowered.startswith("/heartbeat "):
+            query = lowered.removeprefix("/heartbeat ").strip()
+            suggestions = [
+                SlashCommand("/heartbeat status", "/heartbeat status", "Show heartbeat state"),
+                SlashCommand("/heartbeat once", "/heartbeat once", "Run one checklist now"),
+                SlashCommand("/heartbeat start every 30 minutes", "/heartbeat start [interval]", "Start TUI check-ins"),
+                SlashCommand("/heartbeat start 1h", "/heartbeat start 1h", "Start hourly TUI check-ins"),
+                SlashCommand("/heartbeat stop", "/heartbeat stop", "Stop TUI check-ins"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
         return []
 
     def _slash_suggestion_text(self, suggestions: list[SlashCommand]) -> str:
@@ -3001,6 +3119,8 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
         tui=config.tui,
         telegram=config.telegram,
         goal=config.goal,
+        fallback=config.fallback,
+        heartbeat=config.heartbeat,
         daemon=config.daemon,
         automations=config.automations,
         browser=config.browser,

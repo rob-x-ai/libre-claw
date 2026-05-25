@@ -118,6 +118,30 @@ judge_model = "" # empty means use the selected judge provider default/current m
 judge_temperature = 0.0
 judge_max_tokens = 1024
 
+[fallback]
+enabled = false
+routes = []
+# Example:
+# [[fallback.routes]]
+# provider = "openrouter"
+# model = "openrouter/auto"
+# api_key_env = "OPENROUTER_API_KEY_BACKUP" # optional; omit to use the normal provider key
+
+[heartbeat]
+enabled = false
+interval_minutes = 60
+route = "tui" # tui | telegram | report
+telegram_chat_id = 0 # required only when route = "telegram"
+provider = "" # empty means current provider
+model = "" # empty means current model
+checklist = [
+  "Review active and recent runs.",
+  "Check blocked approvals.",
+  "Look for notable repository changes.",
+  "Report risks, next actions, and anything that needs attention.",
+]
+prompt = "" # optional full custom heartbeat prompt; when empty, checklist is used
+
 [daemon]
 host = "127.0.0.1"
 port = 8766

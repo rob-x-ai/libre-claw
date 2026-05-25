@@ -241,6 +241,17 @@ def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_pat
     assert app._should_complete_on_submit("/model openrouter:deepseek/deepseek-v4-flash") is False
 
 
+def test_heartbeat_suggestions(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    app = LibreClawApp(config=load_config())
+
+    suggestions = app._slash_suggestion_matches("/heartbeat ")
+
+    assert any(suggestion.name == "/heartbeat once" for suggestion in suggestions)
+    assert any(suggestion.name == "/heartbeat stop" for suggestion in suggestions)
+
+
 async def test_model_global_flag_persists_user_default(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

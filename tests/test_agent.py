@@ -12,6 +12,7 @@ from libre_claw.core.agent import (
     Agent,
     AgentDone,
     AgentError,
+    AgentFallback,
     AgentPermissionRequest,
     AgentTextDelta,
     AgentToolCall,
@@ -21,7 +22,16 @@ from libre_claw.core.agent import (
 from libre_claw.core.permissions import PermissionManager
 from libre_claw.core.session import ChatMessage, Session, text_block, tool_result_block, tool_use_block
 from libre_claw.core.tools import BaseTool, ToolCall, ToolContext, ToolRegistry, ToolResult
-from libre_claw.providers.base import Done, LLMProvider, StreamEvent, TextDelta, ToolCallReady, ToolSchema, Usage
+from libre_claw.providers.base import (
+    Done,
+    LLMProvider,
+    ProviderError,
+    StreamEvent,
+    TextDelta,
+    ToolCallReady,
+    ToolSchema,
+    Usage,
+)
 
 
 class ScriptedProvider(LLMProvider):
@@ -88,6 +98,7 @@ def make_agent(
     system_prompt_extra: str = "",
     skill_provider: SkillProvider | None = None,
     soul_provider=None,
+    fallback_providers=None,
 ) -> Agent:
     permissions = PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=True))
     return Agent(
@@ -100,6 +111,7 @@ def make_agent(
         system_prompt_extra=system_prompt_extra,
         skill_provider=skill_provider,
         soul_provider=soul_provider,
+        fallback_providers=fallback_providers,
     )
 
 
@@ -281,3 +293,30 @@ async def test_agent_stops_when_tool_call_ceiling_is_exceeded() -> None:
     events = await collect_events(agent, "Too many")
 
     assert isinstance(events[-1], AgentError)
+
+
+async def test_agent_falls_back_when_primary_provider_fails_before_output() -> None:
+    primary = ScriptedProvider([[ProviderError("rate limited")]])
+    fallback = ScriptedProvider([[TextDelta("ok"), Done()]])
+    agent = make_agent(primary, fallback_providers=(("openrouter:backup", fallback),))
+
+    events = await collect_events(agent, "Hi")
+
+    assert events == [
+        AgentFallback("openrouter:backup", "rate limited"),
+        AgentTextDelta("ok"),
+        AgentDone(None),
+    ]
+    assert len(primary.received_messages) == 1
+    assert len(fallback.received_messages) == 1
+
+
+async def test_agent_does_not_fallback_after_partial_output() -> None:
+    primary = ScriptedProvider([[TextDelta("partial"), ProviderError("down")]])
+    fallback = ScriptedProvider([[TextDelta("ok"), Done()]])
+    agent = make_agent(primary, fallback_providers=(("openrouter:backup", fallback),))
+
+    events = await collect_events(agent, "Hi")
+
+    assert events == [AgentTextDelta("partial"), AgentError("down")]
+    assert fallback.received_messages == []

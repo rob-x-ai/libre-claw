@@ -99,6 +99,31 @@ class GoalConfig:
 
 
 @dataclass(frozen=True)
+class FallbackRouteConfig:
+    provider: str
+    model: str
+    api_key_env: str
+
+
+@dataclass(frozen=True)
+class FallbackConfig:
+    enabled: bool
+    routes: tuple[FallbackRouteConfig, ...]
+
+
+@dataclass(frozen=True)
+class HeartbeatConfig:
+    enabled: bool
+    interval_minutes: int
+    route: str
+    telegram_chat_id: int
+    provider: str
+    model: str
+    checklist: tuple[str, ...]
+    prompt: str
+
+
+@dataclass(frozen=True)
 class DaemonConfig:
     host: str
     port: int
@@ -143,6 +168,8 @@ class LibreClawConfig:
     tui: TUIConfig
     telegram: TelegramConfig
     goal: GoalConfig
+    fallback: FallbackConfig
+    heartbeat: HeartbeatConfig
     daemon: DaemonConfig
     automations: AutomationsConfig
     browser: BrowserConfig
@@ -429,6 +456,25 @@ def _load_default_config() -> ConfigTable:
             "judge_temperature": 0.0,
             "judge_max_tokens": 1024,
         },
+        "fallback": {
+            "enabled": False,
+            "routes": [],
+        },
+        "heartbeat": {
+            "enabled": False,
+            "interval_minutes": 60,
+            "route": "tui",
+            "telegram_chat_id": 0,
+            "provider": "",
+            "model": "",
+            "checklist": [
+                "Review active and recent runs.",
+                "Check blocked approvals.",
+                "Look for notable repository changes.",
+                "Report risks, next actions, and anything that needs attention.",
+            ],
+            "prompt": "",
+        },
         "daemon": {
             "host": "127.0.0.1",
             "port": 8766,
@@ -597,6 +643,8 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
     tui = _section(data, "tui")
     telegram = _section(data, "telegram")
     goal = _section(data, "goal")
+    fallback = _section(data, "fallback")
+    heartbeat = _section(data, "heartbeat")
     daemon = _section(data, "daemon")
     automations = _section(data, "automations")
     browser = _section(data, "browser")
@@ -659,6 +707,20 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             judge_temperature=_float(goal, "judge_temperature"),
             judge_max_tokens=_int(goal, "judge_max_tokens"),
         ),
+        fallback=FallbackConfig(
+            enabled=_bool(fallback, "enabled"),
+            routes=_fallback_routes(fallback),
+        ),
+        heartbeat=HeartbeatConfig(
+            enabled=_bool(heartbeat, "enabled"),
+            interval_minutes=_int(heartbeat, "interval_minutes"),
+            route=_str(heartbeat, "route"),
+            telegram_chat_id=_int(heartbeat, "telegram_chat_id"),
+            provider=_str(heartbeat, "provider"),
+            model=_str(heartbeat, "model"),
+            checklist=tuple(_list(heartbeat, "checklist", str)),
+            prompt=_str(heartbeat, "prompt"),
+        ),
         daemon=DaemonConfig(
             host=_str(daemon, "host"),
             port=_int(daemon, "port"),
@@ -711,6 +773,23 @@ def _mcp_servers(mcp: Mapping[str, Any]) -> Mapping[str, Mapping[str, Any]]:
     if not isinstance(value, Mapping):
         raise ConfigError("Config value mcp.servers must be a table")
     return {str(name): dict(config) for name, config in value.items() if isinstance(config, Mapping)}
+
+
+def _fallback_routes(fallback: Mapping[str, Any]) -> tuple[FallbackRouteConfig, ...]:
+    raw_routes = fallback.get("routes", [])
+    if not isinstance(raw_routes, list):
+        raise ConfigError("Config value fallback.routes must be a list of tables")
+    routes: list[FallbackRouteConfig] = []
+    for index, raw_route in enumerate(raw_routes):
+        if not isinstance(raw_route, Mapping):
+            raise ConfigError(f"Config value fallback.routes[{index}] must be a table")
+        provider = str(raw_route.get("provider", "")).strip().lower()
+        model = str(raw_route.get("model", "")).strip()
+        api_key_env = str(raw_route.get("api_key_env", "")).strip()
+        if not provider:
+            raise ConfigError(f"Config value fallback.routes[{index}].provider cannot be empty")
+        routes.append(FallbackRouteConfig(provider=provider, model=model, api_key_env=api_key_env))
+    return tuple(routes)
 
 
 def _str(section: Mapping[str, Any], key: str) -> str:

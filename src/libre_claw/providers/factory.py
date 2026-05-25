@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
@@ -17,51 +18,107 @@ from libre_claw.providers.openai import OpenAIProvider
 from libre_claw.providers.openrouter import OpenRouterProvider
 
 
-def create_provider(config: LibreClawConfig, api_key_store: ApiKeyStore | None = None) -> LLMProvider:
+@dataclass(frozen=True)
+class ProviderFallback:
+    label: str
+    provider: LLMProvider
+
+
+def create_provider(
+    config: LibreClawConfig,
+    api_key_store: ApiKeyStore | None = None,
+    *,
+    provider_name: str | None = None,
+    model: str | None = None,
+    api_key_env: str | None = None,
+) -> LLMProvider:
     """Create the configured provider."""
-    provider_name = _canonical_provider_name(config.general.default_provider)
-    provider_config = config.providers.get(provider_name)
-    if provider_name not in {"anthropic", "openai", "openrouter", "ollama", "codex"}:
+    resolved_provider_name = _canonical_provider_name(provider_name or config.general.default_provider)
+    raw_provider_config = config.providers.get(resolved_provider_name)
+    provider_config = dict(raw_provider_config) if isinstance(raw_provider_config, Mapping) else None
+    if api_key_env:
+        provider_config = provider_config or {}
+        provider_config["api_key_env"] = api_key_env
+    if model:
+        provider_config = provider_config or {}
+        provider_config["default_model"] = model
+    if resolved_provider_name not in {"anthropic", "openai", "openrouter", "ollama", "codex"}:
         msg = (
-            f"Provider '{provider_name}' is not supported. "
+            f"Provider '{resolved_provider_name}' is not supported. "
             "Use 'anthropic', 'openai', 'openrouter', 'ollama', or 'codex'."
         )
         raise ProviderConfigurationError(msg)
     if provider_config is None:
-        raise ProviderConfigurationError(f"Missing [providers.{provider_name}] configuration.")
+        raise ProviderConfigurationError(f"Missing [providers.{resolved_provider_name}] configuration.")
 
-    if provider_name == "codex":
+    if resolved_provider_name == "codex":
         return _create_codex_provider(config, provider_config)
 
-    if provider_name == "ollama":
+    if resolved_provider_name == "ollama":
         return _create_ollama_provider(config, provider_config, api_key_store)
 
-    api_key_env = _str_provider_value(provider_config, "api_key_env", _default_api_key_env(provider_name))
+    resolved_api_key_env = _str_provider_value(
+        provider_config,
+        "api_key_env",
+        _default_api_key_env(resolved_provider_name),
+    )
     store = api_key_store or ApiKeyStore.from_config(config.auth)
-    api_key_lookup = store.get_api_key(provider_name, api_key_env)
+    api_key_lookup = store.get_api_key(resolved_provider_name, resolved_api_key_env)
     if not api_key_lookup.value:
-        provider_label = _provider_label(provider_name)
+        provider_label = _provider_label(resolved_provider_name)
         msg = (
-            f"Missing {provider_label} API key. Set {api_key_env} or run "
-            f"`libre-claw auth set-key {provider_name}` before sending a message."
+            f"Missing {provider_label} API key. Set {resolved_api_key_env} or run "
+            f"`libre-claw auth set-key {resolved_provider_name}` before sending a message."
         )
         raise ProviderConfigurationError(msg)
 
-    model = _resolve_model(config, provider_name, provider_config)
+    resolved_model = model or _resolve_model(config, resolved_provider_name, provider_config)
     max_tokens = _int_provider_value(provider_config, "max_tokens", 16384)
     try:
-        if provider_name == "anthropic":
-            return AnthropicProvider(api_key=api_key_lookup.value, model=model, max_tokens=max_tokens)
-        if provider_name == "openrouter":
+        if resolved_provider_name == "anthropic":
+            return AnthropicProvider(api_key=api_key_lookup.value, model=resolved_model, max_tokens=max_tokens)
+        if resolved_provider_name == "openrouter":
             return OpenRouterProvider(
                 api_key=api_key_lookup.value,
-                model=model,
+                model=resolved_model,
                 max_tokens=max_tokens,
                 base_url=_str_provider_value(provider_config, "base_url", "https://openrouter.ai/api/v1"),
             )
-        return OpenAIProvider(api_key=api_key_lookup.value, model=model, max_tokens=max_tokens)
+        return OpenAIProvider(api_key=api_key_lookup.value, model=resolved_model, max_tokens=max_tokens)
     except RuntimeError as exc:
         raise ProviderConfigurationError(str(exc)) from exc
+
+
+def create_fallback_providers(
+    config: LibreClawConfig,
+    api_key_store: ApiKeyStore | None = None,
+) -> tuple[ProviderFallback, ...]:
+    """Create configured fallback provider candidates without breaking primary setup."""
+    if not config.fallback.enabled:
+        return ()
+
+    fallbacks: list[ProviderFallback] = []
+    for route in config.fallback.routes:
+        try:
+            provider = create_provider(
+                config,
+                api_key_store=api_key_store,
+                provider_name=route.provider,
+                model=route.model or None,
+                api_key_env=route.api_key_env or None,
+            )
+        except ProviderConfigurationError:
+            continue
+        model = route.model or _resolve_model(
+            config,
+            _canonical_provider_name(route.provider),
+            config.providers.get(_canonical_provider_name(route.provider), {}),
+        )
+        label = f"{_canonical_provider_name(route.provider)}:{model}"
+        if route.api_key_env:
+            label += f" via {route.api_key_env}"
+        fallbacks.append(ProviderFallback(label=label, provider=provider))
+    return tuple(fallbacks)
 
 
 def _create_codex_provider(config: LibreClawConfig, provider_config: Mapping[str, Any]) -> CodexProvider:

@@ -65,14 +65,28 @@ def main(ctx: click.Context, config_path: Path | None, working_directory: Path |
     Running without a subcommand opens the Textual TUI. Use `auth` to manage
     provider keys, `config` to inspect defaults, or `telegram` for the daemon.
     """
+    ctx.obj = {"config_path": config_path, "working_directory": working_directory}
     if ctx.invoked_subcommand is not None:
-        ctx.obj = {"config_path": config_path, "working_directory": working_directory}
         return
-    try:
-        config = load_config(config_path=config_path, working_directory=working_directory)
-    except ConfigError as exc:
-        _raise_click_error(str(exc))
+    _run_tui(ctx)
 
+
+@main.command("tui")
+@click.pass_context
+def tui_command(ctx: click.Context) -> None:
+    """Open the Libre Claw terminal UI."""
+    _run_tui(ctx)
+
+
+@main.command("chat")
+@click.pass_context
+def chat_command(ctx: click.Context) -> None:
+    """Open the Libre Claw chat TUI."""
+    _run_tui(ctx)
+
+
+def _run_tui(ctx: click.Context) -> None:
+    config = _load_context_config(ctx)
     app = LibreClawApp(config=config)
     app.run()
 

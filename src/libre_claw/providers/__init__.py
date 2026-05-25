@@ -13,6 +13,7 @@ __all__ = [
     "OpenRouterProvider",
     "ProviderConfigurationError",
     "ProviderError",
+    "ProviderFallback",
     "StreamEvent",
     "TextDelta",
     "ToolCallDelta",
@@ -20,6 +21,7 @@ __all__ = [
     "ToolCallStart",
     "Usage",
     "combine_usage",
+    "create_fallback_providers",
     "create_provider",
 ]
 
@@ -36,7 +38,7 @@ from libre_claw.providers.base import (
     Usage,
     combine_usage,
 )
-from libre_claw.providers.factory import create_provider
+from libre_claw.providers.factory import ProviderFallback, create_fallback_providers, create_provider
 from libre_claw.providers.codex import CodexProvider
 from libre_claw.providers.local import LocalProvider
 from libre_claw.providers.ollama import OllamaProvider

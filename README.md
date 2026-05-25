@@ -103,6 +103,13 @@ Run the app:
 libre-claw
 ```
 
+Explicit aliases are available too:
+
+```bash
+libre-claw tui
+libre-claw chat
+```
+
 or:
 
 ```bash
@@ -414,6 +421,7 @@ Legacy configs that still say `default_provider = "local"` or
 - `/tools list|expand|collapse|toggle <index>`
 - `/skills list|show|add|edit|delete`
 - `/soul status|show|init|reload`
+- `/heartbeat status|once|start|stop`
 - `/memory list|add <fact>|forget <id>`
 - `/telegram`
 - `/exit`
@@ -685,6 +693,71 @@ The bundled examples cover:
 - Daily repo health check.
 - Weekly dependency review.
 - Morning brief.
+
+## Heartbeats
+
+Heartbeats are lightweight recurring check-ins inspired by agent cockpit tools:
+Libre Claw periodically runs a checklist prompt and posts the result into the
+current TUI chat or Telegram chat.
+
+TUI commands:
+
+```text
+/heartbeat status
+/heartbeat once
+/heartbeat start every 30 minutes
+/heartbeat start 1h
+/heartbeat stop
+```
+
+Telegram supports the same command shape:
+
+```text
+/heartbeat once
+/heartbeat start every 30 minutes
+/heartbeat stop
+```
+
+Configure the default checklist in `~/.libre-claw/config.toml`:
+
+```toml
+[heartbeat]
+enabled = false
+interval_minutes = 60
+route = "tui" # tui | telegram | report
+checklist = [
+  "Review active and recent runs.",
+  "Check blocked approvals.",
+  "Look for notable repository changes.",
+  "Report risks, next actions, and anything that needs attention.",
+]
+```
+
+## Provider Fallbacks
+
+Libre Claw can fail over to backup provider/model/account routes when the
+primary provider is rate-limited, down, or unavailable before it has started
+streaming output. Each route may use its own API-key environment variable, which
+lets you keep a backup account separate from the primary one.
+
+```toml
+[fallback]
+enabled = true
+
+[[fallback.routes]]
+provider = "openrouter"
+model = "openrouter/auto"
+api_key_env = "OPENROUTER_BACKUP_API_KEY"
+
+[[fallback.routes]]
+provider = "anthropic"
+model = "claude-sonnet-4-6"
+api_key_env = "ANTHROPIC_BACKUP_API_KEY"
+```
+
+When fallback triggers, the transcript records the provider route and reason.
+If a provider fails after partial text or tool calls have already started, Libre
+Claw stops instead of silently mixing outputs from two models.
 
 ## Browser / Computer Use
 

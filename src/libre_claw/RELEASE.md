@@ -81,6 +81,13 @@ First shippable Libre Claw release from Kroonen AI Inc.
   including `deepseek/deepseek-v4-flash`, `qwen/qwen3.7-max`,
   `moonshotai/kimi-k2.6`, `anthropic/claude-opus-4.7`, and
   `openai/gpt-5.5`.
+- Provider fallback routes can fail over to backup provider/model/account
+  combinations when the primary provider is unavailable before it starts
+  streaming.
+- Heartbeat check-ins through TUI and Telegram with `/heartbeat
+  status|once|start|stop`, backed by a configurable checklist.
+- Explicit `libre-claw tui` and `libre-claw chat` commands open the same TUI as
+  the default `libre-claw` launch.
 - Competitive polish pass with a one-command installer, first-run `/setup`
   wizard, provider/key setup inside the TUI, quickstart docs, demo scripts,
   public roadmap, and security documentation.

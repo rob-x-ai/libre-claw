@@ -9,7 +9,7 @@ import pytest
 
 from libre_claw.auth.api_keys import ApiKeyLookup
 from libre_claw.config import load_config
-from libre_claw.providers import ProviderConfigurationError, create_provider
+from libre_claw.providers import ProviderConfigurationError, create_fallback_providers, create_provider
 from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.codex import CodexProvider
@@ -216,6 +216,35 @@ def test_create_provider_supports_openrouter(monkeypatch, tmp_path: Path) -> Non
         "X-OpenRouter-Title": "Libre Claw",
         "X-OpenRouter-Categories": "cli-agent",
     }
+
+
+def test_create_fallback_providers_supports_provider_model_and_key_env(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[fallback]",
+                "enabled = true",
+                "",
+                "[[fallback.routes]]",
+                'provider = "openrouter"',
+                'model = "deepseek/deepseek-v4-flash"',
+                'api_key_env = "OPENROUTER_BACKUP_API_KEY"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENROUTER_BACKUP_API_KEY", "backup-key")
+    config = load_config(config_path=config_path)
+
+    fallbacks = create_fallback_providers(config)
+
+    assert len(fallbacks) == 1
+    assert fallbacks[0].label == "openrouter:deepseek/deepseek-v4-flash via OPENROUTER_BACKUP_API_KEY"
+    assert isinstance(fallbacks[0].provider, OpenRouterProvider)
+    assert fallbacks[0].provider.model == "deepseek/deepseek-v4-flash"
 
 
 def test_create_provider_supports_ollama_without_api_key(monkeypatch, tmp_path: Path) -> None:

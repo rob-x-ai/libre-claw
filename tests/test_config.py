@@ -14,6 +14,7 @@ from libre_claw.config import (
     set_global_default_model,
     user_config_path,
 )
+from libre_claw.core.heartbeat import heartbeat_prompt, parse_heartbeat_interval
 
 
 def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
@@ -37,6 +38,13 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.goal.judge_model == ""
     assert config.goal.judge_temperature == 0.0
     assert config.goal.judge_max_tokens == 1024
+    assert config.fallback.enabled is False
+    assert config.fallback.routes == ()
+    assert config.heartbeat.enabled is False
+    assert config.heartbeat.interval_minutes == 60
+    assert config.heartbeat.route == "tui"
+    assert config.heartbeat.telegram_chat_id == 0
+    assert "blocked approvals" in "\n".join(config.heartbeat.checklist)
     assert config.telegram.use_daemon is False
     assert config.daemon.host == "127.0.0.1"
     assert config.daemon.port == 8766
@@ -96,6 +104,62 @@ def test_config_normalizes_legacy_local_provider(monkeypatch, tmp_path: Path) ->
     assert config.general.default_provider == "ollama"
     assert "local" not in config.providers
     assert config.providers["ollama"]["base_url"] == "https://ollama.com"
+
+
+def test_config_loads_fallback_and_heartbeat_sections(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[fallback]",
+                "enabled = true",
+                "",
+                "[[fallback.routes]]",
+                'provider = "openrouter"',
+                'model = "openrouter/auto"',
+                'api_key_env = "OPENROUTER_BACKUP_API_KEY"',
+                "",
+                "[heartbeat]",
+                "enabled = true",
+                "interval_minutes = 15",
+                'route = "telegram"',
+                "telegram_chat_id = 42",
+                'provider = "openrouter"',
+                'model = "deepseek/deepseek-v4-flash"',
+                'checklist = ["Check CI", "Check blocked approvals"]',
+                'prompt = "custom heartbeat"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config(config_path=config_path)
+
+    assert config.fallback.enabled is True
+    assert config.fallback.routes[0].provider == "openrouter"
+    assert config.fallback.routes[0].model == "openrouter/auto"
+    assert config.fallback.routes[0].api_key_env == "OPENROUTER_BACKUP_API_KEY"
+    assert config.heartbeat.enabled is True
+    assert config.heartbeat.interval_minutes == 15
+    assert config.heartbeat.route == "telegram"
+    assert config.heartbeat.telegram_chat_id == 42
+    assert config.heartbeat.checklist == ("Check CI", "Check blocked approvals")
+    assert config.heartbeat.prompt == "custom heartbeat"
+
+
+def test_heartbeat_prompt_and_interval_parser(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+
+    assert parse_heartbeat_interval("every 30 minutes", 60) == 30
+    assert parse_heartbeat_interval("1h", 60) == 60
+    assert parse_heartbeat_interval("", 15) == 15
+    prompt = heartbeat_prompt(config, surface="tui")
+    assert "Run a Libre Claw heartbeat check" in prompt
+    assert "blocked approvals" in prompt
 
 
 def test_config_file_env_and_cli_overrides(monkeypatch, tmp_path: Path) -> None:

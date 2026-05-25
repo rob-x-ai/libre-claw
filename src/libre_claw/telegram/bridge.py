@@ -20,6 +20,7 @@ from libre_claw.core import (
     Agent,
     AgentDone,
     AgentError,
+    AgentFallback,
     AgentPermissionRequest,
     AgentTextDelta,
     AgentToolCall,
@@ -33,7 +34,13 @@ from libre_claw.core.skills import SkillStore
 from libre_claw.core.soul import SoulStore
 from libre_claw.core.tools import ToolCall
 from libre_claw.daemon import DaemonClient
-from libre_claw.providers import ProviderConfigurationError, Usage, combine_usage, create_provider
+from libre_claw.providers import (
+    ProviderConfigurationError,
+    Usage,
+    combine_usage,
+    create_fallback_providers,
+    create_provider,
+)
 from libre_claw.tools_builtin import create_builtin_registry
 
 
@@ -150,6 +157,9 @@ class TelegramBridge:
             if isinstance(event, AgentError):
                 yield TelegramError(event.message)
                 return
+            if isinstance(event, AgentFallback):
+                yield TelegramToolNotice(f"Provider fallback engaged: {event.provider_label}\nReason: {event.reason}")
+                continue
 
     def resolve_permission(self, prompt_id: str, resolution: PermissionResolution) -> bool:
         if prompt_id.startswith("daemon:"):
@@ -289,6 +299,7 @@ class TelegramBridge:
 
     def _create_agent(self, state: TelegramChatState) -> Agent:
         provider = create_provider(self.config)
+        fallbacks = create_fallback_providers(self.config)
         return Agent(
             session=state.session,
             provider=provider,
@@ -302,6 +313,7 @@ class TelegramBridge:
             system_prompt_extra=self.config.agent.system_prompt_extra,
             skill_provider=self.skill_store.relevant_skill_texts,
             soul_provider=self.soul_store.soul_texts,
+            fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
         )
 
     async def _stream_daemon_message(self, chat_id: int, text: str):

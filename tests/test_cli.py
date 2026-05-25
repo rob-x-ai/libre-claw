@@ -51,6 +51,8 @@ def test_cli_exposes_telegram_command() -> None:
 
     assert result.exit_code == 0
     assert "daemon" in result.output
+    assert "tui" in result.output
+    assert "chat" in result.output
     assert "telegram" in result.output
     assert "auth" in result.output
     assert "config" in result.output

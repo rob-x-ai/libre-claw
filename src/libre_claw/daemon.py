@@ -16,6 +16,7 @@ from libre_claw.core import (
     Agent,
     AgentDone,
     AgentError,
+    AgentFallback,
     AgentPermissionRequest,
     AgentTextDelta,
     AgentToolCall,
@@ -44,7 +45,7 @@ from libre_claw.core.usage import (
     usage_summary_payload,
 )
 from libre_claw.core.session import session_from_payload
-from libre_claw.providers import LLMProvider, Usage, create_provider
+from libre_claw.providers import LLMProvider, Usage, create_fallback_providers, create_provider
 from libre_claw.tools_builtin import create_builtin_registry
 
 
@@ -344,6 +345,8 @@ class DaemonServer:
             tui=self.config.tui,
             telegram=self.config.telegram,
             goal=self.config.goal,
+            fallback=self.config.fallback,
+            heartbeat=self.config.heartbeat,
             daemon=self.config.daemon,
             automations=self.config.automations,
             browser=self.config.browser,
@@ -432,6 +435,13 @@ class DaemonServer:
                     state = "failed"
                     await self.run_store.append_event(run.run_id, "error", {"message": event.message})
                     break
+                if isinstance(event, AgentFallback):
+                    await self.run_store.append_event(
+                        run.run_id,
+                        "provider_fallback",
+                        {"provider": event.provider_label, "reason": event.reason},
+                    )
+                    continue
         except asyncio.CancelledError:
             state = "cancelled"
             await self.run_store.append_event(run.run_id, "cancelled", {"reason": "Daemon task cancelled."})
@@ -550,6 +560,8 @@ class DaemonServer:
             tui=self.config.tui,
             telegram=self.config.telegram,
             goal=self.config.goal,
+            fallback=self.config.fallback,
+            heartbeat=self.config.heartbeat,
             daemon=self.config.daemon,
             automations=self.config.automations,
             browser=self.config.browser,
@@ -585,6 +597,7 @@ class DaemonServer:
 
     async def _create_agent(self, config: LibreClawConfig, *, session: Session | None = None) -> Agent:
         provider = self.provider_factory(config)
+        fallbacks = create_fallback_providers(config)
         facts = await self.memory_store.list_facts()
         skill_store = SkillStore(config.general.working_directory)
         soul_store = SoulStore(config.general.working_directory)
@@ -601,6 +614,7 @@ class DaemonServer:
             system_prompt_extra=config.agent.system_prompt_extra,
             skill_provider=skill_store.relevant_skill_texts,
             soul_provider=soul_store.soul_texts,
+            fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
         )
 
 
