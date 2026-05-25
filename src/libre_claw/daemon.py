@@ -356,7 +356,8 @@ class DaemonServer:
         config: LibreClawConfig,
         *,
         surface: str = "daemon",
-    ) -> None:
+        hold_final_state: bool = False,
+    ) -> RunState:
         assistant_chunks: list[str] = []
         state: RunState = "done"
         try:
@@ -434,16 +435,19 @@ class DaemonServer:
             state = "failed"
             await self.run_store.append_event(run.run_id, "error", {"message": str(exc)})
         finally:
+            persisted_state: RunState = "running" if hold_final_state and state in {"done", "failed", "cancelled"} else state
             await self.run_store.finish_run(
                 run.run_id,
-                state,
+                persisted_state,
                 plan=run_plan_text(await self.run_store.load_events(run.run_id)),
                 summary="".join(assistant_chunks),
                 verification=f"Daemon run finished with state: {state}\n",
                 diff="",
                 browser=browser_artifact_text(await self.run_store.load_events(run.run_id)),
             )
-            await self.run_store.append_event(run.run_id, "run_finished", {"state": state})
+            if not hold_final_state:
+                await self.run_store.append_event(run.run_id, "run_finished", {"state": state})
+        return state
 
     async def _automation_loop(self) -> None:
         try:
@@ -499,8 +503,29 @@ class DaemonServer:
         config: LibreClawConfig,
         report_path: Path,
     ) -> None:
-        await self._run_agent(run, automation.prompt, config, surface=f"automation:{automation.route}")
-        await asyncio.to_thread(_write_automation_report, automation, run, report_path)
+        state = await self._run_agent(
+            run,
+            automation.prompt,
+            config,
+            surface=f"automation:{automation.route}",
+            hold_final_state=True,
+        )
+        try:
+            await asyncio.to_thread(_write_automation_report, automation, run, report_path)
+            await self.run_store.append_event(
+                run.run_id,
+                "automation_report_written",
+                {"automation_id": automation.automation_id, "report_path": str(report_path)},
+            )
+        except Exception as exc:
+            state = "failed"
+            await self.run_store.append_event(
+                run.run_id,
+                "error",
+                {"message": f"Could not write automation report: {exc}"},
+            )
+        await self.run_store.update_state(run.run_id, state)
+        await self.run_store.append_event(run.run_id, "run_finished", {"state": state})
 
     def _config_for_automation(self, automation: AutomationRecord) -> LibreClawConfig:
         provider = automation.provider or self.config.general.default_provider
