@@ -23,10 +23,35 @@ class ProviderConfigurationError(RuntimeError):
 class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
+    cached_tokens: int = 0
+    reasoning_tokens: int = 0
+    cost: float | None = None
 
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
+
+
+def combine_usage(left: Usage | None, right: Usage | None) -> Usage | None:
+    """Add provider-reported usage objects without inventing missing costs."""
+    if left is None:
+        return right
+    if right is None:
+        return left
+
+    cost: float | None
+    if left.cost is None and right.cost is None:
+        cost = None
+    else:
+        cost = (left.cost or 0.0) + (right.cost or 0.0)
+
+    return Usage(
+        input_tokens=left.input_tokens + right.input_tokens,
+        output_tokens=left.output_tokens + right.output_tokens,
+        cached_tokens=left.cached_tokens + right.cached_tokens,
+        reasoning_tokens=left.reasoning_tokens + right.reasoning_tokens,
+        cost=cost,
+    )
 
 
 @dataclass(frozen=True)

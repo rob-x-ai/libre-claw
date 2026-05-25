@@ -9,6 +9,10 @@ First shippable Libre Claw release from Kroonen AI Inc.
 - Terminal-native Textual TUI with streaming chat, Markdown rendering, command
   palette, slash-command suggestions, `/model` provider/model onboarding,
   startup ASCII art, session status, and startup release notes.
+- `/model <provider>:<model> --global` persists the selected provider/model in
+  `~/.libre-claw/config.toml`.
+- Status bar context meter plus `/compact status`, `/compact --force`, and
+  `/compact --keep N` controls for context-window management.
 - File explorer with parent-directory navigation, agent working-directory
   sync, a visible `Hide` control, a left-side `Files` rail for restoring the
   sidebar, and `Ctrl+B` toggling.
@@ -17,6 +21,10 @@ First shippable Libre Claw release from Kroonen AI Inc.
   Cloud examples centered on `kimi-k2.6:cloud`.
 - OpenRouter support with fixed Libre Claw app attribution headers:
   `https://kroonen.ai`, `Libre Claw`, and the `cli-agent` category.
+- Cumulative session token tracking in the status bar, TUI `/cost`, and
+  Telegram `/cost`. OpenRouter requests usage accounting so provider-reported
+  cost, cached tokens, and reasoning tokens appear when OpenRouter returns
+  them.
 - Ollama covers local daemon use, direct Ollama Cloud access, and
   OpenAI-compatible Ollama endpoints. Native tool calling and XML tool-call
   fallback are both available.
@@ -42,7 +50,8 @@ First shippable Libre Claw release from Kroonen AI Inc.
 
 ### Known Limits
 
-- Cost display is wired but still reports `$0.00`.
+- Cost display depends on provider-reported usage. OpenRouter returns cost when
+  usage accounting is available; other providers may only return token counts.
 - Search, browser, git PR helpers, and richer diff UX are not yet at full
   parity with larger agent harnesses.
 - Codex-style Sign in with ChatGPT OAuth is not implemented yet. OpenAI model

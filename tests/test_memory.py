@@ -6,7 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from libre_claw.core.memory import MemoryStore
-from libre_claw.core.session import ChatMessage, Session, text_block
+from libre_claw.core.session import ChatMessage, Session, estimate_context_tokens, text_block, tool_result_block, tool_use_block
 from libre_claw.core.tools import ToolContext
 from libre_claw.tools_builtin.filesystem import EditFileTool, WriteFileTool
 
@@ -68,3 +68,14 @@ def test_session_compaction_summarizes_older_messages() -> None:
     assert "message 0" in summary
     assert len(session.messages) == 4
     assert session.messages[0].content == [text_block("message 8")]
+
+
+def test_estimate_context_tokens_counts_text_and_tool_blocks() -> None:
+    session = Session()
+    session.add_user_message("hello world")
+    session.add_assistant_blocks([tool_use_block("toolu_1", "read_file", {"path": "README.md"})])
+    session.add_tool_result_blocks([tool_result_block("toolu_1", "file contents")])
+
+    tokens = estimate_context_tokens(session.messages, summary="previous summary", extra_texts=("system prompt",))
+
+    assert tokens > 0

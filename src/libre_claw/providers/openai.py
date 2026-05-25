@@ -103,6 +103,9 @@ class OpenAIProvider(LLMProvider):
             "stream_options": {"include_usage": True},
             "max_completion_tokens": max_tokens or self.max_tokens,
         }
+        extra_body = self._extra_body()
+        if extra_body:
+            request["extra_body"] = extra_body
         if tools:
             request["tools"] = [self._format_tool_schema(tool) for tool in tools]
             request["tool_choice"] = "auto"
@@ -172,6 +175,9 @@ class OpenAIProvider(LLMProvider):
                 "parameters": schema.get("input_schema", {"type": "object", "properties": {}}),
             },
         }
+
+    def _extra_body(self) -> dict[str, Any]:
+        return {}
 
     def _handle_tool_call_deltas(
         self,
@@ -285,22 +291,48 @@ def _usage_from(raw_usage: Any, previous: Usage | None) -> Usage | None:
     if raw_usage is None:
         return previous
 
-    input_tokens = getattr(raw_usage, "prompt_tokens", None)
-    output_tokens = getattr(raw_usage, "completion_tokens", None)
+    input_tokens = _get_usage_value(raw_usage, "prompt_tokens")
+    output_tokens = _get_usage_value(raw_usage, "completion_tokens")
     if input_tokens is None:
-        input_tokens = getattr(raw_usage, "input_tokens", None)
+        input_tokens = _get_usage_value(raw_usage, "input_tokens")
     if output_tokens is None:
-        output_tokens = getattr(raw_usage, "output_tokens", None)
+        output_tokens = _get_usage_value(raw_usage, "output_tokens")
+
+    prompt_details = _get_usage_value(raw_usage, "prompt_tokens_details")
+    completion_details = _get_usage_value(raw_usage, "completion_tokens_details")
 
     return Usage(
         input_tokens=_token_value(input_tokens, previous.input_tokens if previous else 0),
         output_tokens=_token_value(output_tokens, previous.output_tokens if previous else 0),
+        cached_tokens=_token_value(
+            _get_usage_value(prompt_details, "cached_tokens"),
+            previous.cached_tokens if previous else 0,
+        ),
+        reasoning_tokens=_token_value(
+            _get_usage_value(completion_details, "reasoning_tokens"),
+            previous.reasoning_tokens if previous else 0,
+        ),
+        cost=_cost_value(_get_usage_value(raw_usage, "cost"), previous.cost if previous else None),
     )
+
+
+def _get_usage_value(raw_usage: Any, key: str) -> Any:
+    if raw_usage is None:
+        return None
+    if isinstance(raw_usage, Mapping):
+        return raw_usage.get(key)
+    return getattr(raw_usage, key, None)
 
 
 def _token_value(value: Any, fallback: int) -> int:
     if isinstance(value, int):
         return value
+    return fallback
+
+
+def _cost_value(value: Any, fallback: float | None) -> float | None:
+    if isinstance(value, int | float):
+        return float(value)
     return fallback
 
 

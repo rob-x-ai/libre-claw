@@ -24,7 +24,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DirectoryTree, Input, RichLog, Static
 
 from libre_claw import __version__
-from libre_claw.config import GeneralConfig, LibreClawConfig, load_config
+from libre_claw.config import ConfigError, GeneralConfig, LibreClawConfig, load_config, set_global_default_model
 from libre_claw.core import (
     Agent,
     AgentDone,
@@ -38,9 +38,9 @@ from libre_claw.core import (
 from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
-from libre_claw.core.session import ChatMessage
+from libre_claw.core.session import ChatMessage, estimate_context_tokens
 from libre_claw.core.tools import ToolCall, ToolResult
-from libre_claw.providers import ProviderConfigurationError, Usage, create_provider
+from libre_claw.providers import ProviderConfigurationError, Usage, combine_usage, create_provider
 from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry
 
@@ -64,16 +64,35 @@ class SlashCommand:
     description: str
 
 
+@dataclass(frozen=True)
+class ContextMeter:
+    estimated_tokens: int
+    context_window_tokens: int
+    ratio: float
+
+    @property
+    def percent(self) -> int:
+        return min(999, int(round(self.ratio * 100)))
+
+
+@dataclass(frozen=True)
+class CompactOptions:
+    keep_last: int = 8
+    force: bool = False
+    status: bool = False
+    error: str | None = None
+
+
 SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/help", "/help", "Show available commands"),
     SlashCommand("/clear", "/clear", "Clear transcript and session history"),
     SlashCommand("/cancel", "/cancel", "Cancel active generation or tool execution"),
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
-    SlashCommand("/model", "/model [provider:]<name>|list", "Choose or list models for new turns"),
+    SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
     SlashCommand("/provider", "/provider anthropic|openai|openrouter|ollama", "Switch provider for new turns"),
     SlashCommand("/save", "/save [name]", "Save the current session"),
     SlashCommand("/load", "/load <name>", "Load a saved session"),
-    SlashCommand("/compact", "/compact", "Compact older context into the session summary"),
+    SlashCommand("/compact", "/compact [status|--force] [--keep N]", "Show or compact context"),
     SlashCommand("/memory", "/memory list|add <fact>|forget <id>", "Manage persistent memory facts"),
     SlashCommand("/telegram", "/telegram", "Show Telegram bridge status"),
     SlashCommand("/tools", "/tools expand|collapse|toggle <index>", "Control tool call details"),
@@ -97,6 +116,7 @@ MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
         ("codex-mini", "Codex Mini"),
     ),
     "openrouter": (
+        ("qwen/qwen3.7-max", "Qwen3.7 Max through OpenRouter"),
         ("openrouter/auto", "OpenRouter automatic routing"),
         ("anthropic/claude-sonnet-4.5", "Claude through OpenRouter"),
         ("openai/gpt-5.5", "GPT-5.5 through OpenRouter"),
@@ -425,6 +445,7 @@ class LibreClawApp(App[None]):
         self._slash_suggestions: list[SlashCommand] = []
         self._active_task: asyncio.Task[None] | None = None
         self._pending_permission: AgentPermissionRequest | None = None
+        self._tool_entry_by_call_id: dict[str, int] = {}
         self._started_at = time.monotonic()
         self._last_assistant_response = ""
 
@@ -599,7 +620,7 @@ class LibreClawApp(App[None]):
             self._load_session(argument)
             return
         if command == "/compact":
-            self._compact_context()
+            self._compact_context(argument)
             return
         if command == "/memory":
             await self._handle_memory_command(argument)
@@ -689,7 +710,7 @@ class LibreClawApp(App[None]):
 
                 if isinstance(event, AgentDone):
                     if event.usage is not None:
-                        self.usage = event.usage
+                        self.usage = combine_usage(self.usage, event.usage) or self.usage
                         self._update_status()
                     continue
 
@@ -812,10 +833,12 @@ class LibreClawApp(App[None]):
         self.transcript.clear()
         self.session.clear()
         self._last_assistant_response = ""
+        self._tool_entry_by_call_id.clear()
         self._render_transcript()
         self._append_system("Transcript cleared.")
 
     def _set_model(self, model: str) -> None:
+        model, persist_global = _strip_global_flag(model)
         if not model:
             self._append_system(_model_help_text(self.config))
             return
@@ -827,15 +850,22 @@ class LibreClawApp(App[None]):
 
         provider, selected_model = parsed
         self.config = _replace_general(self.config, default_provider=provider, default_model=selected_model)
+        persisted_path: Path | None = None
+        if persist_global:
+            try:
+                persisted_path = set_global_default_model(provider, selected_model)
+            except ConfigError as exc:
+                self._append_system(f"Model set for this session, but global config was not updated: {exc}")
         self._rebuild_agent()
         self._update_status()
+        suffix = f"\nSaved as global default in {persisted_path}." if persisted_path is not None else ""
         if self.provider_error:
             self._append_system(
                 f"Model set to {provider}:{selected_model}, but provider setup is incomplete.\n"
-                f"{self.provider_error}"
+                f"{self.provider_error}{suffix}"
             )
         else:
-            self._append_system(f"Model set to {provider}:{selected_model}.")
+            self._append_system(f"Model set to {provider}:{selected_model}.{suffix}")
 
     def _set_provider(self, provider: str) -> None:
         if not provider:
@@ -915,15 +945,32 @@ class LibreClawApp(App[None]):
 
         self._append_system("Usage: /memory list|add <fact>|forget <id>")
 
-    def _compact_context(self) -> None:
+    def _compact_context(self, argument: str = "") -> None:
+        options = _parse_compact_options(argument)
+        if options.error is not None:
+            self._append_system(options.error)
+            return
+        if options.status:
+            self._append_system(self._context_report())
+            return
+
         before = len(self.session.messages)
-        summary = self.session.compact(keep_last=8)
+        keep_last = options.keep_last
+        if options.force and before <= keep_last:
+            keep_last = max(1, before - 1)
+        before_meter = self._context_meter()
+        summary = self.session.compact(keep_last=keep_last)
         after = len(self.session.messages)
         if summary is None or before == after:
-            self._append_system("Context is already compact enough.")
+            self._append_system("Context is already compact enough. Try `/compact --force --keep 1` if you want to summarize more.")
             return
         self._rebuild_agent()
-        self._append_system(f"Compacted context from {before} messages to {after}.")
+        self._update_status()
+        after_meter = self._context_meter()
+        self._append_system(
+            f"Compacted context from {before} messages to {after}. "
+            f"Context {before_meter.percent}% -> {after_meter.percent}%."
+        )
 
     def _handle_tools_command(self, argument: str) -> None:
         parts = argument.split()
@@ -977,17 +1024,19 @@ class LibreClawApp(App[None]):
         return self._append_entry("permission", text)
 
     def _append_tool_call(self, call: ToolCall) -> int:
-        return self._append_entry(
+        index = self._append_entry(
             "tool",
             self._format_arguments(call.arguments),
-            title=f"Calling {call.name}",
+            title=f"{call.name} pending",
             collapsed=True,
-            metadata={"tool": call.name, "status": "call"},
+            metadata={"tool": call.name, "status": "pending", "call": call},
         )
+        self._tool_entry_by_call_id[call.id] = index
+        return index
 
     def _append_tool_result(self, call: ToolCall, result: ToolResult) -> int:
         metadata = dict(result.metadata)
-        metadata.update({"tool": call.name, "status": "error" if result.is_error else "result"})
+        metadata.update({"tool": call.name, "status": "error" if result.is_error else "result", "call": call})
         content = result.as_text()
         if call.name == "edit_file" and "before" in result.metadata and "after" in result.metadata:
             content = self._diff_text(
@@ -996,13 +1045,18 @@ class LibreClawApp(App[None]):
                 str(result.metadata.get("path", call.arguments.get("path", "file"))),
             )
             metadata["syntax"] = "diff"
-        return self._append_entry(
-            "tool",
-            content,
-            title=f"{call.name} {'error' if result.is_error else 'result'}",
-            collapsed=False,
-            metadata=metadata,
-        )
+        index = self._tool_entry_by_call_id.pop(call.id, None)
+        title = f"{call.name} {'error' if result.is_error else 'result'}"
+        if index is None or index >= len(self.transcript):
+            return self._append_entry("tool", content, title=title, collapsed=True, metadata=metadata)
+
+        entry = self.transcript[index]
+        entry.content = content
+        entry.title = title
+        entry.collapsed = True
+        entry.metadata = metadata
+        self._render_transcript()
+        return index
 
     def _append_entry(
         self,
@@ -1037,12 +1091,22 @@ class LibreClawApp(App[None]):
             return Group(Text("Libre Claw:", style=f"bold {ASSISTANT_ACCENT}"), Markdown(entry.content))
         if entry.role == "tool":
             title = entry.title or "Tool"
-            if entry.collapsed:
-                return Text(f"Tool {self._tool_display_index(index)}: {title} - collapsed", style="bold magenta")
             metadata = entry.metadata or {}
+            status = str(metadata.get("status", ""))
+            style = _tool_style(status)
+            if entry.collapsed:
+                return Text.assemble(
+                    (f"Tool {self._tool_display_index(index)}: ", f"bold {style}"),
+                    (title, f"bold {style}"),
+                    (" - ", "dim"),
+                    (_tool_preview(entry), "dim"),
+                )
             if metadata.get("syntax") == "diff":
-                return Group(Text(f"Tool {self._tool_display_index(index)}: {title}", style="bold magenta"), Syntax(entry.content, "diff"))
-            return Text.assemble((f"Tool {self._tool_display_index(index)}: {title}\n", "bold magenta"), entry.content)
+                return Group(Text(f"Tool {self._tool_display_index(index)}: {title}", style=f"bold {style}"), Syntax(entry.content, "diff"))
+            return Text.assemble(
+                (f"Tool {self._tool_display_index(index)}: {title}\n", f"bold {style}"),
+                _compact_tool_output(entry.content, expanded=True),
+            )
         if entry.role == "permission":
             return Text.assemble(("Permission: ", "bold yellow"), entry.content)
         if entry.role == "file":
@@ -1087,6 +1151,7 @@ class LibreClawApp(App[None]):
             system_prompt=self.config.agent.system_prompt,
             max_tool_calls_per_turn=self.config.agent.max_tool_calls_per_turn,
             auto_compact_threshold=self.config.agent.auto_compact_threshold,
+            context_window_tokens=self.config.agent.context_window_tokens,
             memory_facts=self.memory_facts,
             system_prompt_extra=self.config.agent.system_prompt_extra,
         )
@@ -1248,7 +1313,50 @@ class LibreClawApp(App[None]):
         return command.name + (" " if _usage_requires_argument(command.usage) else "")
 
     def _cost_text(self) -> str:
-        return f"Tokens: {self.usage.total_tokens} total ({self.usage.input_tokens} input, {self.usage.output_tokens} output). Cost: $0.00."
+        lines = [
+            "Session usage:",
+            f"- Tokens: {self.usage.total_tokens} total",
+            f"- Input: {self.usage.input_tokens}",
+            f"- Output: {self.usage.output_tokens}",
+        ]
+        if self.usage.cached_tokens:
+            lines.append(f"- Cached input: {self.usage.cached_tokens}")
+        if self.usage.reasoning_tokens:
+            lines.append(f"- Reasoning output: {self.usage.reasoning_tokens}")
+        lines.append(f"- Cost: {_format_usage_cost(self.usage)}")
+        if self.usage.cost is None:
+            lines.append("Cost is shown when the provider reports it. OpenRouter reports cost when usage accounting is enabled.")
+        return "\n".join(lines)
+
+    def _context_meter(self) -> ContextMeter:
+        extra_texts = tuple(
+            text
+            for text in (
+                self.config.agent.system_prompt,
+                self.config.agent.system_prompt_extra,
+                *self.memory_facts,
+            )
+            if text
+        )
+        estimated_tokens = estimate_context_tokens(
+            self.session.messages,
+            summary=self.session.summary,
+            extra_texts=extra_texts,
+        )
+        context_window = max(1, self.config.agent.context_window_tokens)
+        return ContextMeter(
+            estimated_tokens=estimated_tokens,
+            context_window_tokens=context_window,
+            ratio=estimated_tokens / context_window,
+        )
+
+    def _context_report(self) -> str:
+        meter = self._context_meter()
+        return (
+            f"Context: {_context_bar(meter)} {meter.percent}% "
+            f"({meter.estimated_tokens}/{meter.context_window_tokens} estimated tokens). "
+            f"Auto compact threshold: {int(self.config.agent.auto_compact_threshold * 100)}%."
+        )
 
     def _telegram_status(self) -> str:
         enabled = "enabled" if self.config.telegram.enabled else "disabled"
@@ -1263,8 +1371,8 @@ class LibreClawApp(App[None]):
         elapsed = int(time.monotonic() - self._started_at)
         active = "running" if self._active_task is not None and not self._active_task.done() else "idle"
         return (
-            f"Libre Claw v{__version__} | {provider}:{model} | $0.00 | "
-            f"{self.usage.total_tokens} tokens | {elapsed}s | {active}"
+            f"Libre Claw v{__version__} | {provider}:{model} | {_format_usage_cost(self.usage)} | "
+            f"{self.usage.total_tokens} tokens | ctx {_context_bar(self._context_meter())} | {elapsed}s | {active}"
         )
 
     def _update_status(self) -> None:
@@ -1342,6 +1450,14 @@ def _parse_model_argument(argument: str, current_provider: str) -> tuple[str, st
     return provider, model
 
 
+def _strip_global_flag(argument: str) -> tuple[str, bool]:
+    parts = argument.split()
+    if "--global" not in parts:
+        return argument.strip(), False
+    cleaned = " ".join(part for part in parts if part != "--global")
+    return cleaned.strip(), True
+
+
 def _canonical_tui_provider(provider: str) -> str:
     normalized = provider.strip().lower()
     if normalized == "local":
@@ -1355,6 +1471,7 @@ def _model_help_text(config: LibreClawConfig) -> str:
     lines = [
         f"Current model: {provider}:{current_model}",
         "Use `/model <name>` for the current provider or `/model <provider>:<name>` to switch both.",
+        "Add `--global` to save the provider and model in ~/.libre-claw/config.toml.",
         "Use `Tab` after `/model ` to complete a suggested model.",
         "Provider key setup stays in the secure CLI/keyring path:",
     ]
@@ -1394,6 +1511,87 @@ def _model_suggestion_commands(config: LibreClawConfig) -> list[SlashCommand]:
 
 def _usage_requires_argument(usage: str) -> bool:
     return " " in usage
+
+
+def _format_usage_cost(usage: Usage) -> str:
+    if usage.cost is None or usage.cost == 0:
+        return "$0.00"
+    if usage.cost < 0.01:
+        return f"${usage.cost:.6f}"
+    return f"${usage.cost:.2f}"
+
+
+def _context_bar(meter: ContextMeter, width: int = 10) -> str:
+    filled = max(0, min(width, int(round(min(meter.ratio, 1.0) * width))))
+    return "[" + ("#" * filled) + ("-" * (width - filled)) + "]"
+
+
+def _parse_compact_options(argument: str) -> CompactOptions:
+    tokens = argument.split()
+    if not tokens:
+        return CompactOptions()
+    if tokens == ["status"]:
+        return CompactOptions(status=True)
+
+    keep_last = 8
+    force = False
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"status", "--status"}:
+            return CompactOptions(status=True)
+        if token in {"force", "--force"}:
+            force = True
+            index += 1
+            continue
+        if token == "--keep":
+            if index + 1 >= len(tokens) or not tokens[index + 1].isdigit():
+                return CompactOptions(error="Usage: /compact [status|--force] [--keep N]")
+            keep_last = int(tokens[index + 1])
+            index += 2
+            continue
+        if token.startswith("--keep="):
+            value = token.removeprefix("--keep=")
+            if not value.isdigit():
+                return CompactOptions(error="Usage: /compact [status|--force] [--keep N]")
+            keep_last = int(value)
+            index += 1
+            continue
+        return CompactOptions(error="Usage: /compact [status|--force] [--keep N]")
+
+    if keep_last < 1:
+        return CompactOptions(error="Keep count must be at least 1.")
+    return CompactOptions(keep_last=keep_last, force=force)
+
+
+def _tool_style(status: str) -> str:
+    if status == "error":
+        return "red"
+    if status == "pending":
+        return "#0070F3"
+    return "#8B5CF6"
+
+
+def _tool_preview(entry: TranscriptEntry, max_length: int = 120) -> str:
+    metadata = entry.metadata or {}
+    if metadata.get("syntax") == "diff":
+        preview = "diff ready"
+    else:
+        preview = _compact_tool_output(entry.content, expanded=False)
+    preview = " ".join(preview.split())
+    if len(preview) > max_length:
+        return preview[: max_length - 1].rstrip() + "..."
+    return preview or "no output"
+
+
+def _compact_tool_output(content: str, expanded: bool) -> str:
+    limit = 12 if expanded else 3
+    lines = content.splitlines()
+    if len(lines) <= limit:
+        return content
+    shown = "\n".join(lines[:limit])
+    hidden = len(lines) - limit
+    return f"{shown}\n... {hidden} more lines hidden; use /tools expand <index> to show all"
 
 
 def _startup_message() -> str:

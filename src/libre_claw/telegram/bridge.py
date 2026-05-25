@@ -20,7 +20,7 @@ from libre_claw.core import (
 from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.tools import ToolCall
-from libre_claw.providers import ProviderConfigurationError, Usage, create_provider
+from libre_claw.providers import ProviderConfigurationError, Usage, combine_usage, create_provider
 from libre_claw.tools_builtin import create_builtin_registry
 
 
@@ -115,7 +115,7 @@ class TelegramBridge:
                 continue
             if isinstance(event, AgentDone):
                 if event.usage is not None:
-                    state.usage = event.usage
+                    state.usage = combine_usage(state.usage, event.usage) or state.usage
                 yield TelegramDone(event.usage)
                 continue
             if isinstance(event, AgentError):
@@ -144,7 +144,11 @@ class TelegramBridge:
 
     def status_text(self, chat_id: int) -> str:
         state = self.state_for(chat_id)
-        return f"Tokens: {state.usage.total_tokens} total. Cost: $0.00."
+        return (
+            f"Tokens: {state.usage.total_tokens} total "
+            f"({state.usage.input_tokens} input, {state.usage.output_tokens} output). "
+            f"Cost: {_format_usage_cost(state.usage)}."
+        )
 
     def _create_agent(self, state: TelegramChatState) -> Agent:
         provider = create_provider(self.config)
@@ -156,6 +160,15 @@ class TelegramBridge:
             system_prompt=self.config.agent.system_prompt,
             max_tool_calls_per_turn=self.config.agent.max_tool_calls_per_turn,
             auto_compact_threshold=self.config.agent.auto_compact_threshold,
+            context_window_tokens=self.config.agent.context_window_tokens,
             memory_facts=self._memory_facts,
             system_prompt_extra=self.config.agent.system_prompt_extra,
         )
+
+
+def _format_usage_cost(usage: Usage) -> str:
+    if usage.cost is None or usage.cost == 0:
+        return "$0.00"
+    if usage.cost < 0.01:
+        return f"${usage.cost:.6f}"
+    return f"${usage.cost:.2f}"

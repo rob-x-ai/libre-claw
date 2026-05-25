@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from libre_claw.providers.openai import OpenAIProvider
 
 OPENROUTER_HTTP_REFERER = "https://kroonen.ai"
@@ -36,3 +38,6 @@ class OpenRouterProvider(OpenAIProvider):
             display_name="OpenRouter",
             client=client,
         )
+
+    def _extra_body(self) -> dict[str, Any]:
+        return {"usage": {"include": True}}

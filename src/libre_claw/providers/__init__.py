@@ -18,6 +18,7 @@ __all__ = [
     "ToolCallReady",
     "ToolCallStart",
     "Usage",
+    "combine_usage",
     "create_provider",
 ]
 
@@ -32,6 +33,7 @@ from libre_claw.providers.base import (
     ToolCallReady,
     ToolCallStart,
     Usage,
+    combine_usage,
 )
 from libre_claw.providers.factory import create_provider
 from libre_claw.providers.local import LocalProvider

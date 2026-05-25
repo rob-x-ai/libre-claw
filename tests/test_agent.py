@@ -166,6 +166,35 @@ async def test_agent_executes_tool_then_continues_to_final_answer() -> None:
     )
 
 
+async def test_agent_accumulates_usage_across_tool_loop() -> None:
+    provider = ScriptedProvider(
+        [
+            [
+                ToolCallReady("toolu_1", "echo", {"value": "x"}),
+                Done(Usage(input_tokens=1, output_tokens=2, cost=0.125), stop_reason="tool_use"),
+            ],
+            [
+                TextDelta("done"),
+                Done(Usage(input_tokens=3, output_tokens=4, cached_tokens=1, reasoning_tokens=2, cost=0.25)),
+            ],
+        ]
+    )
+    registry = ToolRegistry([EchoTool(ToolContext(working_directory=Path.cwd()))])
+    agent = make_agent(provider, registry)
+
+    events = await collect_events(agent, "Use a tool")
+
+    assert events[-1] == AgentDone(
+        Usage(
+            input_tokens=4,
+            output_tokens=6,
+            cached_tokens=1,
+            reasoning_tokens=2,
+            cost=0.375,
+        )
+    )
+
+
 async def test_agent_executes_parallel_tool_calls_concurrently() -> None:
     BarrierTool.running = 0
     BarrierTool.max_running = 0

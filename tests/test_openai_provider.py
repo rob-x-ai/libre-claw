@@ -102,6 +102,40 @@ async def test_openai_provider_streams_text_and_formats_request() -> None:
     }
 
 
+async def test_openai_provider_parses_extended_usage_metadata() -> None:
+    client = FakeClient(
+        [
+            chunk(content="ok", finish_reason="stop"),
+            chunk(
+                usage={
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "prompt_tokens_details": {"cached_tokens": 3},
+                    "completion_tokens_details": {"reasoning_tokens": 2},
+                    "cost": 0.000071,
+                }
+            ),
+        ]
+    )
+    provider = OpenAIProvider(api_key="test-key", model="gpt-4o", max_tokens=99, client=client)
+
+    events = [event async for event in provider.complete(messages=[ChatMessage(role="user", content=[text_block("Hi")])])]
+
+    assert events == [
+        TextDelta("ok"),
+        Done(
+            usage=Usage(
+                input_tokens=10,
+                output_tokens=5,
+                cached_tokens=3,
+                reasoning_tokens=2,
+                cost=0.000071,
+            ),
+            stop_reason="stop",
+        ),
+    ]
+
+
 async def test_openai_provider_streams_tool_calls_and_formats_tools() -> None:
     client = FakeClient(
         [

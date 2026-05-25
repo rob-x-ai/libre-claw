@@ -8,7 +8,8 @@ from pathlib import Path
 
 from libre_claw.config import load_config
 from libre_claw.core.agent import AgentPermissionRequest
-from libre_claw.core.tools import ToolCall
+from libre_claw.core.tools import ToolCall, ToolResult
+from libre_claw.providers import Usage
 from libre_claw.tui.app import (
     ASSISTANT_ACCENT,
     LibreClawApp,
@@ -16,9 +17,11 @@ from libre_claw.tui.app import (
     TranscriptEntry,
     _effective_model,
     _model_help_text,
+    _parse_compact_options,
     _parse_model_argument,
     _replace_general,
     _startup_message,
+    _tool_preview,
 )
 
 
@@ -43,6 +46,7 @@ def test_tui_phase_four_helper_state(monkeypatch, tmp_path: Path) -> None:
     assert "0.1.0" in app.SUB_TITLE
     assert app._palette_matches("cost")[0].name == "/cost"
     assert "provider:model" not in app._status_text()
+    assert "ctx [" in app._status_text()
     assert app._palette_matches("memory")[0].name == "/memory"
     assert app._palette_matches("telegram")[0].name == "/telegram"
     assert app._slash_suggestion_matches("/")[0].name == "/help"
@@ -122,6 +126,7 @@ def test_model_help_includes_enrollment_commands(monkeypatch, tmp_path: Path) ->
     help_text = _model_help_text(config)
 
     assert "Current model: anthropic:claude-opus-4-6" in help_text
+    assert "Add `--global`" in help_text
     assert "libre-claw auth set-key openrouter" in help_text
     assert "/model openrouter:openrouter/auto" in help_text
 
@@ -135,11 +140,29 @@ def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_pat
     suggestions = app._slash_suggestion_matches("/model openr")
     first = suggestions[0]
 
-    assert first.name == "/model openrouter:openrouter/auto"
-    assert app._completion_text(first) == "/model openrouter:openrouter/auto"
+    assert first.name == "/model openrouter:qwen/qwen3.7-max"
+    assert app._completion_text(first) == "/model openrouter:qwen/qwen3.7-max"
     app._slash_suggestions = [first]
     assert app._should_complete_on_submit("/model openr") is True
-    assert app._should_complete_on_submit("/model openrouter:openrouter/auto") is False
+    assert app._should_complete_on_submit("/model openrouter:qwen/qwen3.7-max") is False
+
+
+async def test_model_global_flag_persists_user_default(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test():
+        await app._handle_command("/model openrouter:qwen/qwen3.7-max --global")
+
+    config_path = tmp_path / ".libre-claw" / "config.toml"
+    text = config_path.read_text(encoding="utf-8")
+    assert 'default_provider = "openrouter"' in text
+    assert 'default_model = "qwen/qwen3.7-max"' in text
+    assert app.config.general.default_provider == "openrouter"
+    assert app.config.general.default_model == "qwen/qwen3.7-max"
+    assert any("Saved as global default" in entry.content for entry in app.transcript)
 
 
 def test_assistant_label_uses_purple_accent(monkeypatch, tmp_path: Path) -> None:
@@ -159,6 +182,60 @@ def test_startup_message_includes_ascii_art_and_release_notes() -> None:
     assert STARTUP_ASCII.strip() in message
     assert "## 0.1.0" in message
     assert "Type /help for commands." in message
+
+
+def test_cost_text_shows_cumulative_provider_usage(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+    app.usage = Usage(input_tokens=10, output_tokens=5, cached_tokens=3, reasoning_tokens=2, cost=0.000071)
+
+    text = app._cost_text()
+
+    assert "Tokens: 15 total" in text
+    assert "Input: 10" in text
+    assert "Output: 5" in text
+    assert "Cached input: 3" in text
+    assert "Reasoning output: 2" in text
+    assert "Cost: $0.000071" in text
+    assert "$0.000071" in app._status_text()
+
+
+def test_context_report_and_compact_option_helpers(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+    app.session.add_user_message("hello context")
+
+    report = app._context_report()
+
+    assert "Context: [" in report
+    assert "estimated tokens" in report
+    options = _parse_compact_options("--force --keep 4")
+    assert options.force is True
+    assert options.keep_last == 4
+    assert _parse_compact_options("status").status is True
+    assert _parse_compact_options("--keep nope").error is not None
+
+
+async def test_compact_status_and_force_keep(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+    for index in range(6):
+        app.session.add_user_message(f"message {index}")
+
+    async with app.run_test():
+        await app._handle_command("/compact status")
+        app._compact_context("--force --keep 2")
+
+    assert len(app.session.messages) == 2
+    assert app.session.summary is not None
+    assert any("Context:" in entry.content for entry in app.transcript)
+    assert any("Compacted context from 6 messages to 2" in entry.content for entry in app.transcript)
 
 
 def test_ctrl_c_binding_exits_app() -> None:
@@ -271,6 +348,42 @@ async def test_file_tree_up_updates_agent_working_directory(monkeypatch, tmp_pat
         assert app.config.general.working_directory == tmp_path.resolve()
         assert app.query_one("#file-tree").path == tmp_path.resolve()
         assert app.query_one("#sidebar-root").content == f"cwd: {tmp_path.resolve()}"
+
+
+async def test_tool_call_updates_single_collapsed_entry(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        call = ToolCall(id="toolu_1", name="bash", arguments={"command": "whoami"})
+        index = app._append_tool_call(call)
+        result_index = app._append_tool_result(call, ToolResult(content="robinkroonen\n"))
+
+        assert result_index == index
+        tool_entries = [entry for entry in app.transcript if entry.role == "tool"]
+        assert len(tool_entries) == 1
+        assert tool_entries[0].title == "bash result"
+        assert tool_entries[0].collapsed is True
+        assert _tool_preview(tool_entries[0]) == "robinkroonen"
+        assert "collapsed" not in str(app._format_entry(tool_entries[0], index))
+
+
+def test_expanded_tool_output_is_limited() -> None:
+    entry = TranscriptEntry(
+        role="tool",
+        title="bash result",
+        content="\n".join(f"line {index}" for index in range(20)),
+        collapsed=False,
+        metadata={"status": "result"},
+    )
+    renderable = str(LibreClawApp(config=load_config())._format_entry(entry))
+
+    assert "line 0" in renderable
+    assert "line 11" in renderable
+    assert "line 12" not in renderable
+    assert "8 more lines hidden" in renderable
 
 
 async def test_tui_permission_panel_resolves_exact_call(monkeypatch, tmp_path: Path) -> None:

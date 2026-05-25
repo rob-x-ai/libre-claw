@@ -8,7 +8,9 @@ import sys
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass, field
 from importlib import resources
+import json
 from pathlib import Path
+import re
 from typing import Any
 
 if sys.version_info >= (3, 11):
@@ -37,6 +39,7 @@ class GeneralConfig:
 class AgentConfig:
     max_tool_calls_per_turn: int
     auto_compact_threshold: float
+    context_window_tokens: int
     system_prompt: str
     system_prompt_extra: str
 
@@ -149,6 +152,45 @@ def user_config_path() -> Path:
     return Path.home() / ".libre-claw" / "config.toml"
 
 
+def set_global_default_model(
+    provider: str,
+    model: str,
+    config_path: Path | str | None = None,
+) -> Path:
+    """Persist the default provider/model in the user-level config file."""
+    clean_provider = provider.strip().lower()
+    clean_model = model.strip()
+    if not clean_provider:
+        raise ConfigError("Provider cannot be empty.")
+    if not clean_model:
+        raise ConfigError("Model cannot be empty.")
+
+    path = Path(config_path).expanduser() if config_path is not None else user_config_path()
+    updates = {
+        "general": {
+            "default_provider": clean_provider,
+            "default_model": clean_model,
+        },
+        f"providers.{clean_provider}": {
+            "default_model": clean_model,
+        },
+    }
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        updated = _update_toml_sections(existing, updates)
+        tomllib.loads(updated)
+        path.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        msg = f"Could not write config file {path}: {exc}"
+        raise ConfigError(msg) from exc
+    except tomllib.TOMLDecodeError as exc:
+        msg = f"Could not update config file {path}: {exc}"
+        raise ConfigError(msg) from exc
+    return path
+
+
 def _load_default_config() -> ConfigTable:
     path = default_config_path()
     if path.exists():
@@ -170,6 +212,7 @@ def _load_default_config() -> ConfigTable:
         "agent": {
             "max_tool_calls_per_turn": 50,
             "auto_compact_threshold": 0.8,
+            "context_window_tokens": 200000,
             "system_prompt": (
                 "You are Libre Claw, an autonomous coding agent from Kroonen AI Inc. "
                 "(https://kroonen.ai) running in the user's terminal.\n"
@@ -277,6 +320,63 @@ def _resolve_user_config_path(config_path: Path | str | None) -> Path | None:
     return None
 
 
+_SECTION_RE = re.compile(r"^\s*\[([A-Za-z0-9_.-]+)\]\s*(?:#.*)?$")
+_KEY_RE = re.compile(r"^(\s*)([A-Za-z0-9_-]+)(\s*=).*$")
+
+
+def _update_toml_sections(text: str, updates: Mapping[str, Mapping[str, str]]) -> str:
+    lines = text.splitlines()
+    output: list[str] = []
+    seen: dict[str, set[str]] = {section: set() for section in updates}
+    current_section: str | None = None
+
+    def insert_missing(section: str | None) -> None:
+        if section is None or section not in updates:
+            return
+        missing = [key for key in updates[section] if key not in seen[section]]
+        for key in missing:
+            output.append(f"{key} = {_toml_string(updates[section][key])}")
+            seen[section].add(key)
+
+    for line in lines:
+        section_match = _SECTION_RE.match(line)
+        if section_match:
+            insert_missing(current_section)
+            current_section = section_match.group(1)
+            output.append(line)
+            continue
+
+        key_match = _KEY_RE.match(line)
+        if key_match and current_section in updates:
+            key = key_match.group(2)
+            section_updates = updates[current_section]
+            if key in section_updates:
+                output.append(f"{key_match.group(1)}{key}{key_match.group(3)} {_toml_string(section_updates[key])}")
+                seen[current_section].add(key)
+                continue
+
+        output.append(line)
+
+    insert_missing(current_section)
+
+    for section, values in updates.items():
+        missing = [key for key in values if key not in seen[section]]
+        if not missing:
+            continue
+        if output and output[-1] != "":
+            output.append("")
+        output.append(f"[{section}]")
+        for key in missing:
+            output.append(f"{key} = {_toml_string(values[key])}")
+            seen[section].add(key)
+
+    return "\n".join(output).rstrip() + "\n"
+
+
+def _toml_string(value: str) -> str:
+    return json.dumps(value)
+
+
 def _read_toml(path: Path) -> ConfigTable:
     try:
         with path.open("rb") as handle:
@@ -349,6 +449,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
         agent=AgentConfig(
             max_tool_calls_per_turn=_int(agent, "max_tool_calls_per_turn"),
             auto_compact_threshold=_float(agent, "auto_compact_threshold"),
+            context_window_tokens=_int(agent, "context_window_tokens"),
             system_prompt=_str(agent, "system_prompt"),
             system_prompt_extra=_str(agent, "system_prompt_extra"),
         ),

@@ -197,11 +197,14 @@ Use `/model` from inside the TUI:
 /model list
 /model kimi-k2.6:cloud
 /model ollama:kimi-k2.6:cloud
+/model openrouter:qwen/qwen3.7-max --global
 /model openrouter:openrouter/auto
 ```
 
 `/model <name>` changes the model for the current provider.
 `/model <provider>:<name>` changes provider and model together.
+Add `--global` to save the selected provider/model as the default in
+`~/.libre-claw/config.toml`.
 Press `Tab` after `/model ` to complete known presets.
 
 Use `/provider` when you only want to switch provider:
@@ -222,11 +225,11 @@ Legacy configs that still say `default_provider = "local"` or
 - `/clear`
 - `/cancel`
 - `/cost`
-- `/model [provider:]<name>|list`
+- `/model [provider:]<name>|list [--global]`
 - `/provider anthropic|openai|openrouter|ollama`
 - `/save [name]`
 - `/load <name>`
-- `/compact`
+- `/compact [status|--force] [--keep N]`
 - `/tools expand|collapse|toggle <index>`
 - `/memory list|add <fact>|forget <id>`
 - `/telegram`
@@ -242,6 +245,32 @@ Useful keybindings:
 - `Esc` or `/cancel` cancels active generation/tool execution.
 - `Ctrl+C` exits the app.
 - `Tab` completes the first slash-command suggestion.
+
+## Context Tracking
+
+The status bar includes a compact context meter:
+
+```text
+ctx [##--------]
+```
+
+The meter is an estimated-token view of the current system prompt, summary,
+memory facts, and conversation against `[agent].context_window_tokens`.
+
+Use `/compact status` for details, `/compact` for normal compaction, and
+`/compact --force --keep 4` when you want to summarize aggressively while
+keeping only the latest four messages.
+
+## Token And Cost Tracking
+
+Libre Claw tracks provider-reported token usage cumulatively for the current
+session. Use `/cost` in the TUI, or `/cost` in Telegram, to see total input,
+output, cached, and reasoning tokens.
+
+For OpenRouter, Libre Claw requests OpenRouter usage accounting on every
+OpenRouter call, so `/cost` also shows the provider-reported request cost when
+OpenRouter returns it. The status bar updates live with the same cumulative
+session total.
 
 ## Tool Permissions
 

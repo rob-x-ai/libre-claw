@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import math
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
@@ -100,3 +102,30 @@ def summarize_messages(messages: list[ChatMessage]) -> str:
         if content:
             lines.append(f"{message.role}: {content[:500]}")
     return "\n".join(lines)
+
+
+def estimate_context_tokens(
+    messages: list[ChatMessage],
+    summary: str | None = None,
+    extra_texts: tuple[str, ...] = (),
+) -> int:
+    """Estimate context size cheaply when provider tokenizers are unavailable."""
+    character_count = sum(len(text) for text in extra_texts if text)
+    if summary:
+        character_count += len(summary)
+
+    for message in messages:
+        character_count += 16
+        for block in message.content:
+            block_type = block.get("type")
+            if block_type == "text":
+                character_count += len(str(block.get("text", "")))
+            elif block_type == "tool_use":
+                character_count += len(str(block.get("name", "")))
+                character_count += len(json.dumps(block.get("input", {}), sort_keys=True, default=str))
+            elif block_type == "tool_result":
+                character_count += len(str(block.get("content", "")))
+            else:
+                character_count += len(json.dumps(block, sort_keys=True, default=str))
+
+    return max(0, math.ceil(character_count / 4))

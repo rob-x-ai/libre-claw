@@ -7,8 +7,15 @@ Initial shippable Libre Claw release.
 ### Added
 
 - Textual terminal UI with streaming chat, status bar, file tree, command palette, slash-command suggestions, `/model` provider/model onboarding, startup ASCII art, startup release notes, and interactive permission prompts.
+- `/model <provider>:<model> --global` persists the selected provider/model in
+  `~/.libre-claw/config.toml`.
+- Status bar context meter plus `/compact status`, `/compact --force`, and
+  `/compact --keep N` controls for context-window management.
 - Anthropic, OpenAI, OpenRouter, and Ollama providers. Defaults are `claude-opus-4-6`, `gpt-5.5`, and `qwen3.6:27b`; Ollama supports local daemon use, Ollama Cloud with `kimi-k2.6:cloud`, and Ollama/OpenAI-compatible endpoints.
 - Fixed OpenRouter app attribution for Libre Claw with `https://kroonen.ai`, `Libre Claw`, and `cli-agent` headers.
+- Cumulative session token tracking in the status bar, TUI `/cost`, and
+  Telegram `/cost`, with OpenRouter usage accounting enabled for
+  provider-reported request cost, cached tokens, and reasoning tokens.
 - Native Ollama tool calling and XML tool-call fallback for models without native support.
 - ReAct-style async agent loop with concurrent tool execution.
 - Built-in `read_file`, `write_file`, `edit_file`, `list_directory`, and `bash` tools.

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import structlog
 
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
-from libre_claw.core.session import Session, text_block, tool_result_block, tool_use_block
+from libre_claw.core.session import Session, estimate_context_tokens, text_block, tool_result_block, tool_use_block
 from libre_claw.core.tools import ToolCall, ToolRegistry, ToolRegistryError, ToolResult
 from libre_claw.providers.base import (
     Done,
@@ -19,6 +19,7 @@ from libre_claw.providers.base import (
     TextDelta,
     ToolCallReady,
     Usage,
+    combine_usage,
 )
 
 
@@ -69,6 +70,7 @@ class Agent:
         system_prompt: str,
         max_tool_calls_per_turn: int = 50,
         auto_compact_threshold: float = 0.8,
+        context_window_tokens: int = 200000,
         memory_facts: list[str] | None = None,
         system_prompt_extra: str = "",
     ) -> None:
@@ -78,6 +80,7 @@ class Agent:
         self.permission_manager = permission_manager
         self.max_tool_calls_per_turn = max_tool_calls_per_turn
         self.auto_compact_threshold = auto_compact_threshold
+        self.context_window_tokens = context_window_tokens
         self.memory_facts = memory_facts or []
         self.system_prompt = system_prompt
         self.system_prompt_extra = system_prompt_extra
@@ -86,7 +89,7 @@ class Agent:
     async def run(self, user_message: str) -> AsyncIterator[AgentEvent]:
         self.session.add_user_message(user_message)
         total_tool_calls = 0
-        latest_usage: Usage | None = None
+        turn_usage: Usage | None = None
 
         while True:
             assistant_chunks: list[str] = []
@@ -112,7 +115,7 @@ class Agent:
                         continue
 
                     if isinstance(event, Done):
-                        latest_usage = event.usage
+                        turn_usage = combine_usage(turn_usage, event.usage)
                         continue
 
                     if isinstance(event, ProviderError):
@@ -133,7 +136,7 @@ class Agent:
 
             if not tool_calls:
                 self._save_assistant_text(assistant_chunks)
-                yield AgentDone(latest_usage)
+                yield AgentDone(turn_usage)
                 return
 
             total_tool_calls += len(tool_calls)
@@ -206,10 +209,13 @@ class Agent:
         chunks.clear()
 
     def _maybe_compact_session(self) -> None:
-        # There is no tokenizer-backed context estimator yet, so use message
-        # count as the working-memory proxy.
-        threshold = max(8, int(20 * self.auto_compact_threshold))
-        if len(self.session.messages) > threshold:
+        estimated_tokens = estimate_context_tokens(
+            self.session.messages,
+            summary=self.session.summary,
+            extra_texts=(self._build_system_prompt(),),
+        )
+        threshold = max(1, int(self.context_window_tokens * self.auto_compact_threshold))
+        if estimated_tokens >= threshold:
             self.session.compact(keep_last=8)
 
     def _build_system_prompt(self) -> str:

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from libre_claw.config import default_config_path, load_config, packaged_default_config_text
+from libre_claw.config import default_config_path, load_config, packaged_default_config_text, set_global_default_model, user_config_path
 
 
 def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
@@ -21,6 +21,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.permissions.default_level == "ask"
     assert config.auth.keyring_service == "libre-claw"
     assert config.auth.token_ttl_seconds == 3600
+    assert config.agent.context_window_tokens == 200000
     assert "Kroonen AI Inc. (https://kroonen.ai)" in config.agent.system_prompt
     assert "Current toolset: read_file, write_file, edit_file, list_directory, and bash." in config.agent.system_prompt
     assert config.agent.system_prompt_extra == ""
@@ -92,6 +93,41 @@ def test_config_file_env_and_cli_overrides(monkeypatch, tmp_path: Path) -> None:
     assert config.general.working_directory == (tmp_path / "from-cli").resolve()
     assert config.agent.system_prompt == "custom system prompt"
     assert config.agent.system_prompt_extra == "custom extra"
+
+
+def test_set_global_default_model_updates_user_config(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    path = user_config_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "\n".join(
+            [
+                "# custom user config",
+                "[general]",
+                'default_provider = "anthropic"',
+                'theme = "dark"',
+                "",
+                "[tui]",
+                "show_file_tree = false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    written = set_global_default_model("openrouter", "qwen/qwen3.7-max")
+
+    assert written == path
+    text = path.read_text(encoding="utf-8")
+    assert 'default_provider = "openrouter"' in text
+    assert 'default_model = "qwen/qwen3.7-max"' in text
+    assert "[providers.openrouter]" in text
+    assert 'theme = "dark"' in text
+    config = load_config()
+    assert config.general.default_provider == "openrouter"
+    assert config.general.default_model == "qwen/qwen3.7-max"
+    assert config.providers["openrouter"]["default_model"] == "qwen/qwen3.7-max"
+    assert config.tui.show_file_tree is False
 
 
 def test_packaged_default_config_matches_repo_default() -> None:
