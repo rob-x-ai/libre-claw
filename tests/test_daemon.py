@@ -42,6 +42,7 @@ class ScriptedProvider(LLMProvider):
     def __init__(self, responses: list[list[StreamEvent]]) -> None:
         self.responses = responses
         self.system_prompts: list[str | None] = []
+        self.message_batches: list[list[ChatMessage]] = []
 
     async def complete(
         self,
@@ -52,7 +53,8 @@ class ScriptedProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        del messages, tools, stream, temperature, max_tokens
+        self.message_batches.append(list(messages))
+        del tools, stream, temperature, max_tokens
         self.system_prompts.append(system)
         for event in self.responses.pop(0):
             yield event
@@ -155,6 +157,36 @@ async def test_daemon_rejects_request_working_directory_override(monkeypatch, tm
     assert response.status == 403
     assert "cannot override working_directory" in payload["error"]
     assert await server.run_store.list_runs() == []
+
+
+async def test_daemon_start_run_uses_supplied_session_history(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    provider = ScriptedProvider([[TextDelta("ok"), Done()]])
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: provider,
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+    session_payload = {
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "first"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "reply"}]},
+        ],
+        "summary": "Earlier context.",
+    }
+
+    started = await server.start_run(
+        RequestStub(body={"message": "second", "session": session_payload})  # type: ignore[arg-type]
+    )
+    await _wait_for_state(server, _response_payload(started)["run"]["run_id"], "done")
+
+    assert [[block["text"] for block in message.content] for message in provider.message_batches[0]] == [
+        ["first"],
+        ["reply"],
+        ["second"],
+    ]
 
 
 async def test_daemon_blocks_and_resumes_on_permission_approval(monkeypatch, tmp_path: Path) -> None:

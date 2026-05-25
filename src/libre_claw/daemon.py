@@ -42,6 +42,7 @@ from libre_claw.core.usage import (
     usage_report_text,
     usage_summary_payload,
 )
+from libre_claw.core.session import session_from_payload
 from libre_claw.providers import LLMProvider, Usage, create_provider
 from libre_claw.tools_builtin import create_builtin_registry
 
@@ -211,7 +212,8 @@ class DaemonServer:
             state="queued",
         )
         surface = str(payload.get("surface", "daemon")).strip() or "daemon"
-        task = asyncio.create_task(self._run_agent(run, message, run_config, surface=surface))
+        session = session_from_payload(payload.get("session"))
+        task = asyncio.create_task(self._run_agent(run, message, run_config, surface=surface, session=session))
         active = ActiveRun(run_id=run.run_id, task=task)
         self.active_runs[run.run_id] = active
         task.add_done_callback(lambda _task, run_id=run.run_id: self.active_runs.pop(run_id, None))
@@ -357,6 +359,7 @@ class DaemonServer:
         *,
         surface: str = "daemon",
         hold_final_state: bool = False,
+        session: Session | None = None,
     ) -> RunState:
         assistant_chunks: list[str] = []
         state: RunState = "done"
@@ -374,7 +377,7 @@ class DaemonServer:
                 },
             )
             await self.run_store.append_event(run.run_id, "user_message", {"content": message})
-            agent = await self._create_agent(config)
+            agent = await self._create_agent(config, session=session)
             async for event in agent.run(message):
                 if isinstance(event, AgentTextDelta):
                     assistant_chunks.append(event.text)
@@ -579,12 +582,12 @@ class DaemonServer:
             browser="",
         )
 
-    async def _create_agent(self, config: LibreClawConfig) -> Agent:
+    async def _create_agent(self, config: LibreClawConfig, *, session: Session | None = None) -> Agent:
         provider = self.provider_factory(config)
         facts = await self.memory_store.list_facts()
         skill_store = SkillStore(config.general.working_directory)
         return Agent(
-            session=Session(),
+            session=session or Session(),
             provider=provider,
             tool_registry=self.registry_factory(config, self.memory_store),
             permission_manager=PermissionManager(config.permissions),

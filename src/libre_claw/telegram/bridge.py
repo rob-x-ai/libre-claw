@@ -28,6 +28,7 @@ from libre_claw.core import (
 )
 from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
+from libre_claw.core.session import session_to_payload
 from libre_claw.core.skills import SkillStore
 from libre_claw.core.tools import ToolCall
 from libre_claw.daemon import DaemonClient
@@ -314,6 +315,8 @@ class TelegramBridge:
                 model=self.config.general.default_model,
                 working_directory=str(self.config.general.working_directory),
                 surface="telegram:daemon",
+                telegram_chat_id=chat_id,
+                session=session_to_payload(state.session),
             )
         except Exception as exc:
             yield TelegramError(f"Could not start daemon run: {exc}")
@@ -326,6 +329,7 @@ class TelegramBridge:
             return
         state.daemon_run_id = run_id
         state.daemon_event_id = 0
+        assistant_chunks: list[str] = []
         yielded_done = False
         yield TelegramToolNotice(f"Daemon run {run_id} started.")
 
@@ -343,7 +347,14 @@ class TelegramBridge:
                 if not isinstance(event, dict):
                     continue
                 state.daemon_event_id = max(state.daemon_event_id, int(event.get("event_id", 0) or 0))
+                data = _object_payload(event.get("data"))
+                if str(event.get("type", "")) == "usage":
+                    usage = _usage_from_payload(data)
+                    state.usage = combine_usage(state.usage, usage) or state.usage
+                    continue
                 async for mapped in _telegram_events_from_daemon_event(run_id, event):
+                    if isinstance(mapped, TelegramText):
+                        assistant_chunks.append(mapped.text)
                     yielded_done = yielded_done or isinstance(mapped, TelegramDone)
                     yield mapped
 
@@ -353,7 +364,13 @@ class TelegramBridge:
                 yield TelegramError(f"Daemon run lookup failed: {exc}")
                 return
             run = _object_payload(detail.get("run"))
-            if str(run.get("state", "")) in {"done", "failed", "cancelled"}:
+            run_state = str(run.get("state", ""))
+            if run_state in {"done", "failed", "cancelled"}:
+                if run_state == "done":
+                    state.session.add_user_message(text)
+                    assistant_text = "".join(assistant_chunks)
+                    if assistant_text:
+                        state.session.add_assistant_message(assistant_text)
                 if not yielded_done:
                     yield TelegramDone(None)
                 return
@@ -402,6 +419,41 @@ async def _telegram_events_from_daemon_event(run_id: str, event: dict[str, Any])
 
 def _object_payload(value: object) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _usage_from_payload(data: dict[str, Any]) -> Usage:
+    return Usage(
+        input_tokens=_int_payload(data.get("input_tokens")),
+        output_tokens=_int_payload(data.get("output_tokens")),
+        cached_tokens=_int_payload(data.get("cached_tokens")),
+        reasoning_tokens=_int_payload(data.get("reasoning_tokens")),
+        cost=_float_payload(data.get("cost")),
+    )
+
+
+def _int_payload(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float):
+        return max(0, int(value))
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return 0
+
+
+def _float_payload(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _parse_schedule_text(argument: str, *, default_route: AutomationRoute) -> dict[str, object]:

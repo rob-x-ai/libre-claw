@@ -60,34 +60,39 @@ class FakeToolProvider(LLMProvider):
 
 
 class FakeDaemonClient:
-    def __init__(self) -> None:
+    def __init__(self, *, with_permission: bool = True) -> None:
         self.resolutions: list[tuple[str, str, str]] = []
-        self._events_served = False
+        self.start_payloads: list[dict[str, Any]] = []
+        self.with_permission = with_permission
+        self._events_served: set[str] = set()
+        self._run_count = 0
 
     async def start_run(self, message: str, **payload: Any) -> dict[str, Any]:
-        del message, payload
-        return {"run": {"run_id": "run-1", "state": "queued"}}
+        self._run_count += 1
+        self.start_payloads.append({"message": message, **payload})
+        return {"run": {"run_id": f"run-{self._run_count}", "state": "queued"}}
 
     async def get_events(self, run_id: str, after: int = 0) -> dict[str, Any]:
-        del run_id, after
-        if self._events_served:
+        del after
+        if run_id in self._events_served:
             return {"events": []}
-        self._events_served = True
-        return {
-            "events": [
-                {"event_id": 1, "type": "assistant_delta", "data": {"text": "hi"}},
+        self._events_served.add(run_id)
+        text = "hi" if run_id == "run-1" else "again"
+        events = [{"event_id": 1, "type": "assistant_delta", "data": {"text": text}}]
+        if self.with_permission:
+            events.append(
                 {
                     "event_id": 2,
                     "type": "permission_request",
                     "data": {"tool_call_id": "toolu_1", "name": "bash", "arguments": {"command": "date"}},
-                },
-                {"event_id": 3, "type": "run_finished", "data": {"state": "done"}},
-            ]
-        }
+                }
+            )
+        events.append({"event_id": 3, "type": "usage", "data": {"input_tokens": 3, "output_tokens": 2, "cost": 0.001}})
+        events.append({"event_id": 4, "type": "run_finished", "data": {"state": "done"}})
+        return {"events": events}
 
     async def get_run(self, run_id: str) -> dict[str, Any]:
-        del run_id
-        return {"run": {"run_id": "run-1", "state": "done"}}
+        return {"run": {"run_id": run_id, "state": "done"}}
 
     async def resolve_permission(self, run_id: str, tool_call_id: str, resolution: str) -> dict[str, Any]:
         self.resolutions.append((run_id, tool_call_id, resolution))
@@ -278,6 +283,32 @@ async def test_telegram_bridge_can_use_daemon_runs_for_approvals(monkeypatch, tm
     assert prompt.prompt_id == "daemon:run-1:toolu_1"
     assert resolved is True
     assert daemon.resolutions == [("run-1", "toolu_1", "allow_once")]
+
+
+async def test_telegram_daemon_bridge_preserves_chat_session_between_messages(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    daemon = FakeDaemonClient(with_permission=False)
+    bridge = TelegramBridge(config, daemon_client=daemon)  # type: ignore[arg-type]
+    await bridge.initialize()
+
+    first = [event async for event in bridge.stream_message(1, "hello")]
+    second = [event async for event in bridge.stream_message(1, "follow up")]
+
+    second_session = daemon.start_payloads[1]["session"]
+    messages = second_session["messages"]
+    assert daemon.start_payloads[0]["session"]["messages"] == []
+    assert [[block["text"] for block in message["content"]] for message in messages] == [["hello"], ["hi"]]
+    assert [message.role for message in bridge.state_for(1).session.messages] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert any(isinstance(event, TelegramText) and event.text == "hi" for event in first)
+    assert any(isinstance(event, TelegramText) and event.text == "again" for event in second)
+    assert "10 total" in bridge.status_text(1)
 
 
 async def test_telegram_bridge_schedule_command_creates_telegram_route(monkeypatch, tmp_path: Path) -> None:

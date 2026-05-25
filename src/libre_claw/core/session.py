@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, TypeAlias, cast
 
 
 MessageRole: TypeAlias = Literal["user", "assistant"]
@@ -102,6 +102,38 @@ def summarize_messages(messages: list[ChatMessage]) -> str:
         if content:
             lines.append(f"{message.role}: {content[:500]}")
     return "\n".join(lines)
+
+
+def session_to_payload(session: Session) -> dict[str, Any]:
+    return {
+        "messages": [message.as_provider_dict() for message in session.messages],
+        "summary": session.summary,
+    }
+
+
+def session_from_payload(value: object) -> Session:
+    session = Session()
+    if not isinstance(value, dict):
+        return session
+    summary = value.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        session.summary = summary
+    messages = value.get("messages")
+    if not isinstance(messages, list):
+        return session
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        if role not in {"user", "assistant"}:
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        blocks = [dict(block) for block in content if isinstance(block, dict)]
+        if blocks:
+            session.messages.append(ChatMessage(role=cast(MessageRole, role), content=blocks))
+    return session
 
 
 def estimate_context_tokens(
