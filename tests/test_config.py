@@ -5,7 +5,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from libre_claw.config import default_config_path, load_config, packaged_default_config_text, set_global_default_model, user_config_path
+from libre_claw.config import (
+    default_config_path,
+    global_config_path,
+    load_config,
+    packaged_default_config_text,
+    set_global_default_model,
+    user_config_path,
+)
 
 
 def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
@@ -129,6 +136,18 @@ def test_set_global_default_model_updates_user_config(monkeypatch, tmp_path: Pat
     assert config.general.default_model == "qwen/qwen3.7-max"
     assert config.providers["openrouter"]["default_model"] == "qwen/qwen3.7-max"
     assert config.tui.show_file_tree is False
+
+
+def test_global_config_path_prefers_active_user_config(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    user_path = user_config_path()
+    user_path.parent.mkdir(parents=True)
+    user_path.write_text("[general]\ndefault_provider = \"codex\"\n", encoding="utf-8")
+
+    config = load_config()
+
+    assert global_config_path(config) == user_path
 
 
 def test_packaged_default_config_matches_repo_default() -> None:

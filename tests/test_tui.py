@@ -171,6 +171,37 @@ async def test_model_global_flag_persists_user_default(monkeypatch, tmp_path: Pa
     assert any("Saved as global default" in entry.content for entry in app.transcript)
 
 
+async def test_model_global_flag_updates_next_launch_for_codex(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    user_path = tmp_path / ".libre-claw" / "config.toml"
+    user_path.parent.mkdir(parents=True)
+    user_path.write_text(
+        "\n".join(
+            [
+                "[general]",
+                'default_provider = "openrouter"',
+                'default_model = "deepseek/deepseek-v4-flash"',
+                "",
+                "[providers.openrouter]",
+                'default_model = "deepseek/deepseek-v4-flash"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test():
+        await app._handle_command("/model codex:gpt-5.5 --global")
+
+    reloaded = load_config()
+    assert reloaded.general.default_provider == "codex"
+    assert reloaded.general.default_model == "gpt-5.5"
+    assert reloaded.providers["codex"]["default_model"] == "gpt-5.5"
+    assert app.config.general.default_provider == "codex"
+    assert app.config.general.default_model == "gpt-5.5"
+
+
 def test_assistant_label_uses_purple_accent(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

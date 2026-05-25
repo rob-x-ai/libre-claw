@@ -25,7 +25,14 @@ from textual.widgets import Button, DirectoryTree, Input, RichLog, Static
 
 from libre_claw import __version__
 from libre_claw.auth.codex import CodexCliError, CodexCommandResult, codex_logout, codex_status, stream_codex_command
-from libre_claw.config import ConfigError, GeneralConfig, LibreClawConfig, load_config, set_global_default_model
+from libre_claw.config import (
+    ConfigError,
+    GeneralConfig,
+    LibreClawConfig,
+    global_config_path,
+    load_config,
+    set_global_default_model,
+)
 from libre_claw.core import (
     Agent,
     AgentDone,
@@ -943,7 +950,12 @@ class LibreClawApp(App[None]):
         persisted_path: Path | None = None
         if persist_global:
             try:
-                persisted_path = set_global_default_model(provider, selected_model)
+                persisted_path = set_global_default_model(
+                    provider,
+                    selected_model,
+                    config_path=global_config_path(self.config),
+                )
+                self.config = self._verified_global_model_config(provider, selected_model, persisted_path)
             except ConfigError as exc:
                 self._append_system(f"Model set for this session, but global config was not updated: {exc}")
         self._rebuild_agent()
@@ -956,6 +968,23 @@ class LibreClawApp(App[None]):
             )
         else:
             self._append_system(f"Model set to {provider}:{selected_model}.{suffix}")
+
+    def _verified_global_model_config(
+        self,
+        provider: str,
+        selected_model: str,
+        persisted_path: Path,
+    ) -> LibreClawConfig:
+        reloaded = load_config(config_path=persisted_path, working_directory=self.config.general.working_directory)
+        resolved_provider = _canonical_tui_provider(reloaded.general.default_provider)
+        resolved_model = _effective_model(reloaded)
+        if resolved_provider != provider or resolved_model != selected_model:
+            raise ConfigError(
+                f"wrote {persisted_path}, but the next launch resolves to "
+                f"{resolved_provider}:{resolved_model}. Check LIBRE_CLAW_DEFAULT_PROVIDER "
+                "or LIBRE_CLAW_DEFAULT_MODEL environment overrides."
+            )
+        return reloaded
 
     def _set_provider(self, provider: str) -> None:
         if not provider:

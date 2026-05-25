@@ -191,6 +191,19 @@ def set_global_default_model(
     return path
 
 
+def global_config_path(config: LibreClawConfig | None = None) -> Path:
+    """Return the config file that `/model --global` should update."""
+    if config is None:
+        return user_config_path()
+
+    repo_default = default_config_path().resolve()
+    for path in reversed(config.source_paths):
+        resolved = path.expanduser().resolve()
+        if resolved != repo_default:
+            return resolved
+    return user_config_path()
+
+
 def _load_default_config() -> ConfigTable:
     path = default_config_path()
     if path.exists():
