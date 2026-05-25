@@ -8,8 +8,8 @@ from pathlib import Path
 import libre_claw.providers.codex as codex_provider
 from libre_claw.auth.codex import CodexCommandEvent, CodexCommandResult, CodexStatus
 from libre_claw.core.session import ChatMessage, text_block
-from libre_claw.providers.base import ProviderError, TextDelta
-from libre_claw.providers.codex import CodexProvider, _extract_codex_text
+from libre_claw.providers.base import Done, ProviderError, TextDelta
+from libre_claw.providers.codex import CodexProvider, _chunk_text, _extract_codex_text, _usage_from_codex_jsonl
 
 
 def test_extract_codex_text_from_jsonl_and_plain_fallback() -> None:
@@ -22,6 +22,23 @@ def test_extract_codex_text_from_jsonl_and_plain_fallback() -> None:
     )
 
     assert _extract_codex_text(output) == ["Hello", " world", "plain line\n"]
+
+
+def test_codex_usage_is_parsed_from_turn_completed() -> None:
+    usage = _usage_from_codex_jsonl(
+        '{"type":"turn.completed","usage":'
+        '{"input_tokens":10,"cached_input_tokens":4,"output_tokens":3,"reasoning_output_tokens":2}}\n'
+    )
+
+    assert usage is not None
+    assert usage.input_tokens == 10
+    assert usage.cached_tokens == 4
+    assert usage.output_tokens == 3
+    assert usage.reasoning_tokens == 2
+
+
+def test_codex_completed_text_chunks_on_word_boundaries() -> None:
+    assert _chunk_text("hello beautiful world", 10) == ["hello ", "beautiful ", "world"]
 
 
 async def test_codex_provider_requires_login(monkeypatch, tmp_path: Path) -> None:
@@ -51,18 +68,21 @@ async def test_codex_provider_streams_codex_exec_with_prompt(monkeypatch, tmp_pa
     async def fake_stream(args, input_text=None):  # noqa: ANN001
         captured["args"] = args
         captured["input_text"] = input_text
-        yield CodexCommandEvent(stream="stdout", text='{"delta":"Codex "}\n')
-        yield CodexCommandEvent(stream="stdout", text='{"delta":"works"}\n')
+        yield CodexCommandEvent(stream="stdout", text='{"item":{"type":"agent_message","text":"Codex works"}}\n')
+        yield CodexCommandEvent(
+            stream="stdout",
+            text='{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":2}}\n',
+        )
         yield CodexCommandResult(
             args=tuple(args),
             exit_code=0,
-            stdout='{"delta":"Codex "}\n{"delta":"works"}\n',
+            stdout='{"item":{"type":"agent_message","text":"Codex works"}}\n',
             stderr="",
         )
 
     monkeypatch.setattr(codex_provider, "codex_status", fake_status)
     monkeypatch.setattr(codex_provider, "stream_codex_command", fake_stream)
-    provider = CodexProvider(model="gpt-5.5", working_directory=tmp_path, timeout=12)
+    provider = CodexProvider(model="gpt-5.5", working_directory=tmp_path, timeout=12, replay_delay=0)
 
     events = [
         event
@@ -72,7 +92,11 @@ async def test_codex_provider_streams_codex_exec_with_prompt(monkeypatch, tmp_pa
         )
     ]
 
-    assert [event.text for event in events if isinstance(event, TextDelta)] == ["Codex ", "works"]
+    assert [event.text for event in events if isinstance(event, TextDelta)] == ["Codex works"]
+    done = next(event for event in events if isinstance(event, Done))
+    assert done.usage is not None
+    assert done.usage.input_tokens == 5
+    assert done.usage.output_tokens == 2
     assert captured["args"][:5] == ["codex", "--ask-for-approval", "never", "exec", "--json"]
     assert "--model" in captured["args"]
     assert "build this" in str(captured["input_text"])

@@ -13,7 +13,11 @@ import structlog
 
 from libre_claw.auth.codex import CodexCommandResult, CodexCommandEvent, codex_status, stream_codex_command
 from libre_claw.core.session import ChatMessage
-from libre_claw.providers.base import Done, LLMProvider, ProviderError, StreamEvent, TextDelta, ToolSchema
+from libre_claw.providers.base import Done, LLMProvider, ProviderError, StreamEvent, TextDelta, ToolSchema, Usage
+
+
+CODEX_REPLAY_CHUNK_SIZE = 24
+CODEX_REPLAY_DELAY = 0.015
 
 
 class CodexProvider(LLMProvider):
@@ -27,6 +31,8 @@ class CodexProvider(LLMProvider):
         sandbox: str = "workspace-write",
         approval_policy: str = "never",
         timeout: int = 900,
+        replay_chunk_size: int = CODEX_REPLAY_CHUNK_SIZE,
+        replay_delay: float = CODEX_REPLAY_DELAY,
     ) -> None:
         self.model = model
         self.working_directory = working_directory
@@ -34,6 +40,8 @@ class CodexProvider(LLMProvider):
         self.sandbox = sandbox
         self.approval_policy = approval_policy
         self.timeout = timeout
+        self.replay_chunk_size = replay_chunk_size
+        self.replay_delay = replay_delay
         self._logger = structlog.get_logger(__name__)
 
     async def complete(
@@ -73,6 +81,7 @@ class CodexProvider(LLMProvider):
         ]
         try:
             emitted = False
+            usage: Usage | None = None
             result: CodexCommandResult | None = None
             async with asyncio.timeout(self.timeout):
                 async for event in stream_codex_command(args, input_text=prompt):
@@ -81,9 +90,13 @@ class CodexProvider(LLMProvider):
                         continue
                     if event.stream == "stderr":
                         continue
+                    usage = _usage_from_codex_jsonl(event.text, usage)
                     for text in _extract_codex_text(event.text):
                         emitted = True
-                        yield TextDelta(text)
+                        for chunk in _chunk_text(text, self.replay_chunk_size):
+                            yield TextDelta(chunk)
+                            if self.replay_delay > 0:
+                                await asyncio.sleep(self.replay_delay)
         except asyncio.CancelledError:
             raise
         except TimeoutError:
@@ -103,9 +116,13 @@ class CodexProvider(LLMProvider):
             return
 
         if not emitted and result.stdout.strip():
-            yield TextDelta(result.stdout.strip())
+            for text in _extract_codex_text(result.stdout):
+                for chunk in _chunk_text(text, self.replay_chunk_size):
+                    yield TextDelta(chunk)
+                    if self.replay_delay > 0:
+                        await asyncio.sleep(self.replay_delay)
 
-        yield Done(stop_reason="codex_cli")
+        yield Done(usage=usage, stop_reason="codex_cli")
 
 
 def _format_codex_prompt(messages: Sequence[ChatMessage], system: str | None) -> str:
@@ -158,6 +175,30 @@ def _extract_codex_text(stdout: str) -> list[str]:
     return texts
 
 
+def _usage_from_codex_jsonl(jsonl: str, previous: Usage | None = None) -> Usage | None:
+    usage = previous
+    for raw_line in jsonl.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "turn.completed":
+            continue
+        raw_usage = event.get("usage")
+        if not isinstance(raw_usage, Mapping):
+            continue
+        usage = Usage(
+            input_tokens=_int_usage(raw_usage.get("input_tokens")),
+            output_tokens=_int_usage(raw_usage.get("output_tokens")),
+            cached_tokens=_int_usage(raw_usage.get("cached_input_tokens")),
+            reasoning_tokens=_int_usage(raw_usage.get("reasoning_output_tokens")),
+        )
+    return usage
+
+
 def _text_from_event(event: Mapping[str, Any]) -> str:
     candidates = [
         event.get("delta"),
@@ -179,6 +220,27 @@ def _text_from_event(event: Mapping[str, Any]) -> str:
             return text
 
     return ""
+
+
+def _chunk_text(text: str, chunk_size: int) -> list[str]:
+    if chunk_size <= 0 or len(text) <= chunk_size:
+        return [text]
+
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(len(text), start + chunk_size)
+        if end < len(text):
+            split_at = max(text.rfind(" ", start, end), text.rfind("\n", start, end))
+            if split_at > start:
+                end = split_at + 1
+        chunks.append(text[start:end])
+        start = end
+    return chunks
+
+
+def _int_usage(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def _coerce_text(value: Any) -> str:
