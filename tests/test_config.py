@@ -45,6 +45,14 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.heartbeat.route == "tui"
     assert config.heartbeat.telegram_chat_id == 0
     assert "blocked approvals" in "\n".join(config.heartbeat.checklist)
+    assert config.memory.enabled is True
+    assert config.memory.auto_extract is True
+    assert config.memory.auto_summarize is True
+    assert config.memory.inject_relevant is True
+    assert config.memory.max_injected_items == 8
+    assert config.memory.max_injected_tokens == 1200
+    assert config.memory.redact_secrets is True
+    assert config.memory.archive_sessions is True
     assert config.telegram.use_daemon is False
     assert config.daemon.host == "127.0.0.1"
     assert config.daemon.port == 8766
@@ -128,6 +136,16 @@ def test_config_loads_fallback_and_heartbeat_sections(monkeypatch, tmp_path: Pat
                 'model = "deepseek/deepseek-v4-flash"',
                 'checklist = ["Check CI", "Check blocked approvals"]',
                 'prompt = "custom heartbeat"',
+                "",
+                "[memory]",
+                "enabled = false",
+                "auto_extract = false",
+                "auto_summarize = true",
+                "inject_relevant = false",
+                "max_injected_items = 3",
+                "max_injected_tokens = 500",
+                "redact_secrets = true",
+                "archive_sessions = false",
             ]
         ),
         encoding="utf-8",
@@ -147,6 +165,13 @@ def test_config_loads_fallback_and_heartbeat_sections(monkeypatch, tmp_path: Pat
     assert config.heartbeat.telegram_chat_id == 42
     assert config.heartbeat.checklist == ("Check CI", "Check blocked approvals")
     assert config.heartbeat.prompt == "custom heartbeat"
+    assert config.memory.enabled is False
+    assert config.memory.auto_extract is False
+    assert config.memory.auto_summarize is True
+    assert config.memory.inject_relevant is False
+    assert config.memory.max_injected_items == 3
+    assert config.memory.max_injected_tokens == 500
+    assert config.memory.archive_sessions is False
 
 
 def test_heartbeat_prompt_and_interval_parser(monkeypatch, tmp_path: Path) -> None:

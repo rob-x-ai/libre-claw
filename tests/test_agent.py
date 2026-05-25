@@ -17,6 +17,7 @@ from libre_claw.core.agent import (
     AgentTextDelta,
     AgentToolCall,
     AgentToolResult,
+    MemoryProvider,
     SkillProvider,
 )
 from libre_claw.core.permissions import PermissionManager
@@ -98,6 +99,7 @@ def make_agent(
     system_prompt_extra: str = "",
     skill_provider: SkillProvider | None = None,
     soul_provider=None,
+    memory_provider: MemoryProvider | None = None,
     fallback_providers=None,
 ) -> Agent:
     permissions = PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=True))
@@ -111,6 +113,7 @@ def make_agent(
         system_prompt_extra=system_prompt_extra,
         skill_provider=skill_provider,
         soul_provider=soul_provider,
+        memory_provider=memory_provider,
         fallback_providers=fallback_providers,
     )
 
@@ -164,6 +167,17 @@ async def test_agent_injects_soul_persona_into_system_prompt() -> None:
     assert "Libre Claw soul/persona customization" in provider.received_system
     assert "Be electric but precise." in provider.received_system
     assert "never override safety rules" in provider.received_system
+
+
+async def test_agent_injects_relevant_persistent_memory() -> None:
+    provider = ScriptedProvider([[TextDelta("ok"), Done()]])
+    agent = make_agent(provider, memory_provider=lambda message: [f"remembered for {message}"])
+
+    await collect_events(agent, "timezone")
+
+    assert provider.received_system is not None
+    assert "Relevant persistent memory:" in provider.received_system
+    assert "remembered for timezone" in provider.received_system
 
 
 async def test_agent_loads_relevant_skills_into_system_prompt() -> None:

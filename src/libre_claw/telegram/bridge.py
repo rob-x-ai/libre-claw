@@ -7,6 +7,7 @@ import asyncio
 import shlex
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
 from libre_claw.config import LibreClawConfig
 from libre_claw.core.automations import (
@@ -27,8 +28,16 @@ from libre_claw.core import (
     AgentToolResult,
     Session,
 )
-from libre_claw.core.memory import MemoryStore
+from libre_claw.core.memory import (
+    MemoryItem,
+    MemoryStore,
+    extract_memories_with_provider,
+    new_session_archive_id,
+    redact_secrets,
+    summarize_session_for_memory,
+)
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
+from libre_claw.core.runs import RunStore
 from libre_claw.core.session import session_to_payload
 from libre_claw.core.skills import SkillStore
 from libre_claw.core.soul import SoulStore
@@ -83,6 +92,7 @@ class TelegramChatState:
     pending_permissions: dict[str, AgentPermissionRequest] = field(default_factory=dict)
     daemon_run_id: str | None = None
     daemon_event_id: int = 0
+    archive_id: str = field(default_factory=lambda: new_session_archive_id("telegram"))
 
 
 class TelegramBridge:
@@ -100,13 +110,14 @@ class TelegramBridge:
         self.skill_store = SkillStore(config.general.working_directory)
         self.soul_store = SoulStore(config.general.working_directory)
         self.automation_store = AutomationStore(config.automations.root)
+        self.run_store = RunStore()
         self._states: dict[int, TelegramChatState] = {}
         self._memory_facts: list[str] = []
+        self.memory_enabled = config.memory.enabled
 
     async def initialize(self) -> None:
         await self.memory_store.initialize()
-        facts = await self.memory_store.list_facts()
-        self._memory_facts = [fact.fact for fact in facts]
+        self._memory_facts = await self.memory_store.list_always_injected_memories()
 
     def state_for(self, chat_id: int) -> TelegramChatState:
         return self._states.setdefault(chat_id, TelegramChatState(chat_id=chat_id))
@@ -117,6 +128,7 @@ class TelegramBridge:
         return state
 
     async def stream_message(self, chat_id: int, text: str):
+        await self._archive_event(chat_id, "user_message", {"content": text})
         if self.daemon_client is not None:
             async for event in self._stream_daemon_message(chat_id, text):
                 yield event
@@ -134,11 +146,13 @@ class TelegramBridge:
                 yield TelegramText(event.text)
                 continue
             if isinstance(event, AgentToolCall):
+                await self._archive_event(chat_id, "tool_call", {"name": event.call.name, "arguments": dict(event.call.arguments)})
                 yield TelegramToolNotice(f"Calling {event.call.name} with {dict(event.call.arguments)}")
                 continue
             if isinstance(event, AgentPermissionRequest):
                 prompt_id = f"{chat_id}:{event.call.id}"
                 state.pending_permissions[prompt_id] = event
+                await self._archive_event(chat_id, "permission_request", {"name": event.call.name, "arguments": dict(event.call.arguments)})
                 yield TelegramPermissionPrompt(
                     prompt_id=prompt_id,
                     call=event.call,
@@ -147,17 +161,28 @@ class TelegramBridge:
                 continue
             if isinstance(event, AgentToolResult):
                 status = "error" if event.result.is_error else "result"
+                await self._archive_event(
+                    chat_id,
+                    "tool_result",
+                    {"name": event.call.name, "is_error": event.result.is_error, "content": event.result.as_text()},
+                )
                 yield TelegramToolNotice(f"{event.call.name} {status}: {event.result.as_text()}")
                 continue
             if isinstance(event, AgentDone):
                 if event.usage is not None:
                     state.usage = combine_usage(state.usage, event.usage) or state.usage
+                assistant_text = _latest_assistant_text(state.session)
+                if assistant_text:
+                    await self._archive_event(chat_id, "assistant_message", {"content": assistant_text})
+                    await self._extract_turn_memory(chat_id, text, assistant_text)
                 yield TelegramDone(event.usage)
                 continue
             if isinstance(event, AgentError):
+                await self._archive_event(chat_id, "error", {"message": event.message})
                 yield TelegramError(event.message)
                 return
             if isinstance(event, AgentFallback):
+                await self._archive_event(chat_id, "provider_fallback", {"provider": event.provider_label, "reason": event.reason})
                 yield TelegramToolNotice(f"Provider fallback engaged: {event.provider_label}\nReason: {event.reason}")
                 continue
 
@@ -313,8 +338,159 @@ class TelegramBridge:
             system_prompt_extra=self.config.agent.system_prompt_extra,
             skill_provider=self.skill_store.relevant_skill_texts,
             soul_provider=self.soul_store.soul_texts,
+            memory_provider=lambda user_message: self.relevant_memory_texts(user_message),
             fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
         )
+
+    async def relevant_memory_texts(self, user_message: str) -> list[str]:
+        if not self._memory_enabled() or not self.config.memory.inject_relevant:
+            return []
+        items = await self.memory_store.search_memory_items(
+            user_message,
+            project_root=self.config.general.working_directory,
+            limit=max(1, self.config.memory.max_injected_items),
+        )
+        return _memory_texts_with_budget(items, self.config.memory.max_injected_tokens)
+
+    async def memory_command_text(self, chat_id: int, argument: str) -> str:
+        parts = argument.split(maxsplit=1)
+        action = parts[0].lower() if parts else "list"
+        value = parts[1].strip() if len(parts) > 1 else ""
+        state = self.state_for(chat_id)
+
+        if action == "status":
+            status = await self.memory_store.memory_status()
+            return (
+                "Memory status:\n"
+                f"enabled: {self._memory_enabled()}\n"
+                f"active items: {status['active']}\n"
+                f"disabled items: {status['disabled']}\n"
+                f"session archives: {status['session_archives']}"
+            )
+        if action == "on":
+            self.memory_enabled = True
+            return "Persistent memory enabled for Telegram."
+        if action == "off":
+            self.memory_enabled = False
+            return "Persistent memory disabled for Telegram."
+        if action == "list":
+            items = await self.memory_store.list_memory_items(limit=50)
+            return _memory_items_text(items) if items else "No active memories stored."
+        if action == "search":
+            if not value:
+                return "Usage: /memory search <query>"
+            items = await self.memory_store.search_memory_items(
+                value,
+                project_root=self.config.general.working_directory,
+                limit=20,
+            )
+            return _memory_items_text(items) if items else "No matching memories."
+        if action == "add":
+            if not value:
+                return "Usage: /memory add <memory>"
+            item = await self.memory_store.add_memory_item(
+                text=value,
+                kind="fact",
+                scope="global",
+                source_type="manual",
+                project_root=self.config.general.working_directory,
+            )
+            await self.initialize()
+            return f"Added memory {item.id}."
+        if action == "forget":
+            if not value.isdigit():
+                return "Usage: /memory forget <id>"
+            removed = await self.memory_store.forget_memory_item(int(value))
+            await self.initialize()
+            return "Memory forgotten." if removed else f"No active memory with id {value}."
+        if action == "summarize":
+            summary = summarize_session_for_memory(state.session)
+            if not summary:
+                return "No Telegram session content to summarize into memory."
+            item = await self.memory_store.add_memory_item(
+                kind="summary",
+                scope="session",
+                text=summary,
+                source_type="session",
+                source_id=f"{state.archive_id}:summary",
+                project_root=self.config.general.working_directory,
+            )
+            return f"Session summary saved as memory {item.id}."
+        if action == "import-runs":
+            count = await self._import_run_memories()
+            return f"Imported {count} run summary memory item(s)."
+        return "Usage: /memory status|on|off|list|search <query>|add <text>|forget <id>|summarize|import-runs"
+
+    async def _archive_event(self, chat_id: int, event_type: str, data: dict[str, Any]) -> None:
+        if not self.config.memory.archive_sessions:
+            return
+        try:
+            await self.memory_store.append_session_event(self.state_for(chat_id).archive_id, event_type, data)
+        except Exception:
+            return
+
+    async def _extract_turn_memory(self, chat_id: int, user_message: str, assistant_text: str) -> None:
+        if not self._memory_enabled() or not assistant_text.strip():
+            return
+        source_id = f"{self.state_for(chat_id).archive_id}:turn:{uuid4().hex}"
+        if self.config.memory.auto_summarize:
+            try:
+                await self.memory_store.add_memory_item(
+                    kind="summary",
+                    scope="session",
+                    text=_memory_summary_text(user_message, assistant_text),
+                    source_type="telegram",
+                    source_id=source_id,
+                    project_root=self.config.general.working_directory,
+                )
+            except Exception:
+                pass
+        if not self.config.memory.auto_extract:
+            return
+        try:
+            provider = create_provider(self.config)
+            existing = [item.text for item in await self.memory_store.search_memory_items(user_message, project_root=self.config.general.working_directory, limit=8)]
+            extracted = await extract_memories_with_provider(
+                provider,
+                user_message=user_message,
+                assistant_text=assistant_text,
+                existing_memories=existing,
+            )
+            for index, memory in enumerate(extracted):
+                await self.memory_store.add_memory_item(
+                    kind=memory.kind,
+                    scope=memory.scope,
+                    text=memory.text,
+                    source_type="telegram",
+                    source_id=f"{source_id}:memory:{index}",
+                    project_root=self.config.general.working_directory if memory.scope == "project" else "",
+                )
+        except Exception:
+            return
+
+    async def _import_run_memories(self) -> int:
+        count = 0
+        runs = await self.run_store.list_runs(limit=200)
+        for run in runs:
+            summary_path = run.path / "summary.md"
+            if not summary_path.exists():
+                continue
+            summary = redact_secrets(await asyncio.to_thread(summary_path.read_text, encoding="utf-8")).strip()
+            if not summary:
+                continue
+            await self.memory_store.add_memory_item(
+                kind="summary",
+                scope="project",
+                text=_memory_summary_text(run.title, summary),
+                source_type="run",
+                source_id=f"{run.run_id}:summary",
+                project_root=run.working_directory or self.config.general.working_directory,
+            )
+            count += 1
+        return count
+
+    def _memory_enabled(self) -> bool:
+        return self.memory_enabled and self.config.memory.enabled
 
     async def _stream_daemon_message(self, chat_id: int, text: str):
         if self.daemon_client is None:
@@ -363,6 +539,7 @@ class TelegramBridge:
                     continue
                 state.daemon_event_id = max(state.daemon_event_id, int(event.get("event_id", 0) or 0))
                 data = _object_payload(event.get("data"))
+                await self._archive_event(chat_id, f"daemon_{event.get('type', 'event')}", data)
                 if str(event.get("type", "")) == "usage":
                     usage = _usage_from_payload(data)
                     state.usage = combine_usage(state.usage, usage) or state.usage
@@ -386,6 +563,7 @@ class TelegramBridge:
                     assistant_text = "".join(assistant_chunks)
                     if assistant_text:
                         state.session.add_assistant_message(assistant_text)
+                        await self._archive_event(chat_id, "assistant_message", {"content": assistant_text, "run_id": run_id})
                 if not yielded_done:
                     yield TelegramDone(None)
                 return
@@ -456,6 +634,46 @@ def _int_payload(value: object) -> int:
     if isinstance(value, str) and value.isdigit():
         return int(value)
     return 0
+
+
+def _latest_assistant_text(session: Session) -> str:
+    for message in reversed(session.messages):
+        if message.role != "assistant":
+            continue
+        chunks = [
+            str(block.get("text", ""))
+            for block in message.content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        return "\n".join(chunk for chunk in chunks if chunk).strip()
+    return ""
+
+
+def _memory_items_text(items: list[MemoryItem]) -> str:
+    return "\n".join(f"{item.id}: [{item.kind}/{item.scope}] {item.text}" for item in items)
+
+
+def _memory_texts_with_budget(items: list[MemoryItem], max_tokens: int) -> list[str]:
+    budget = max(1, max_tokens) * 4
+    selected: list[str] = []
+    used = 0
+    for item in items:
+        text = f"[{item.kind}/{item.scope}] {item.text}"
+        cost = len(text)
+        if selected and used + cost > budget:
+            break
+        selected.append(text[:budget])
+        used += cost
+    return selected
+
+
+def _memory_summary_text(user_message: str, assistant_text: str) -> str:
+    parts = []
+    if user_message.strip():
+        parts.append("User asked: " + user_message.strip()[:500])
+    if assistant_text.strip():
+        parts.append("Libre Claw response: " + assistant_text.strip()[:1500])
+    return redact_secrets("\n".join(parts).strip())
 
 
 def _float_payload(value: object) -> float | None:

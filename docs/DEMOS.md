@@ -23,6 +23,14 @@ product story consistent while the UI continues to evolve.
 4. Run `/run <id>`.
 5. Run `/artifacts plan`, `/artifacts diff`, and `/changes <id>`.
 
+## Persistent Memory
+
+1. Run `/memory status`.
+2. Add a harmless preference with `/memory add Prefer concise release notes`.
+3. Ask a follow-up task that should use the preference.
+4. Run `/memory search release notes`.
+5. Disable the memory with `/memory forget <id>`.
+
 ## Autonomous Goal
 
 1. Run `/goal Find a small improvement, implement it, and verify it.`

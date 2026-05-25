@@ -62,6 +62,7 @@ and save a durable run under `~/.libre-claw/runs/<run_id>/`.
 /artifacts summary
 /artifacts diff
 /usage openrouter
+/memory status
 ```
 
 For longer autonomous work:
@@ -69,3 +70,9 @@ For longer autonomous work:
 ```text
 /goal Implement the feature, run tests, and stop when verified.
 ```
+
+Libre Claw automatically keeps local persistent memory. Raw session archives
+stay in `~/.libre-claw/sessions/`, durable runs stay in `~/.libre-claw/runs/`,
+and searchable memory lives in `~/.libre-claw/memory.db`. Use `/memory list`,
+`/memory search <query>`, `/memory add <text>`, and `/memory forget <id>` when
+you want to inspect or steer what gets remembered.

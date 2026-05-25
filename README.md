@@ -50,7 +50,9 @@ and run the Telegram daemon.
   `.libre-claw/skills/`, with AgentSkills-style `SKILL.md` discovery.
 - Interactive permission prompts for write/edit/shell actions.
 - File explorer, hidden on startup, whose root can move up and down with the user.
-- SQLite-backed memory, saved sessions, and context compaction.
+- Automatic persistent memory with local JSONL archives, searchable SQLite
+  memory items, relevance-based prompt injection, saved sessions, and context
+  compaction.
 - Secure API key storage through environment variables, OS keyring, or an
   encrypted fallback file.
 - Telegram daemon with allowlist auth.
@@ -422,7 +424,7 @@ Legacy configs that still say `default_provider = "local"` or
 - `/skills list|show|add|edit|delete`
 - `/soul status|show|init|reload`
 - `/heartbeat status|once|start|stop`
-- `/memory list|add <fact>|forget <id>`
+- `/memory status|on|off|list|search <query>|add <text>|forget <id>|summarize|import-runs`
 - `/telegram`
 - `/exit`
 
@@ -446,11 +448,60 @@ ctx [##--------]
 ```
 
 The meter is an estimated-token view of the current system prompt, soul files,
-summary, memory facts, and conversation against `[agent].context_window_tokens`.
+summary, persistent memory, and conversation against
+`[agent].context_window_tokens`.
 
 Use `/compact status` for details, `/compact` for normal compaction, and
 `/compact --force --keep 4` when you want to summarize aggressively while
 keeping only the latest four messages.
+
+## Persistent Memory
+
+Libre Claw keeps a Claude-like local memory automatically:
+
+- Raw session archives are append-only JSONL files under
+  `~/.libre-claw/sessions/<session_id>/events.jsonl`.
+- Durable task runs remain under `~/.libre-claw/runs/<run_id>/events.jsonl`
+  with run artifacts.
+- Searchable memories live in `~/.libre-claw/memory.db` as `memory_items`
+  for facts, preferences, project decisions, workflows, and summaries.
+
+After a completed turn or run, Libre Claw can ask the configured provider to
+extract only durable information with tools disabled. Future turns query the
+local memory store by the current message and project root, then inject a
+capped `Relevant persistent memory:` section into the system prompt.
+
+Memory is local and enabled by default. Credential-looking data is redacted
+before archiving, extraction, search, or injection. Libre Claw avoids storing
+API keys, bearer tokens, Telegram bot tokens, OAuth tokens, `.env` secrets,
+private SSH keys, and credential-looking tool output.
+
+Useful commands:
+
+- `/memory status` shows active/disabled memory counts and archive count.
+- `/memory list` lists recent active memories.
+- `/memory search <query>` searches memory with FTS5 when available and a
+  fallback search otherwise.
+- `/memory add <text>` adds an explicit memory.
+- `/memory forget <id>` soft-disables a memory so it is never injected.
+- `/memory summarize` saves a compact summary of the current session.
+- `/memory import-runs` imports summaries from existing durable run artifacts.
+- `/memory on` and `/memory off` toggle memory for the current TUI or Telegram
+  bridge process.
+
+Configuration:
+
+```toml
+[memory]
+enabled = true
+auto_extract = true
+auto_summarize = true
+inject_relevant = true
+max_injected_items = 8
+max_injected_tokens = 1200
+redact_secrets = true
+archive_sessions = true
+```
 
 ## Goal Mode
 

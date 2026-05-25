@@ -66,6 +66,7 @@ class TelegramBot:
         application.add_handler(CommandHandler("provider", handlers.provider))
         application.add_handler(CommandHandler("schedule", handlers.schedule))
         application.add_handler(CommandHandler("heartbeat", handlers.heartbeat))
+        application.add_handler(CommandHandler("memory", handlers.memory))
         application.add_handler(CallbackQueryHandler(handlers.callback))
         application.add_handler(MessageHandler(filters.COMMAND, handlers.unknown_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.message))

@@ -65,7 +65,14 @@ from libre_claw.core import (
     heartbeat_prompt,
     parse_heartbeat_interval,
 )
-from libre_claw.core.memory import MemoryStore
+from libre_claw.core.memory import (
+    MemoryItem,
+    MemoryStore,
+    extract_memories_with_provider,
+    new_session_archive_id,
+    redact_secrets,
+    summarize_session_for_memory,
+)
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, pending_approvals, run_changes_text, run_plan_text
 from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
@@ -211,7 +218,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/soul", "/soul status|show|init|reload", "Manage soul.md persona injection"),
     SlashCommand("/schedule", "/schedule list|add|pause|resume|delete|examples", "Manage recurring local runs"),
     SlashCommand("/heartbeat", "/heartbeat status|once|start [every 30 minutes]|stop", "Run recurring check-ins"),
-    SlashCommand("/memory", "/memory list|add <fact>|forget <id>", "Manage persistent memory facts"),
+    SlashCommand("/memory", "/memory status|list|search|add|forget|summarize", "Manage persistent memory"),
     SlashCommand("/telegram", "/telegram", "Show Telegram bridge status"),
     SlashCommand("/tools", "/tools list|expand|collapse|toggle <index>", "Inspect and control tool details"),
     SlashCommand("/exit", "/exit", "Exit Libre Claw"),
@@ -616,6 +623,8 @@ class LibreClawApp(App[None]):
         self.automation_store = AutomationStore(self.config.automations.root)
         self.daemon_client = DaemonClient(daemon_base_url(self.config)) if self.config.tui.use_daemon else None
         self.memory_facts: list[str] = []
+        self.memory_enabled = self.config.memory.enabled
+        self.session_archive_id = new_session_archive_id("tui")
         self.agent: Agent | None = None
         self.provider_error: str | None = None
         self.usage = Usage()
@@ -643,6 +652,7 @@ class LibreClawApp(App[None]):
         self._artifact_tab: ArtifactTab = "summary"
         self._artifact_visible = False
         self._run_background_tasks: set[asyncio.Task[Any]] = set()
+        self._memory_background_tasks: set[asyncio.Task[Any]] = set()
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._heartbeat_interval_minutes = max(1, self.config.heartbeat.interval_minutes)
 
@@ -709,6 +719,8 @@ class LibreClawApp(App[None]):
             self._active_task.cancel()
         if self._heartbeat_task is not None and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
+        for task in self._memory_background_tasks:
+            task.cancel()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -810,6 +822,7 @@ class LibreClawApp(App[None]):
             return
 
         self._append_user(text)
+        self._archive_session_event_later("user_message", {"content": text})
         if self.daemon_client is not None:
             assistant_index = self._append_assistant("")
             self._active_task = asyncio.create_task(self._stream_daemon_response(text, assistant_index))
@@ -1081,6 +1094,7 @@ class LibreClawApp(App[None]):
                 arguments=_object_payload(data.get("arguments")),
             )
             self._append_tool_call(call)
+            self._archive_session_event_later("tool_call", {"run_id": run_id, "name": call.name, "arguments": dict(call.arguments)})
             return
         if event_type == "permission_request":
             call = ToolCall(
@@ -1092,6 +1106,7 @@ class LibreClawApp(App[None]):
             self._pending_permission = AgentPermissionRequest(call=call, future=future)
             self._pending_daemon_permission_run_id = run_id
             self._show_permission_prompt(self._pending_permission)
+            self._archive_session_event_later("permission_request", {"run_id": run_id, "name": call.name, "arguments": dict(call.arguments)})
             return
         if event_type == "tool_result":
             call = ToolCall(
@@ -1105,6 +1120,10 @@ class LibreClawApp(App[None]):
                 metadata=_object_payload(data.get("metadata")),
             )
             self._append_tool_result(call, result)
+            self._archive_session_event_later(
+                "tool_result",
+                {"run_id": run_id, "name": call.name, "is_error": result.is_error, "content": result.as_text()},
+            )
             return
         if event_type == "usage":
             usage = _usage_from_payload(data)
@@ -1113,6 +1132,7 @@ class LibreClawApp(App[None]):
             return
         if event_type == "error":
             self._append_system(str(data.get("message", "Daemon run error.")))
+            self._archive_session_event_later("error", {"run_id": run_id, "message": str(data.get("message", "Daemon run error."))})
             return
         if event_type == "provider_fallback":
             self._append_system(
@@ -1122,6 +1142,12 @@ class LibreClawApp(App[None]):
             return
         if event_type == "run_finished":
             self._append_system(f"Daemon run {run_id} finished: {data.get('state', 'done')}")
+            if assistant_index < len(self.transcript):
+                assistant_text = self.transcript[assistant_index].content
+                if assistant_text:
+                    self._archive_session_event_later("assistant_message", {"run_id": run_id, "content": assistant_text})
+                    self._schedule_memory_extraction(run_id, "", assistant_text)
+            self._archive_session_event_later("run_finished", {"run_id": run_id, "state": str(data.get("state", "done"))})
 
     async def _refresh_artifact_panel_for_run_id(self, run_id: str) -> None:
         if not self._artifact_visible or self._artifact_run_id != run_id:
@@ -1259,6 +1285,10 @@ class LibreClawApp(App[None]):
         if isinstance(event, AgentToolCall):
             self._flush_stream_buffer(assistant_index, stream_buffer)
             self._append_tool_call(event.call)
+            self._archive_session_event_later(
+                "tool_call",
+                {"run_id": self._active_run_id or "", "name": event.call.name, "arguments": dict(event.call.arguments)},
+            )
             self._record_run_event_later(
                 "tool_call",
                 {"id": event.call.id, "name": event.call.name, "arguments": dict(event.call.arguments)},
@@ -1269,6 +1299,10 @@ class LibreClawApp(App[None]):
             self._flush_stream_buffer(assistant_index, stream_buffer)
             self._pending_permission = event
             self._show_permission_prompt(event)
+            self._archive_session_event_later(
+                "permission_request",
+                {"run_id": self._active_run_id or "", "name": event.call.name, "arguments": dict(event.call.arguments)},
+            )
             self._record_run_event_later(
                 "permission_request",
                 {"tool_call_id": event.call.id, "name": event.call.name, "arguments": dict(event.call.arguments)},
@@ -1279,6 +1313,15 @@ class LibreClawApp(App[None]):
         if isinstance(event, AgentToolResult):
             self._flush_stream_buffer(assistant_index, stream_buffer)
             self._append_tool_result(event.call, event.result)
+            self._archive_session_event_later(
+                "tool_result",
+                {
+                    "run_id": self._active_run_id or "",
+                    "name": event.call.name,
+                    "is_error": event.result.is_error,
+                    "content": event.result.as_text(),
+                },
+            )
             self._record_run_event_later(
                 "tool_result",
                 {
@@ -1314,12 +1357,17 @@ class LibreClawApp(App[None]):
                 self.transcript.pop(assistant_index)
                 self._render_transcript()
             self._append_system(event.message)
+            self._archive_session_event_later("error", {"run_id": self._active_run_id or "", "message": event.message})
             self._record_run_event_later("error", {"message": event.message})
             return True, stop_on_error
 
         if isinstance(event, AgentFallback):
             self._flush_stream_buffer(assistant_index, stream_buffer)
             self._append_system(f"Provider fallback engaged: {event.provider_label}\nReason: {event.reason}")
+            self._archive_session_event_later(
+                "provider_fallback",
+                {"run_id": self._active_run_id or "", "provider": event.provider_label, "reason": event.reason},
+            )
             self._record_run_event_later(
                 "provider_fallback",
                 {"provider": event.provider_label, "reason": event.reason},
@@ -1386,6 +1434,82 @@ class LibreClawApp(App[None]):
         self._run_background_tasks.add(task)
         task.add_done_callback(self._run_background_tasks.discard)
 
+    def _archive_session_event_later(self, event_type: str, data: dict[str, Any]) -> None:
+        if not self.config.memory.archive_sessions:
+            return
+        task = asyncio.create_task(self.memory_store.append_session_event(self.session_archive_id, event_type, data))
+        self._memory_background_tasks.add(task)
+        task.add_done_callback(self._memory_background_tasks.discard)
+
+    def _track_memory_background_task(self, awaitable: Coroutine[Any, Any, Any]) -> None:
+        task = asyncio.create_task(awaitable)
+        self._memory_background_tasks.add(task)
+        task.add_done_callback(self._memory_background_tasks.discard)
+
+    def _schedule_memory_extraction(self, run_id: str, user_message: str, assistant_text: str) -> None:
+        if not self._memory_enabled() or not assistant_text.strip():
+            return
+        self._track_memory_background_task(self._extract_run_memory(run_id, user_message, assistant_text))
+
+    async def _extract_run_memory(self, run_id: str, user_message: str, assistant_text: str) -> None:
+        if not self._memory_enabled():
+            return
+        prompt_text = user_message.strip()
+        if not prompt_text:
+            run = await self.run_store.load_run(run_id)
+            prompt_text = run.title if run is not None else ""
+        source_root = self.config.general.working_directory
+        if self.config.memory.auto_summarize:
+            summary = _memory_summary_text(prompt_text, assistant_text)
+            if summary:
+                try:
+                    await self.memory_store.add_memory_item(
+                        kind="summary",
+                        scope="session",
+                        text=summary,
+                        source_type="run",
+                        source_id=f"{run_id}:summary",
+                        project_root=source_root,
+                    )
+                except Exception:
+                    pass
+        if not self.config.memory.auto_extract:
+            return
+        try:
+            provider = create_provider(self.config)
+            existing = [item.text for item in await self.memory_store.search_memory_items(prompt_text, project_root=source_root, limit=8)]
+            extracted = await extract_memories_with_provider(
+                provider,
+                user_message=prompt_text,
+                assistant_text=assistant_text,
+                existing_memories=existing,
+            )
+            for index, memory in enumerate(extracted):
+                await self.memory_store.add_memory_item(
+                    kind=memory.kind,
+                    scope=memory.scope,
+                    text=memory.text,
+                    source_type="run",
+                    source_id=f"{run_id}:memory:{index}",
+                    project_root=source_root if memory.scope == "project" else "",
+                )
+        except Exception:
+            return
+
+    async def _relevant_memory_texts(self, user_message: str) -> list[str]:
+        if not self._memory_enabled() or not self.config.memory.inject_relevant:
+            return []
+        query = "\n".join(part for part in (user_message, self.session.summary or "") if part)
+        items = await self.memory_store.search_memory_items(
+            query,
+            project_root=self.config.general.working_directory,
+            limit=max(1, self.config.memory.max_injected_items),
+        )
+        return _memory_texts_with_budget(items, self.config.memory.max_injected_tokens)
+
+    def _memory_enabled(self) -> bool:
+        return self.memory_enabled and self.config.memory.enabled
+
     async def _finish_active_run(self, state: str, *, summary: str = "") -> None:
         run_id = self._active_run_id
         if run_id is None:
@@ -1413,6 +1537,11 @@ class LibreClawApp(App[None]):
             browser=browser,
         )
         await self.run_store.append_event(run_id, "run_finished", {"state": state})
+        if summary_text:
+            self._archive_session_event_later("assistant_message", {"run_id": run_id, "content": summary_text})
+        self._archive_session_event_later("run_finished", {"run_id": run_id, "state": state})
+        if state == "done" and summary_text:
+            self._schedule_memory_extraction(run_id, run.title if run is not None else "", summary_text)
         self._active_run_id = None
         self._active_run_summary = ""
 
@@ -1771,33 +1900,117 @@ class LibreClawApp(App[None]):
         action = parts[0].lower() if parts else "list"
         value = parts[1].strip() if len(parts) > 1 else ""
 
+        if action == "status":
+            status = await self.memory_store.memory_status()
+            self._append_system(
+                "Memory status:\n"
+                f"enabled: {self._memory_enabled()}\n"
+                f"active items: {status['active']}\n"
+                f"disabled items: {status['disabled']}\n"
+                f"session archives: {status['session_archives']}"
+            )
+            return
+
+        if action == "on":
+            self.memory_enabled = True
+            self._rebuild_agent()
+            self._append_system("Persistent memory enabled for this TUI session.")
+            return
+
+        if action == "off":
+            self.memory_enabled = False
+            self._rebuild_agent()
+            self._append_system("Persistent memory disabled for this TUI session.")
+            return
+
         if action == "list":
-            facts = await self.memory_store.list_facts()
-            if not facts:
-                self._append_system("No memory facts stored.")
+            items = await self.memory_store.list_memory_items(limit=50)
+            if not items:
+                self._append_system("No active memories stored.")
                 return
-            self._append_system("\n".join(f"{fact.id}: {fact.fact}" for fact in facts))
+            self._append_system(_memory_items_text(items))
+            return
+
+        if action == "search":
+            if not value:
+                self._append_system("Usage: /memory search <query>")
+                return
+            items = await self.memory_store.search_memory_items(
+                value,
+                project_root=self.config.general.working_directory,
+                limit=20,
+            )
+            self._append_system(_memory_items_text(items) if items else "No matching memories.")
             return
 
         if action == "add":
             if not value:
-                self._append_system("Usage: /memory add <fact>")
+                self._append_system("Usage: /memory add <memory>")
                 return
-            fact = await self.memory_store.add_fact(value)
+            fact = await self.memory_store.add_memory_item(
+                text=value,
+                kind="fact",
+                scope="global",
+                source_type="manual",
+                project_root=self.config.general.working_directory,
+            )
             await self._refresh_memory_facts()
-            self._append_system(f"Added memory fact {fact.id}.")
+            self._append_system(f"Added memory {fact.id}.")
             return
 
         if action == "forget":
             if not value.isdigit():
                 self._append_system("Usage: /memory forget <id>")
                 return
-            removed = await self.memory_store.forget_fact(int(value))
+            removed = await self.memory_store.forget_memory_item(int(value))
             await self._refresh_memory_facts()
-            self._append_system("Memory fact forgotten." if removed else f"No memory fact with id {value}.")
+            self._append_system("Memory forgotten." if removed else f"No active memory with id {value}.")
             return
 
-        self._append_system("Usage: /memory list|add <fact>|forget <id>")
+        if action == "summarize":
+            summary = summarize_session_for_memory(self.session)
+            if not summary:
+                self._append_system("No session content to summarize into memory.")
+                return
+            item = await self.memory_store.add_memory_item(
+                kind="summary",
+                scope="session",
+                text=summary,
+                source_type="session",
+                source_id=f"{self.session_archive_id}:summary",
+                project_root=self.config.general.working_directory,
+            )
+            self._append_system(f"Session summary saved as memory {item.id}.")
+            return
+
+        if action == "import-runs":
+            count = await self._import_run_memories()
+            self._append_system(f"Imported {count} run summary memory item(s).")
+            return
+
+        self._append_system("Usage: /memory status|on|off|list|search <query>|add <text>|forget <id>|summarize|import-runs")
+
+    async def _import_run_memories(self) -> int:
+        count = 0
+        runs = await self.run_store.list_runs(limit=200)
+        for run in runs:
+            summary_path = run.path / "summary.md"
+            if not summary_path.exists():
+                continue
+            summary = await asyncio.to_thread(summary_path.read_text, encoding="utf-8")
+            summary = redact_secrets(summary).strip()
+            if not summary:
+                continue
+            await self.memory_store.add_memory_item(
+                kind="summary",
+                scope="project",
+                text=_memory_summary_text(run.title, summary),
+                source_type="run",
+                source_id=f"{run.run_id}:summary",
+                project_root=run.working_directory or self.config.general.working_directory,
+            )
+            count += 1
+        return count
 
     async def _handle_skills_command(self, argument: str) -> None:
         try:
@@ -2676,17 +2889,26 @@ class LibreClawApp(App[None]):
             system_prompt_extra=self.config.agent.system_prompt_extra,
             skill_provider=self.skill_store.relevant_skill_texts,
             soul_provider=self.soul_store.soul_texts,
+            memory_provider=self._relevant_memory_texts,
             fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
         )
 
     async def _initialize_memory(self) -> None:
         await self.memory_store.initialize()
         await self._refresh_memory_facts()
+        self._archive_session_event_later(
+            "session_started",
+            {
+                "surface": "tui",
+                "working_directory": str(self.config.general.working_directory),
+                "provider": self.config.general.default_provider,
+                "model": _effective_model(self.config),
+            },
+        )
         self._rebuild_agent()
 
     async def _refresh_memory_facts(self) -> None:
-        facts = await self.memory_store.list_facts()
-        self.memory_facts = [fact.fact for fact in facts]
+        self.memory_facts = await self.memory_store.list_always_injected_memories()
         self._rebuild_agent()
 
     def _transcript_from_messages(self, messages: list[ChatMessage]) -> list[TranscriptEntry]:
@@ -2947,6 +3169,24 @@ class LibreClawApp(App[None]):
                 for suggestion in suggestions
                 if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
             ][:6]
+        if lowered.startswith("/memory "):
+            query = lowered.removeprefix("/memory ").strip()
+            suggestions = [
+                SlashCommand("/memory status", "/memory status", "Show memory status"),
+                SlashCommand("/memory list", "/memory list", "List active memories"),
+                SlashCommand("/memory search ", "/memory search <query>", "Search memory"),
+                SlashCommand("/memory add ", "/memory add <text>", "Add a memory"),
+                SlashCommand("/memory forget ", "/memory forget <id>", "Disable one memory"),
+                SlashCommand("/memory summarize", "/memory summarize", "Save current session summary"),
+                SlashCommand("/memory import-runs", "/memory import-runs", "Import run summaries"),
+                SlashCommand("/memory on", "/memory on", "Enable memory for this session"),
+                SlashCommand("/memory off", "/memory off", "Disable memory for this session"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
         return []
 
     def _slash_suggestion_text(self, suggestions: list[SlashCommand]) -> str:
@@ -3121,6 +3361,7 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
         goal=config.goal,
         fallback=config.fallback,
         heartbeat=config.heartbeat,
+        memory=config.memory,
         daemon=config.daemon,
         automations=config.automations,
         browser=config.browser,
@@ -4065,3 +4306,30 @@ def _permission_label(resolution: PermissionResolution) -> str:
         "always_allow_call": "always allowed for this exact command",
     }
     return labels[resolution]
+
+
+def _memory_items_text(items: list[MemoryItem]) -> str:
+    return "\n".join(f"{item.id}: [{item.kind}/{item.scope}] {item.text}" for item in items)
+
+
+def _memory_texts_with_budget(items: list[MemoryItem], max_tokens: int) -> list[str]:
+    budget = max(1, max_tokens) * 4
+    selected: list[str] = []
+    used = 0
+    for item in items:
+        text = f"[{item.kind}/{item.scope}] {item.text}"
+        cost = len(text)
+        if selected and used + cost > budget:
+            break
+        selected.append(text[:budget])
+        used += cost
+    return selected
+
+
+def _memory_summary_text(user_message: str, assistant_text: str) -> str:
+    parts = []
+    if user_message.strip():
+        parts.append("User asked: " + user_message.strip()[:500])
+    if assistant_text.strip():
+        parts.append("Libre Claw response: " + assistant_text.strip()[:1500])
+    return redact_secrets("\n".join(parts).strip())

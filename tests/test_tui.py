@@ -145,7 +145,7 @@ def test_tui_phase_four_helper_state(monkeypatch, tmp_path: Path) -> None:
     assert app._slash_suggestion_matches("/")[0].name == "/help"
     assert [command.name for command in app._slash_suggestion_matches("/m")] == ["/model", "/memory"]
     assert app._slash_suggestion_matches("/g")[0].name == "/goal"
-    assert app._slash_suggestion_matches("/memory ") == []
+    assert app._slash_suggestion_matches("/memory ")[0].name == "/memory status"
 
 
 def test_tui_diff_text(monkeypatch, tmp_path: Path) -> None:
@@ -838,6 +838,24 @@ async def test_compact_status_and_force_keep(monkeypatch, tmp_path: Path) -> Non
     assert app.session.summary is not None
     assert any("Context:" in entry.content for entry in app.transcript)
     assert any("Compacted context from 6 messages to 2" in entry.content for entry in app.transcript)
+
+
+async def test_tui_memory_commands_manage_searchable_items(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test():
+        await app._handle_memory_command("add Robin prefers EST")
+        await app._handle_memory_command("search EST")
+        await app._handle_memory_command("status")
+        await app._handle_memory_command("off")
+
+    assert any("Added memory" in entry.content for entry in app.transcript)
+    assert any("Robin prefers EST" in entry.content for entry in app.transcript)
+    assert any("Memory status" in entry.content for entry in app.transcript)
+    assert app.memory_enabled is False
 
 
 def test_ctrl_c_binding_exits_app() -> None:

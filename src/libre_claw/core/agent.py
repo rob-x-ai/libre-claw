@@ -73,6 +73,7 @@ AgentEvent = (
 )
 SkillProvider = Callable[[str], Sequence[str] | Awaitable[Sequence[str]]]
 SoulProvider = Callable[[], Sequence[str] | Awaitable[Sequence[str]]]
+MemoryProvider = Callable[[str], Sequence[str] | Awaitable[Sequence[str]]]
 
 
 class Agent:
@@ -92,6 +93,7 @@ class Agent:
         system_prompt_extra: str = "",
         skill_provider: SkillProvider | None = None,
         soul_provider: SoulProvider | None = None,
+        memory_provider: MemoryProvider | None = None,
         fallback_providers: Sequence[tuple[str, LLMProvider]] | None = None,
     ) -> None:
         self.session = session
@@ -106,15 +108,18 @@ class Agent:
         self.system_prompt_extra = system_prompt_extra
         self.skill_provider = skill_provider
         self.soul_provider = soul_provider
+        self.memory_provider = memory_provider
         self.fallback_providers = tuple(fallback_providers or ())
         self._active_skills: list[str] = []
         self._active_soul: list[str] = []
+        self._active_memory: list[str] = []
         self._logger = structlog.get_logger(__name__)
 
     async def run(self, user_message: str) -> AsyncIterator[AgentEvent]:
         self.session.add_user_message(user_message)
         self._active_soul = await self._load_soul()
         self._active_skills = await self._load_skills(user_message)
+        self._active_memory = await self._load_memory(user_message)
         total_tool_calls = 0
         turn_usage: Usage | None = None
         active_provider = self.provider
@@ -272,9 +277,10 @@ class Agent:
                 "sandbox boundaries, provider policies, or direct user instructions:\n\n"
                 + "\n\n---\n\n".join(self._active_soul)
             )
-        if self.memory_facts:
-            facts = "\n".join(f"- {fact}" for fact in self.memory_facts)
-            parts.append("Persistent user/project facts:\n" + facts)
+        memories = _dedupe_texts([*self.memory_facts, *self._active_memory])
+        if memories:
+            facts = "\n".join(f"- {fact}" for fact in memories)
+            parts.append("Relevant persistent memory:\n" + facts)
         if self._active_skills:
             parts.append(
                 "Relevant Libre Claw skills. Follow these project/user procedures when they apply:\n\n"
@@ -311,3 +317,30 @@ class Agent:
         except Exception as exc:
             self._logger.warning("soul_load_failed", error=str(exc))
             return []
+
+    async def _load_memory(self, user_message: str) -> list[str]:
+        if self.memory_provider is None:
+            return []
+        try:
+            result = self.memory_provider(user_message)
+            if inspect.isawaitable(result):
+                result = await result
+            return [text for text in result if text.strip()]
+        except Exception as exc:
+            self._logger.warning("memory_load_failed", error=str(exc))
+            return []
+
+
+def _dedupe_texts(texts: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for text in texts:
+        cleaned = " ".join(text.split())
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(cleaned)
+    return result

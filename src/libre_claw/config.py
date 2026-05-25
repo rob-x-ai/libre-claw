@@ -124,6 +124,18 @@ class HeartbeatConfig:
 
 
 @dataclass(frozen=True)
+class MemoryConfig:
+    enabled: bool
+    auto_extract: bool
+    auto_summarize: bool
+    inject_relevant: bool
+    max_injected_items: int
+    max_injected_tokens: int
+    redact_secrets: bool
+    archive_sessions: bool
+
+
+@dataclass(frozen=True)
 class DaemonConfig:
     host: str
     port: int
@@ -170,6 +182,7 @@ class LibreClawConfig:
     goal: GoalConfig
     fallback: FallbackConfig
     heartbeat: HeartbeatConfig
+    memory: MemoryConfig
     daemon: DaemonConfig
     automations: AutomationsConfig
     browser: BrowserConfig
@@ -475,6 +488,16 @@ def _load_default_config() -> ConfigTable:
             ],
             "prompt": "",
         },
+        "memory": {
+            "enabled": True,
+            "auto_extract": True,
+            "auto_summarize": True,
+            "inject_relevant": True,
+            "max_injected_items": 8,
+            "max_injected_tokens": 1200,
+            "redact_secrets": True,
+            "archive_sessions": True,
+        },
         "daemon": {
             "host": "127.0.0.1",
             "port": 8766,
@@ -645,6 +668,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
     goal = _section(data, "goal")
     fallback = _section(data, "fallback")
     heartbeat = _section(data, "heartbeat")
+    memory = _section(data, "memory")
     daemon = _section(data, "daemon")
     automations = _section(data, "automations")
     browser = _section(data, "browser")
@@ -720,6 +744,16 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             model=_str(heartbeat, "model"),
             checklist=tuple(_list(heartbeat, "checklist", str)),
             prompt=_str(heartbeat, "prompt"),
+        ),
+        memory=MemoryConfig(
+            enabled=_bool(memory, "enabled"),
+            auto_extract=_bool(memory, "auto_extract"),
+            auto_summarize=_bool(memory, "auto_summarize"),
+            inject_relevant=_bool(memory, "inject_relevant"),
+            max_injected_items=_int(memory, "max_injected_items"),
+            max_injected_tokens=_int(memory, "max_injected_tokens"),
+            redact_secrets=_bool(memory, "redact_secrets"),
+            archive_sessions=_bool(memory, "archive_sessions"),
         ),
         daemon=DaemonConfig(
             host=_str(daemon, "host"),

@@ -156,6 +156,13 @@ class TelegramHandlers:
         response = await self.bridge.schedule_text(update.effective_chat.id, text)
         await _reply_text_chunks(update.effective_message, response, self.bridge.config.telegram.max_message_length)
 
+    async def memory(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        text = " ".join(context.args or [])
+        response = await self.bridge.memory_command_text(update.effective_chat.id, text)
+        await _reply_text_chunks(update.effective_message, response, self.bridge.config.telegram.max_message_length)
+
     async def heartbeat(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
@@ -618,6 +625,7 @@ def _telegram_help_text() -> str:
             "/compact - Compact the current context",
             "/schedule examples|list|add ... - Manage recurring runs",
             "/heartbeat status|once|start|stop - Recurring check-ins",
+            "/memory status|list|search|add|forget - Manage persistent memory",
             "/cancel - Cancel the active generation",
             "/stop - Cancel the active generation",
             "",
@@ -639,6 +647,7 @@ def telegram_command_specs() -> Sequence[tuple[str, str]]:
         ("compact", "Compact the current context"),
         ("schedule", "Manage recurring runs"),
         ("heartbeat", "Recurring check-ins"),
+        ("memory", "Manage persistent memory"),
         ("cancel", "Cancel active generation"),
         ("stop", "Cancel active generation"),
     )

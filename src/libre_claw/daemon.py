@@ -31,7 +31,12 @@ from libre_claw.core import (
     RunStore,
     Session,
 )
-from libre_claw.core.memory import MemoryStore
+from libre_claw.core.memory import (
+    MemoryItem,
+    MemoryStore,
+    extract_memories_with_provider,
+    redact_secrets,
+)
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, run_plan_text
 from libre_claw.core.skills import SkillStore
@@ -347,6 +352,7 @@ class DaemonServer:
             goal=self.config.goal,
             fallback=self.config.fallback,
             heartbeat=self.config.heartbeat,
+            memory=self.config.memory,
             daemon=self.config.daemon,
             automations=self.config.automations,
             browser=self.config.browser,
@@ -461,6 +467,8 @@ class DaemonServer:
             )
             if not hold_final_state:
                 await self.run_store.append_event(run.run_id, "run_finished", {"state": state})
+            if state == "done":
+                await self._extract_run_memory(config, run, message, "".join(assistant_chunks))
         return state
 
     async def _automation_loop(self) -> None:
@@ -562,6 +570,7 @@ class DaemonServer:
             goal=self.config.goal,
             fallback=self.config.fallback,
             heartbeat=self.config.heartbeat,
+            memory=self.config.memory,
             daemon=self.config.daemon,
             automations=self.config.automations,
             browser=self.config.browser,
@@ -598,7 +607,7 @@ class DaemonServer:
     async def _create_agent(self, config: LibreClawConfig, *, session: Session | None = None) -> Agent:
         provider = self.provider_factory(config)
         fallbacks = create_fallback_providers(config)
-        facts = await self.memory_store.list_facts()
+        memory_facts = await self.memory_store.list_always_injected_memories()
         skill_store = SkillStore(config.general.working_directory)
         soul_store = SoulStore(config.general.working_directory)
         return Agent(
@@ -610,12 +619,74 @@ class DaemonServer:
             max_tool_calls_per_turn=config.agent.max_tool_calls_per_turn,
             auto_compact_threshold=config.agent.auto_compact_threshold,
             context_window_tokens=config.agent.context_window_tokens,
-            memory_facts=[fact.fact for fact in facts],
+            memory_facts=memory_facts,
             system_prompt_extra=config.agent.system_prompt_extra,
             skill_provider=skill_store.relevant_skill_texts,
             soul_provider=soul_store.soul_texts,
+            memory_provider=lambda user_message: self._relevant_memory_texts(config, user_message),
             fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
         )
+
+    async def _relevant_memory_texts(self, config: LibreClawConfig, user_message: str) -> list[str]:
+        if not config.memory.enabled or not config.memory.inject_relevant:
+            return []
+        items = await self.memory_store.search_memory_items(
+            user_message,
+            project_root=config.general.working_directory,
+            limit=max(1, config.memory.max_injected_items),
+        )
+        return _memory_texts_with_budget(items, config.memory.max_injected_tokens)
+
+    async def _extract_run_memory(
+        self,
+        config: LibreClawConfig,
+        run: RunRecord,
+        user_message: str,
+        assistant_text: str,
+    ) -> None:
+        if not config.memory.enabled or not assistant_text.strip():
+            return
+        if config.memory.auto_summarize:
+            try:
+                await self.memory_store.add_memory_item(
+                    kind="summary",
+                    scope="project",
+                    text=_memory_summary_text(user_message, assistant_text),
+                    source_type="run",
+                    source_id=f"{run.run_id}:summary",
+                    project_root=run.working_directory or config.general.working_directory,
+                )
+            except Exception:
+                pass
+        if not config.memory.auto_extract:
+            return
+        try:
+            provider = self.provider_factory(config)
+            existing = [
+                item.text
+                for item in await self.memory_store.search_memory_items(
+                    user_message,
+                    project_root=config.general.working_directory,
+                    limit=8,
+                )
+            ]
+            extracted = await extract_memories_with_provider(
+                provider,
+                user_message=user_message,
+                assistant_text=assistant_text,
+                existing_memories=existing,
+            )
+            for index, memory in enumerate(extracted):
+                await self.memory_store.add_memory_item(
+                    kind=memory.kind,
+                    scope=memory.scope,
+                    text=memory.text,
+                    source_type="run",
+                    source_id=f"{run.run_id}:memory:{index}",
+                    project_root=config.general.working_directory if memory.scope == "project" else "",
+                )
+        except Exception:
+            return
 
 
 class DaemonClient:
@@ -816,6 +887,29 @@ def _usage_payload(usage: Usage, *, provider: str = "", model: str = "", surface
     if surface:
         payload["surface"] = surface
     return payload
+
+
+def _memory_texts_with_budget(items: list[MemoryItem], max_tokens: int) -> list[str]:
+    budget = max(1, max_tokens) * 4
+    selected: list[str] = []
+    used = 0
+    for item in items:
+        text = f"[{item.kind}/{item.scope}] {item.text}"
+        cost = len(text)
+        if selected and used + cost > budget:
+            break
+        selected.append(text[:budget])
+        used += cost
+    return selected
+
+
+def _memory_summary_text(user_message: str, assistant_text: str) -> str:
+    parts = []
+    if user_message.strip():
+        parts.append("User asked: " + user_message.strip()[:500])
+    if assistant_text.strip():
+        parts.append("Libre Claw response: " + assistant_text.strip()[:1500])
+    return redact_secrets("\n".join(parts).strip())
 
 
 def _write_automation_report(automation: AutomationRecord, run: RunRecord, report_path: Path) -> None:

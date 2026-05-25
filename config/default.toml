@@ -142,6 +142,16 @@ checklist = [
 ]
 prompt = "" # optional full custom heartbeat prompt; when empty, checklist is used
 
+[memory]
+enabled = true
+auto_extract = true
+auto_summarize = true
+inject_relevant = true
+max_injected_items = 8
+max_injected_tokens = 1200
+redact_secrets = true
+archive_sessions = true
+
 [daemon]
 host = "127.0.0.1"
 port = 8766

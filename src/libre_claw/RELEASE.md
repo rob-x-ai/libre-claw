@@ -116,7 +116,13 @@ First shippable Libre Claw release from Kroonen AI Inc.
 - TUI polish: thin `#0070F3` scrollbars, blue user labels, purple `#8B5CF6`
   Libre Claw assistant labels, dark/light theme support, and cleaner panel
   borders.
-- SQLite memory for facts, sessions, summaries, and file edit logs.
+- Automatic persistent memory with append-only JSONL session archives,
+  durable-run import, searchable SQLite `memory_items`, FTS5/fallback search,
+  relevance-based prompt injection, redaction of credential-looking content,
+  and `/memory status|on|off|list|search|add|forget|summarize|import-runs`
+  commands in TUI and Telegram.
+- Existing SQLite facts, sessions, summaries, and file edit logs remain
+  compatible; manual facts migrate into first-class memory items.
 - Telegram daemon with allowlist auth, streaming updates, per-chat sessions,
   model/provider commands, and inline permission prompts.
 - User-friendly Telegram setup with `libre-claw telegram setup`, secure token

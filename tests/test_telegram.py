@@ -255,6 +255,7 @@ def test_telegram_command_specs_drive_bot_menu() -> None:
     assert commands["stop"] == "Cancel active generation"
     assert "schedule" in commands
     assert commands["heartbeat"] == "Recurring check-ins"
+    assert commands["memory"] == "Manage persistent memory"
 
 
 def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monkeypatch) -> None:
@@ -637,3 +638,21 @@ async def test_telegram_bridge_schedule_command_creates_telegram_route(monkeypat
     assert automation.route == "telegram"
     assert automation.telegram_chat_id == 42
     assert automation.automation_id in listed
+
+
+async def test_telegram_memory_command_manages_searchable_items(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    bridge = TelegramBridge(config)
+    await bridge.initialize()
+
+    added = await bridge.memory_command_text(42, "add Robin prefers EST")
+    searched = await bridge.memory_command_text(42, "search EST")
+    status = await bridge.memory_command_text(42, "status")
+    off = await bridge.memory_command_text(42, "off")
+
+    assert "Added memory" in added
+    assert "Robin prefers EST" in searched
+    assert "Memory status" in status
+    assert off == "Persistent memory disabled for Telegram."
