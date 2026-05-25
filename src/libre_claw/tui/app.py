@@ -7,7 +7,7 @@ import asyncio
 import difflib
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -24,6 +24,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DirectoryTree, Input, RichLog, Static
 
 from libre_claw import __version__
+from libre_claw.auth.codex import CodexCliError, CodexCommandResult, codex_logout, codex_status, stream_codex_command
 from libre_claw.config import ConfigError, GeneralConfig, LibreClawConfig, load_config, set_global_default_model
 from libre_claw.core import (
     Agent,
@@ -83,13 +84,46 @@ class CompactOptions:
     error: str | None = None
 
 
+@dataclass
+class StreamRenderBuffer:
+    interval: float
+    max_buffered_chars: int
+    chunks: list[str] = field(default_factory=list)
+    last_flush_at: float = 0.0
+    rendered_once: bool = False
+
+    @property
+    def pending_text(self) -> str:
+        return "".join(self.chunks)
+
+    def append(self, text: str) -> None:
+        if text:
+            self.chunks.append(text)
+
+    def should_flush(self, now: float) -> bool:
+        if not self.chunks:
+            return False
+        if not self.rendered_once:
+            return True
+        return now - self.last_flush_at >= self.interval or len(self.pending_text) >= self.max_buffered_chars
+
+    def flush(self, now: float) -> str:
+        text = self.pending_text
+        self.chunks.clear()
+        if text:
+            self.last_flush_at = now
+            self.rendered_once = True
+        return text
+
+
 SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/help", "/help", "Show available commands"),
     SlashCommand("/clear", "/clear", "Clear transcript and session history"),
     SlashCommand("/cancel", "/cancel", "Cancel active generation or tool execution"),
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
-    SlashCommand("/provider", "/provider anthropic|openai|openrouter|ollama", "Switch provider for new turns"),
+    SlashCommand("/provider", "/provider anthropic|openai|openrouter|ollama|codex", "Switch provider for new turns"),
+    SlashCommand("/codex", "/codex login|status|logout|use [model]", "Manage Codex/ChatGPT login"),
     SlashCommand("/save", "/save [name]", "Save the current session"),
     SlashCommand("/load", "/load <name>", "Load a saved session"),
     SlashCommand("/compact", "/compact [status|--force] [--keep N]", "Show or compact context"),
@@ -99,7 +133,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/exit", "/exit", "Exit Libre Claw"),
 )
 
-SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "ollama")
+SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "ollama", "codex")
 MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
     "anthropic": (
         ("claude-opus-4-6", "Claude Opus 4.6"),
@@ -114,6 +148,11 @@ MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
         ("o3", "o3 reasoning"),
         ("o4-mini", "o4-mini reasoning"),
         ("codex-mini", "Codex Mini"),
+    ),
+    "codex": (
+        ("gpt-5.5", "GPT-5.5 through Codex CLI auth"),
+        ("gpt-5", "GPT-5 through Codex CLI auth"),
+        ("codex-mini", "Codex Mini through Codex CLI auth"),
     ),
     "openrouter": (
         ("qwen/qwen3.7-max", "Qwen3.7 Max through OpenRouter"),
@@ -141,12 +180,18 @@ PERMISSION_KEYS: dict[str, PermissionResolution] = {
 }
 
 ASSISTANT_ACCENT = "#8B5CF6"
+PROJECT_NOTICE = "Apache-2.0 | Kroonen AI Inc. | hello@kroonen.ai"
+STREAM_RENDER_INTERVAL = 1 / 30
+STREAM_RENDER_MAX_BUFFERED_CHARS = 180
 STARTUP_ASCII = r"""
- _     _ _                 ____ _
-| |   (_) |__  _ __ ___   / ___| | __ ___      __
-| |   | | '_ \| '__/ _ \ | |   | |/ _` \ \ /\ / /
-| |___| | |_) | | |  __/ | |___| | (_| |\ V  V /
-|_____|_|_.__/|_|  \___|  \____|_|\__,_| \_/\_/
+ █████        ███  █████                             █████████  ████
+░░███        ░░░  ░░███                             ███░░░░░███░░███
+ ░███        ████  ░███████  ████████   ██████     ███     ░░░  ░███   ██████   █████ ███ █████
+ ░███       ░░███  ░███░░███░░███░░███ ███░░███   ░███          ░███  ░░░░░███ ░░███ ░███░░███
+ ░███        ░███  ░███ ░███ ░███ ░░░ ░███████    ░███          ░███   ███████  ░███ ░███ ░███
+ ░███      █ ░███  ░███ ░███ ░███     ░███░░░     ░░███     ███ ░███  ███░░███  ░░███████████
+ ███████████ █████ ████████  █████    ░░██████     ░░█████████  █████░░████████  ░░████░████
+░░░░░░░░░░░ ░░░░░ ░░░░░░░░  ░░░░░      ░░░░░░       ░░░░░░░░░  ░░░░░  ░░░░░░░░    ░░░░ ░░░░
 """
 
 
@@ -306,6 +351,18 @@ class LibreClawApp(App[None]):
         display: none;
     }
 
+    #startup-panel {
+        height: auto;
+        padding: 1 2;
+        background: #111820;
+        color: #dce3ea;
+    }
+
+    Screen.light #startup-panel {
+        background: #ffffff;
+        color: #18212a;
+    }
+
     #chat {
         height: 1fr;
         padding: 1 2;
@@ -440,7 +497,8 @@ class LibreClawApp(App[None]):
         self.provider_error: str | None = None
         self.usage = Usage()
         self.transcript: list[TranscriptEntry] = []
-        self.sidebar_visible = self.config.tui.show_file_tree
+        self.sidebar_visible = False
+        self.startup_expanded = False
         self.palette_open = False
         self._slash_suggestions: list[SlashCommand] = []
         self._active_task: asyncio.Task[None] | None = None
@@ -466,6 +524,7 @@ class LibreClawApp(App[None]):
                 yield DirectoryTree(self.config.general.working_directory, id="file-tree")
             with Vertical(id="main"):
                 yield Static("", id="palette", classes="hidden")
+                yield Static("", id="startup-panel")
                 yield RichLog(id="chat", wrap=True, highlight=True, markup=True)
                 yield Static("", id="suggestions", classes="hidden")
                 with Vertical(id="permission-panel", classes="hidden"):
@@ -482,11 +541,12 @@ class LibreClawApp(App[None]):
         self.add_class(self.config.general.theme)
         self.query_one("#input", Input).focus()
         self._sync_sidebar_visibility()
+        self._update_startup_panel()
         self._update_palette()
         self._update_slash_suggestions("")
         self.set_interval(1, self._update_status)
         await self._initialize_memory()
-        self._append_system(_startup_message())
+        self._append_system(f"Libre Claw v{__version__} ready. Type /help for commands.")
         if self.provider_error is not None:
             self._append_system(self.provider_error)
 
@@ -512,6 +572,13 @@ class LibreClawApp(App[None]):
             self._update_palette(event.value)
             return
         self._update_slash_suggestions(event.value)
+
+    def on_click(self, event: events.Click) -> None:
+        if getattr(event.widget, "id", None) != "startup-panel":
+            return
+        event.stop()
+        self.startup_expanded = not self.startup_expanded
+        self._update_startup_panel()
 
     def on_key(self, event: events.Key) -> None:
         if self._pending_permission is None:
@@ -613,6 +680,9 @@ class LibreClawApp(App[None]):
         if command == "/provider":
             self._set_provider(argument)
             return
+        if command == "/codex":
+            await self._handle_codex_command(argument)
+            return
         if command == "/save":
             self._save_session(argument)
             return
@@ -688,45 +758,65 @@ class LibreClawApp(App[None]):
         if self.agent is None:
             return
 
+        stream_buffer = StreamRenderBuffer(
+            interval=STREAM_RENDER_INTERVAL,
+            max_buffered_chars=STREAM_RENDER_MAX_BUFFERED_CHARS,
+        )
+
         try:
             async for event in self.agent.run(user_message):
                 if isinstance(event, AgentTextDelta):
-                    self._append_to_entry(assistant_index, event.text)
-                    self._last_assistant_response = self.transcript[assistant_index].content
+                    stream_buffer.append(event.text)
+                    if stream_buffer.should_flush(time.monotonic()):
+                        self._flush_stream_buffer(assistant_index, stream_buffer)
                     continue
 
                 if isinstance(event, AgentToolCall):
+                    self._flush_stream_buffer(assistant_index, stream_buffer)
                     self._append_tool_call(event.call)
                     continue
 
                 if isinstance(event, AgentPermissionRequest):
+                    self._flush_stream_buffer(assistant_index, stream_buffer)
                     self._pending_permission = event
                     self._show_permission_prompt(event)
                     continue
 
                 if isinstance(event, AgentToolResult):
+                    self._flush_stream_buffer(assistant_index, stream_buffer)
                     self._append_tool_result(event.call, event.result)
                     continue
 
                 if isinstance(event, AgentDone):
+                    self._flush_stream_buffer(assistant_index, stream_buffer)
                     if event.usage is not None:
                         self.usage = combine_usage(self.usage, event.usage) or self.usage
                         self._update_status()
                     continue
 
                 if isinstance(event, AgentError):
+                    self._flush_stream_buffer(assistant_index, stream_buffer)
                     if not self.transcript[assistant_index].content:
                         self.transcript.pop(assistant_index)
                         self._render_transcript()
                     self._append_system(event.message)
                     break
         except asyncio.CancelledError:
+            self._flush_stream_buffer(assistant_index, stream_buffer)
             self._append_system("Generation cancelled.")
         finally:
+            self._flush_stream_buffer(assistant_index, stream_buffer)
             self._pending_permission = None
             self._hide_permission_prompt()
             self._active_task = None
             self.query_one("#input", Input).focus()
+
+    def _flush_stream_buffer(self, assistant_index: int, stream_buffer: StreamRenderBuffer) -> None:
+        text = stream_buffer.flush(time.monotonic())
+        if not text or assistant_index >= len(self.transcript):
+            return
+        self._append_to_entry(assistant_index, text)
+        self._last_assistant_response = self.transcript[assistant_index].content
 
     def _cancel_active_generation(self, quiet: bool = False) -> None:
         if self._pending_permission is not None and not self._pending_permission.future.done():
@@ -997,6 +1087,66 @@ class LibreClawApp(App[None]):
 
         self._append_system("Usage: /tools expand|collapse|toggle <index>")
 
+    async def _handle_codex_command(self, argument: str) -> None:
+        parts = argument.split()
+        action = parts[0].lower() if parts else "status"
+        value = " ".join(parts[1:]).strip()
+
+        if action == "status":
+            status = await codex_status()
+            self._append_system(status.detail)
+            return
+
+        if action == "login":
+            browser_login = value == "browser"
+            self._append_system(
+                "Starting Codex login. Use the code/link Codex prints, then return here. "
+                "Libre Claw will use that Codex auth when provider is `codex`."
+            )
+            try:
+                result = await self._stream_codex_login(browser_login=browser_login)
+            except CodexCliError as exc:
+                self._append_system(str(exc))
+                return
+            self._append_system(f"Codex login exited with {result.exit_code}.")
+            self._rebuild_agent()
+            self._update_status()
+            return
+
+        if action == "logout":
+            try:
+                result = await codex_logout()
+            except CodexCliError as exc:
+                self._append_system(str(exc))
+                return
+            self._append_system(result.output or f"Codex logout exited with {result.exit_code}.")
+            self._rebuild_agent()
+            self._update_status()
+            return
+
+        if action == "use":
+            model = value or "gpt-5.5"
+            self._set_model(f"codex:{model}")
+            return
+
+        self._append_system("Usage: /codex login [browser]|status|logout|use [model]")
+
+    async def _stream_codex_login(self, browser_login: bool) -> CodexCommandResult:
+        args = ["codex", "login"]
+        if not browser_login:
+            args.append("--device-auth")
+
+        final: CodexCommandResult | None = None
+        async for event in stream_codex_command(args):
+            if isinstance(event, CodexCommandResult):
+                final = event
+                continue
+            self._append_system(event.text.rstrip())
+
+        if final is None:
+            raise CodexCliError("Codex login ended without a result.")
+        return final
+
     def _go_up_directory(self) -> None:
         current = self.config.general.working_directory.resolve()
         parent = current.parent
@@ -1203,6 +1353,9 @@ class LibreClawApp(App[None]):
         self.query_one("#sidebar", Vertical).display = self.sidebar_visible
         self.query_one("#sidebar-rail", Vertical).display = not self.sidebar_visible
 
+    def _update_startup_panel(self) -> None:
+        self.query_one("#startup-panel", Static).update(_startup_renderable(self.startup_expanded))
+
     def _sidebar_root_text(self) -> str:
         return f"cwd: {self.config.general.working_directory}"
 
@@ -1283,6 +1436,20 @@ class LibreClawApp(App[None]):
                 suggestion
                 for suggestion in suggestions
                 if query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
+
+        if lowered.startswith("/codex "):
+            query = lowered.removeprefix("/codex ").strip()
+            suggestions = [
+                SlashCommand("/codex login", "/codex login", "Start Codex device auth inside Libre Claw"),
+                SlashCommand("/codex status", "/codex status", "Show Codex login status"),
+                SlashCommand("/codex logout", "/codex logout", "Log out of Codex"),
+                SlashCommand("/codex use gpt-5.5", "/codex use gpt-5.5", "Switch to Codex provider"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
             ][:6]
         return []
 
@@ -1475,8 +1642,9 @@ def _model_help_text(config: LibreClawConfig) -> str:
         "Use `Tab` after `/model ` to complete a suggested model.",
         "Provider key setup stays in the secure CLI/keyring path:",
     ]
-    lines.extend(f"- libre-claw auth set-key {name}" for name in SUPPORTED_PROVIDERS if name != "ollama")
+    lines.extend(f"- libre-claw auth set-key {name}" for name in SUPPORTED_PROVIDERS if name not in {"ollama", "codex"})
     lines.append("- libre-claw auth set-key ollama  # required for Ollama Cloud")
+    lines.append("- /codex login  # ChatGPT/Codex auth, no OpenAI API key")
     lines.append("")
     lines.append("Suggested models:")
     for suggestion in _model_suggestion_commands(config):
@@ -1488,7 +1656,8 @@ def _provider_help_text(config: LibreClawConfig) -> str:
     provider = _canonical_tui_provider(config.general.default_provider)
     lines = [
         f"Current provider: {provider}",
-        "Use `/provider anthropic|openai|openrouter|ollama`, or use `/model <provider>:<name>` to switch both.",
+        "Use `/provider anthropic|openai|openrouter|ollama|codex`, or use `/model <provider>:<name>` to switch both.",
+        "For Codex/ChatGPT auth, run `/codex login` then `/provider codex`.",
     ]
     return "\n".join(lines)
 
@@ -1592,6 +1761,26 @@ def _compact_tool_output(content: str, expanded: bool) -> str:
     shown = "\n".join(lines[:limit])
     hidden = len(lines) - limit
     return f"{shown}\n... {hidden} more lines hidden; use /tools expand <index> to show all"
+
+
+def _startup_renderable(expanded: bool) -> RenderableType:
+    banner = Text(STARTUP_ASCII.strip(), style=ASSISTANT_ACCENT)
+    if not expanded:
+        return Group(
+            banner,
+            Text(
+                f"Libre Claw v{__version__} - release notes collapsed. Click this header to expand.",
+                style="dim",
+            ),
+            Text(PROJECT_NOTICE, style="dim"),
+        )
+    return Group(
+        banner,
+        Text(f"Libre Claw v{__version__}", style=f"bold {ASSISTANT_ACCENT}"),
+        Text(PROJECT_NOTICE, style="dim"),
+        Markdown(latest_release_notes()),
+        Text("Click this header to collapse. Type /help for commands.", style="dim"),
+    )
 
 
 def _startup_message() -> str:

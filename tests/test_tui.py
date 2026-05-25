@@ -6,6 +6,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from rich.console import Console
+
 from libre_claw.config import load_config
 from libre_claw.core.agent import AgentPermissionRequest
 from libre_claw.core.tools import ToolCall, ToolResult
@@ -13,7 +15,10 @@ from libre_claw.providers import Usage
 from libre_claw.tui.app import (
     ASSISTANT_ACCENT,
     LibreClawApp,
+    PROJECT_NOTICE,
     STARTUP_ASCII,
+    STREAM_RENDER_MAX_BUFFERED_CHARS,
+    StreamRenderBuffer,
     TranscriptEntry,
     _effective_model,
     _model_help_text,
@@ -21,6 +26,7 @@ from libre_claw.tui.app import (
     _parse_model_argument,
     _replace_general,
     _startup_message,
+    _startup_renderable,
     _tool_preview,
 )
 
@@ -184,6 +190,45 @@ def test_startup_message_includes_ascii_art_and_release_notes() -> None:
     assert "Type /help for commands." in message
 
 
+def test_startup_renderable_collapses_release_notes() -> None:
+    console = Console(record=True, width=160)
+    console.print(_startup_renderable(False))
+    collapsed = console.export_text()
+    console = Console(record=True, width=160)
+    console.print(_startup_renderable(True))
+    expanded = console.export_text()
+
+    assert STARTUP_ASCII.strip().splitlines()[0] in collapsed
+    assert "release notes collapsed" in collapsed
+    assert PROJECT_NOTICE in collapsed
+    assert "## 0.1.0" not in collapsed
+    assert PROJECT_NOTICE in expanded
+    assert "0.1.0 - 2026-05-24" in expanded
+
+
+def test_stream_render_buffer_flushes_first_delta_then_throttles() -> None:
+    buffer = StreamRenderBuffer(interval=0.05, max_buffered_chars=STREAM_RENDER_MAX_BUFFERED_CHARS)
+
+    buffer.append("H")
+    assert buffer.should_flush(1.0) is True
+    assert buffer.flush(1.0) == "H"
+
+    buffer.append("e")
+    assert buffer.should_flush(1.01) is False
+    buffer.append("llo")
+    assert buffer.flush(1.02) == "ello"
+
+
+def test_stream_render_buffer_flushes_large_batches() -> None:
+    buffer = StreamRenderBuffer(interval=10.0, max_buffered_chars=5, last_flush_at=1.0, rendered_once=True)
+
+    buffer.append("abc")
+    assert buffer.should_flush(2.0) is False
+    buffer.append("de")
+
+    assert buffer.should_flush(2.0) is True
+
+
 def test_cost_text_shows_cumulative_provider_usage(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -253,11 +298,14 @@ async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None
 
     async with app.run_test():
         assert app.query_one("#chat")
+        assert app.query_one("#startup-panel")
         assert app.query_one("#input")
         assert app.query_one("#sidebar-rail")
         assert app.query_one("#sidebar")
         assert app.query_one("#file-tree")
         assert app.query_one("#sidebar-hide")
+        assert app.query_one("#sidebar").display is False
+        assert app.query_one("#sidebar-rail").display is True
         assert app.query_one("#sidebar-show")
         assert app.query_one("#sidebar-up")
         assert app.query_one("#palette")
@@ -270,7 +318,7 @@ async def test_tui_main_panel_avoids_vertical_divider_drift(monkeypatch, tmp_pat
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     app = LibreClawApp(config=load_config())
 
-    async with app.run_test(size=(120, 45)):
+    async with app.run_test(size=(120, 45)) as pilot:
         workspace = app.query_one("#workspace")
         sidebar = app.query_one("#sidebar")
         sidebar_rail = app.query_one("#sidebar-rail")
@@ -278,6 +326,11 @@ async def test_tui_main_panel_avoids_vertical_divider_drift(monkeypatch, tmp_pat
         main = app.query_one("#main")
         chat = app.query_one("#chat")
         input_box = app.query_one("#input")
+
+        assert sidebar.display is False
+        assert sidebar_rail.display is True
+        app.action_toggle_sidebar()
+        await pilot.pause()
 
         assert workspace.styles.border.top[0] == "solid"
         assert workspace.styles.border.left[0] == ""
@@ -304,16 +357,16 @@ async def test_tui_sidebar_left_rail_toggle(monkeypatch, tmp_path: Path) -> None
         sidebar = app.query_one("#sidebar")
         rail = app.query_one("#sidebar-rail")
 
-        assert sidebar.display is True
-        assert rail.display is False
-
-        app.action_toggle_sidebar()
         assert sidebar.display is False
         assert rail.display is True
 
         app.action_toggle_sidebar()
         assert sidebar.display is True
         assert rail.display is False
+
+        app.action_toggle_sidebar()
+        assert sidebar.display is False
+        assert rail.display is True
 
 
 async def test_tui_scrollbars_use_blue_accent(monkeypatch, tmp_path: Path) -> None:

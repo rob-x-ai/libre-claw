@@ -74,7 +74,7 @@ class TelegramHandlers:
             return
         provider = " ".join(context.args or [])
         if not provider:
-            await update.effective_message.reply_text("Usage: /provider anthropic|openai|openrouter|ollama")
+            await update.effective_message.reply_text("Usage: /provider anthropic|openai|openrouter|ollama|codex")
             return
         if provider == "local":
             provider = "ollama"

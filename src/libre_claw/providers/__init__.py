@@ -6,6 +6,7 @@ from __future__ import annotations
 __all__ = [
     "Done",
     "LLMProvider",
+    "CodexProvider",
     "LocalProvider",
     "OllamaProvider",
     "OpenAIProvider",
@@ -36,6 +37,7 @@ from libre_claw.providers.base import (
     combine_usage,
 )
 from libre_claw.providers.factory import create_provider
+from libre_claw.providers.codex import CodexProvider
 from libre_claw.providers.local import LocalProvider
 from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.openai import OpenAIProvider

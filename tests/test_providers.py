@@ -10,6 +10,7 @@ import pytest
 from libre_claw.auth.api_keys import ApiKeyLookup
 from libre_claw.config import load_config
 from libre_claw.providers import ProviderConfigurationError, create_provider
+from libre_claw.providers.codex import CodexProvider
 from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.openai import OpenAIProvider
 from libre_claw.providers.openrouter import OpenRouterProvider
@@ -124,6 +125,19 @@ def test_create_provider_supports_ollama_without_api_key(monkeypatch, tmp_path: 
 
     assert isinstance(provider, OllamaProvider)
     assert provider.model == "qwen3.6:27b"
+
+
+def test_create_provider_supports_codex_without_api_key(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[general]\ndefault_provider = \"codex\"\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config(config_path=config_path)
+
+    provider = create_provider(config)
+
+    assert isinstance(provider, CodexProvider)
+    assert provider.model == "gpt-5.5"
 
 
 def test_create_provider_requires_ollama_cloud_api_key(monkeypatch, tmp_path: Path) -> None:

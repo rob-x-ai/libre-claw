@@ -247,6 +247,13 @@ def _load_default_config() -> ConfigTable:
                 "default_model": "openrouter/auto",
                 "max_tokens": 16384,
             },
+            "codex": {
+                "default_model": "gpt-5.5",
+                "executable": "codex",
+                "sandbox": "workspace-write",
+                "approval_policy": "never",
+                "timeout": 900,
+            },
             "ollama": {
                 "base_url": "http://localhost:11434",
                 "default_model": "qwen3.6:27b",
@@ -290,7 +297,7 @@ def _load_default_config() -> ConfigTable:
             "token_ttl_seconds": 3600,
         },
         "tui": {
-            "show_file_tree": True,
+            "show_file_tree": False,
             "show_status_bar": True,
             "vim_keybindings": False,
         },

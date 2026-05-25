@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import NoReturn
 
@@ -10,6 +11,7 @@ import click
 
 from libre_claw import __version__
 from libre_claw.auth.api_keys import ApiKeyStore, KeyStorageError
+from libre_claw.auth.codex import CodexCliError, CodexCommandResult, codex_logout, codex_status, stream_codex_command
 from libre_claw.config import (
     ConfigError,
     LibreClawConfig,
@@ -162,6 +164,40 @@ def auth_status(ctx: click.Context) -> None:
         _raise_click_error(str(exc))
     for name in sorted(statuses):
         click.echo(f"{name}: {statuses[name]}")
+    status = asyncio.run(codex_status())
+    click.echo(f"codex: {'logged_in' if status.logged_in else 'missing'}")
+
+
+@auth_command.command("codex-login")
+@click.option("--browser", "browser_login", is_flag=True, help="Use Codex's normal browser login instead of device auth.")
+def auth_codex_login(browser_login: bool) -> None:
+    """Log in to Codex/ChatGPT auth for the Codex-backed Libre Claw provider."""
+    try:
+        result = asyncio.run(_stream_codex_login(browser_login=browser_login))
+    except CodexCliError as exc:
+        _raise_click_error(str(exc))
+    if result.exit_code != 0:
+        _raise_click_error(f"Codex login exited with {result.exit_code}.")
+
+
+@auth_command.command("codex-status")
+def auth_codex_status() -> None:
+    """Show Codex CLI login status without printing credentials."""
+    status = asyncio.run(codex_status())
+    click.echo(status.detail)
+
+
+@auth_command.command("codex-logout")
+def auth_codex_logout() -> None:
+    """Log out of Codex/ChatGPT auth through the Codex CLI."""
+    try:
+        result = asyncio.run(codex_logout())
+    except CodexCliError as exc:
+        _raise_click_error(str(exc))
+    if result.output:
+        click.echo(result.output)
+    if result.exit_code != 0:
+        _raise_click_error(f"Codex logout exited with {result.exit_code}.")
 
 
 def _provider_api_key_env(provider_config: object) -> str | None:
@@ -170,3 +206,20 @@ def _provider_api_key_env(provider_config: object) -> str | None:
         if isinstance(value, str):
             return value
     return None
+
+
+async def _stream_codex_login(browser_login: bool) -> CodexCommandResult:
+    args = ["codex", "login"]
+    if not browser_login:
+        args.append("--device-auth")
+
+    final: CodexCommandResult | None = None
+    async for event in stream_codex_command(args):
+        if isinstance(event, CodexCommandResult):
+            final = event
+            continue
+        click.echo(event.text, nl=False, err=event.stream == "stderr")
+
+    if final is None:
+        raise CodexCliError("Codex login ended without a result.")
+    return final

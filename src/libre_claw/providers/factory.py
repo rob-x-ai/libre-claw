@@ -11,6 +11,7 @@ from libre_claw.auth.api_keys import ApiKeyStore
 from libre_claw.config import LibreClawConfig
 from libre_claw.providers.anthropic import AnthropicProvider
 from libre_claw.providers.base import LLMProvider, ProviderConfigurationError
+from libre_claw.providers.codex import CodexProvider
 from libre_claw.providers.ollama import OllamaProvider
 from libre_claw.providers.openai import OpenAIProvider
 from libre_claw.providers.openrouter import OpenRouterProvider
@@ -20,11 +21,17 @@ def create_provider(config: LibreClawConfig, api_key_store: ApiKeyStore | None =
     """Create the configured provider."""
     provider_name = _canonical_provider_name(config.general.default_provider)
     provider_config = config.providers.get(provider_name)
-    if provider_name not in {"anthropic", "openai", "openrouter", "ollama"}:
-        msg = f"Provider '{provider_name}' is not supported. Use 'anthropic', 'openai', 'openrouter', or 'ollama'."
+    if provider_name not in {"anthropic", "openai", "openrouter", "ollama", "codex"}:
+        msg = (
+            f"Provider '{provider_name}' is not supported. "
+            "Use 'anthropic', 'openai', 'openrouter', 'ollama', or 'codex'."
+        )
         raise ProviderConfigurationError(msg)
     if provider_config is None:
         raise ProviderConfigurationError(f"Missing [providers.{provider_name}] configuration.")
+
+    if provider_name == "codex":
+        return _create_codex_provider(config, provider_config)
 
     if provider_name == "ollama":
         return _create_ollama_provider(config, provider_config, api_key_store)
@@ -55,6 +62,27 @@ def create_provider(config: LibreClawConfig, api_key_store: ApiKeyStore | None =
         return OpenAIProvider(api_key=api_key_lookup.value, model=model, max_tokens=max_tokens)
     except RuntimeError as exc:
         raise ProviderConfigurationError(str(exc)) from exc
+
+
+def _create_codex_provider(config: LibreClawConfig, provider_config: Mapping[str, Any]) -> CodexProvider:
+    sandbox = _str_provider_value(provider_config, "sandbox", "workspace-write")
+    if sandbox not in {"read-only", "workspace-write", "danger-full-access"}:
+        raise ProviderConfigurationError(
+            "[providers.codex].sandbox must be 'read-only', 'workspace-write', or 'danger-full-access'."
+        )
+    approval_policy = _str_provider_value(provider_config, "approval_policy", "never")
+    if approval_policy not in {"untrusted", "on-failure", "on-request", "never"}:
+        raise ProviderConfigurationError(
+            "[providers.codex].approval_policy must be 'untrusted', 'on-failure', 'on-request', or 'never'."
+        )
+    return CodexProvider(
+        model=_resolve_model(config, "codex", provider_config),
+        working_directory=config.general.working_directory,
+        executable=_str_provider_value(provider_config, "executable", "codex"),
+        sandbox=sandbox,
+        approval_policy=approval_policy,
+        timeout=_int_provider_value(provider_config, "timeout", 900),
+    )
 
 
 def _create_ollama_provider(
@@ -134,6 +162,7 @@ def _provider_label(provider_name: str) -> str:
         "anthropic": "Anthropic",
         "openai": "OpenAI",
         "openrouter": "OpenRouter",
+        "codex": "Codex",
     }
     return labels.get(provider_name, provider_name)
 
@@ -160,6 +189,8 @@ def _fallback_model(provider_name: str) -> str:
         return "gpt-4o"
     if provider_name == "openrouter":
         return "openrouter/auto"
+    if provider_name == "codex":
+        return "gpt-5.5"
     if provider_name == "ollama":
         return "qwen3:32b"
     return "claude-sonnet-4-6"

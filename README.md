@@ -6,20 +6,20 @@ uses permissioned tools for coding tasks, supports Telegram, and keeps provider
 keys out of project config files.
 
 Version `0.1.0` is the first shippable release. It is early, but functional:
-you can launch the TUI, choose Anthropic, OpenAI, OpenRouter, or Ollama, chat
+you can launch the TUI, choose Anthropic, OpenAI, OpenRouter, Ollama, or Codex, chat
 with the agent, approve tool calls, browse files, save sessions, use memory,
 and run the Telegram daemon.
 
 ## What You Get
 
 - Textual terminal UI with streaming Markdown chat.
-- Providers: Anthropic, OpenAI, OpenRouter, and Ollama.
+- Providers: Anthropic, OpenAI, OpenRouter, Ollama, and Codex CLI auth.
 - Ollama support for local daemon use, Ollama Cloud, and OpenAI-compatible
   Ollama endpoints.
 - Built-in tools: `read_file`, `write_file`, `edit_file`, `list_directory`,
   and `bash`.
 - Interactive permission prompts for write/edit/shell actions.
-- File explorer whose root can move up and down with the user.
+- File explorer, hidden on startup, whose root can move up and down with the user.
 - SQLite-backed memory, saved sessions, and context compaction.
 - Secure API key storage through environment variables, OS keyring, or an
   encrypted fallback file.
@@ -83,6 +83,7 @@ libre-claw auth set-key anthropic
 libre-claw auth set-key openai
 libre-claw auth set-key openrouter
 libre-claw auth set-key ollama
+libre-claw auth codex-login
 libre-claw auth status
 ```
 
@@ -91,6 +92,10 @@ Key lookup order is:
 1. Environment variable.
 2. OS keyring.
 3. Encrypted fallback file at `~/.libre-claw/.keys`.
+
+Codex is different: `/codex login` and `libre-claw auth codex-login` use the
+supported Codex CLI ChatGPT login flow. Libre Claw does not read or copy Codex
+private token files.
 
 ## Fast Starts
 
@@ -188,6 +193,33 @@ default_provider = "openai"
 default_model = "gpt-5.5"
 ```
 
+### Codex / ChatGPT Login
+
+If you want the Open-Claw-style path where users sign in with Codex/ChatGPT
+instead of pasting an OpenAI API key, use the Codex provider:
+
+```bash
+libre-claw
+```
+
+Inside the TUI:
+
+```text
+/codex login
+/provider codex
+/model codex:gpt-5.5 --global
+```
+
+Equivalent terminal commands:
+
+```bash
+libre-claw auth codex-login
+libre-claw auth codex-status
+```
+
+This delegates turns to `codex exec` using the user's Codex CLI login. It is a
+provider bridge, not API-key storage.
+
 ## Model Switching
 
 Use `/model` from inside the TUI:
@@ -214,6 +246,7 @@ Use `/provider` when you only want to switch provider:
 /provider openai
 /provider openrouter
 /provider ollama
+/provider codex
 ```
 
 Legacy configs that still say `default_provider = "local"` or
@@ -226,7 +259,8 @@ Legacy configs that still say `default_provider = "local"` or
 - `/cancel`
 - `/cost`
 - `/model [provider:]<name>|list [--global]`
-- `/provider anthropic|openai|openrouter|ollama`
+- `/provider anthropic|openai|openrouter|ollama|codex`
+- `/codex login|status|logout|use [model]`
 - `/save [name]`
 - `/load <name>`
 - `/compact [status|--force] [--keep N]`
@@ -292,8 +326,8 @@ bash commands show a warning and only allow one-time approval or denial.
 The file explorer has an `Up` control. Moving the explorer root also updates
 the agent working directory, so tools follow the directory you are browsing.
 
-On startup, the TUI shows Libre Claw ASCII art plus the latest release notes
-from `RELEASE.md`.
+On startup, the TUI shows Libre Claw ASCII art and a collapsed version header.
+Click the header to reveal the latest release notes from `RELEASE.md`.
 
 ## Telegram
 
@@ -363,7 +397,8 @@ libre-claw auth status
 libre-claw auth set-key openrouter
 ```
 
-Replace `openrouter` with `anthropic`, `openai`, or `ollama`.
+Replace `openrouter` with `anthropic`, `openai`, or `ollama`. For Codex, use
+`/codex login` in the TUI or `libre-claw auth codex-login`.
 
 ### Ollama Cloud 401
 

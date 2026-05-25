@@ -8,17 +8,19 @@ First shippable Libre Claw release from Kroonen AI Inc.
 
 - Terminal-native Textual TUI with streaming chat, Markdown rendering, command
   palette, slash-command suggestions, `/model` provider/model onboarding,
-  startup ASCII art, session status, and startup release notes.
+  startup ASCII art, session status, and click-to-expand startup release notes.
 - `/model <provider>:<model> --global` persists the selected provider/model in
   `~/.libre-claw/config.toml`.
 - Status bar context meter plus `/compact status`, `/compact --force`, and
   `/compact --keep N` controls for context-window management.
-- File explorer with parent-directory navigation, agent working-directory
-  sync, a visible `Hide` control, a left-side `Files` rail for restoring the
-  sidebar, and `Ctrl+B` toggling.
-- Provider support for Anthropic, OpenAI, OpenRouter, and Ollama. Default model
-  selections are `claude-opus-4-6`, `gpt-5.5`, and `qwen3.6:27b`, with Ollama
-  Cloud examples centered on `kimi-k2.6:cloud`.
+- File explorer hidden by default, with parent-directory navigation, agent
+  working-directory sync, a visible `Hide` control, a left-side `Files` rail
+  for restoring the sidebar, and `Ctrl+B` toggling.
+- Provider support for Anthropic, OpenAI, OpenRouter, Ollama, and Codex CLI
+  auth. Default model selections are `claude-opus-4-6`, `gpt-5.5`, and
+  `qwen3.6:27b`, with Ollama Cloud examples centered on `kimi-k2.6:cloud`.
+- Codex/ChatGPT login can be started from inside the TUI with `/codex login`,
+  then used through `/provider codex` or `/model codex:gpt-5.5`.
 - OpenRouter support with fixed Libre Claw app attribution headers:
   `https://kroonen.ai`, `Libre Claw`, and the `cli-agent` category.
 - Cumulative session token tracking in the status bar, TUI `/cost`, and
@@ -54,8 +56,8 @@ First shippable Libre Claw release from Kroonen AI Inc.
   usage accounting is available; other providers may only return token counts.
 - Search, browser, git PR helpers, and richer diff UX are not yet at full
   parity with larger agent harnesses.
-- Codex-style Sign in with ChatGPT OAuth is not implemented yet. OpenAI model
-  calls currently use `OPENAI_API_KEY` or secure stored keys.
+- The Codex provider delegates to `codex exec`; richer native Codex event
+  rendering and Libre Claw tool unification are still future polish.
 - GitLab `main` may remain protected; mirrored updates currently target the
   configured writable branch.
 

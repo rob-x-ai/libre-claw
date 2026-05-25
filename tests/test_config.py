@@ -18,6 +18,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.general.default_model == "claude-opus-4-6"
     assert config.general.working_directory == tmp_path.resolve()
     assert config.tui.show_status_bar is True
+    assert config.tui.show_file_tree is False
     assert config.permissions.default_level == "ask"
     assert config.auth.keyring_service == "libre-claw"
     assert config.auth.token_ttl_seconds == 3600
