@@ -62,9 +62,11 @@ First shippable Libre Claw release from Kroonen AI Inc.
   working-directory sync, a visible `Hide` control, a left-side `Files` rail
   for restoring the sidebar, and `Ctrl+B` toggling.
 - Provider support for Anthropic, OpenAI, OpenRouter, Ollama, and Codex CLI
-  auth. Default model selections are `claude-opus-4-6`, `gpt-5.5`, and
-  `qwen3.6:27b`, with Ollama Cloud presets updated to current API/library names
-  such as `kimi-k2.6:cloud`, `deepseek-v4-flash:cloud`, and `gpt-oss:120b`.
+  auth. Default model selections are `claude-opus-4-7`, `gpt-5.5`, and
+  `qwen3.6:27b`, with Anthropic direct API presets updated to `claude-opus-4-7`,
+  `claude-sonnet-4-6`, and `claude-haiku-4-5-20251001`, plus Ollama Cloud
+  presets updated to current API/library names such as `kimi-k2.6:cloud`,
+  `deepseek-v4-flash:cloud`, and `gpt-oss:120b`.
 - Codex/ChatGPT login can be started from inside the TUI with `/codex login`,
   then used through `/provider codex` or `/model codex:gpt-5.5`, with Codex
   OAuth picker presets for `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,

@@ -77,6 +77,7 @@ from libre_claw.core.usage import (
 )
 from libre_claw.daemon import DaemonClient, daemon_base_url
 from libre_claw.providers import LLMProvider, ProviderConfigurationError, Usage, combine_usage, create_provider
+from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
 from libre_claw.release import latest_release_notes
@@ -206,10 +207,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
 SUPPORTED_PROVIDERS = ("anthropic", "openai", "openrouter", "ollama", "codex")
 MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
     "anthropic": (
-        ("claude-opus-4-6", "Claude Opus 4.6"),
-        ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
-        ("claude-opus-4-20250918", "Claude Opus 4"),
-        ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+        *((preset.model, preset.label) for preset in ANTHROPIC_MODEL_PRESETS),
     ),
     "openai": (
         ("gpt-5.5", "GPT-5.5"),
@@ -225,7 +223,7 @@ MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
     "openrouter": (
         ("qwen/qwen3.7-max", "Qwen3.7 Max through OpenRouter"),
         ("openrouter/auto", "OpenRouter automatic routing"),
-        ("anthropic/claude-sonnet-4.5", "Claude through OpenRouter"),
+        ("anthropic/claude-sonnet-4.6", "Claude through OpenRouter"),
         ("openai/gpt-5.5", "GPT-5.5 through OpenRouter"),
         ("openai/gpt-4o", "GPT-4o through OpenRouter"),
         ("moonshotai/kimi-k2", "Kimi K2 through OpenRouter"),
@@ -3081,6 +3079,8 @@ def _model_help_text(config: LibreClawConfig) -> str:
     lines.extend(f"- libre-claw auth set-key {name}" for name in SUPPORTED_PROVIDERS if name not in {"ollama", "codex"})
     lines.append("- libre-claw auth set-key ollama  # required for Ollama Cloud")
     lines.append("- /codex login  # ChatGPT/Codex auth, no OpenAI API key")
+    if provider == "anthropic":
+        lines.append("- curl https://api.anthropic.com/v1/models ...  # live Claude API model catalog")
     if provider == "ollama":
         lines.append(
             "- curl https://ollama.com/api/tags -H 'Authorization: Bearer $OLLAMA_API_KEY'  # live Cloud names"

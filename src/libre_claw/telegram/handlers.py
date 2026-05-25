@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
 from libre_claw.telegram.auth import TelegramAuth
@@ -46,7 +47,7 @@ TELEGRAM_MODEL_PRESETS: dict[str, tuple[TelegramModelPreset, ...]] = {
     "openrouter": (
         TelegramModelPreset("openrouter", "qwen/qwen3.7-max", "Qwen3.7 Max"),
         TelegramModelPreset("openrouter", "openrouter/auto", "Auto Router"),
-        TelegramModelPreset("openrouter", "anthropic/claude-sonnet-4.5", "Claude Sonnet 4.5"),
+        TelegramModelPreset("openrouter", "anthropic/claude-sonnet-4.6", "Claude Sonnet 4.6"),
         TelegramModelPreset("openrouter", "openai/gpt-5.5", "GPT-5.5"),
         TelegramModelPreset("openrouter", "openai/gpt-4o", "GPT-4o"),
         TelegramModelPreset("openrouter", "moonshotai/kimi-k2", "Kimi K2"),
@@ -60,11 +61,8 @@ TELEGRAM_MODEL_PRESETS: dict[str, tuple[TelegramModelPreset, ...]] = {
         TelegramModelPreset("openai", "codex-mini", "Codex Mini"),
     ),
     "codex": tuple(TelegramModelPreset("codex", preset.model, preset.label) for preset in CODEX_MODEL_PRESETS),
-    "anthropic": (
-        TelegramModelPreset("anthropic", "claude-opus-4-6", "Claude Opus 4.6"),
-        TelegramModelPreset("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6"),
-        TelegramModelPreset("anthropic", "claude-opus-4-20250918", "Claude Opus 4"),
-        TelegramModelPreset("anthropic", "claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+    "anthropic": tuple(
+        TelegramModelPreset("anthropic", preset.model, preset.label) for preset in ANTHROPIC_MODEL_PRESETS
     ),
 }
 

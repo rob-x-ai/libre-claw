@@ -307,7 +307,7 @@ def _load_default_config() -> ConfigTable:
     return {
         "general": {
             "default_provider": "anthropic",
-            "default_model": "claude-opus-4-6",
+            "default_model": "claude-opus-4-7",
             "working_directory": ".",
             "theme": "dark",
             "log_level": "info",
@@ -343,7 +343,7 @@ def _load_default_config() -> ConfigTable:
         "providers": {
             "anthropic": {
                 "api_key_env": "ANTHROPIC_API_KEY",
-                "default_model": "claude-opus-4-6",
+                "default_model": "claude-opus-4-7",
                 "max_tokens": 16384,
             },
             "openai": {
@@ -420,7 +420,7 @@ def _load_default_config() -> ConfigTable:
             "max_message_length": 4000,
             "stream_update_interval": 1.5,
             "default_provider": "anthropic",
-            "default_model": "claude-opus-4-6",
+            "default_model": "claude-opus-4-7",
         },
         "goal": {
             "max_turns": 20,

@@ -265,7 +265,28 @@ Default model:
 ```toml
 [general]
 default_provider = "anthropic"
-default_model = "claude-opus-4-6"
+default_model = "claude-opus-4-7"
+```
+
+Current direct Claude API presets:
+
+| Model | Use |
+| --- | --- |
+| `claude-opus-4-7` | Most capable generally available Claude model for complex reasoning and agentic coding |
+| `claude-sonnet-4-6` | Best blend of speed and intelligence for everyday agent work |
+| `claude-haiku-4-5-20251001` | Fastest Claude model with near-frontier intelligence |
+
+Anthropic also documents `claude-haiku-4-5` as a convenience alias. Hermes and
+OpenRouter-style configs use provider-prefixed names such as
+`anthropic/claude-opus-4.6` or `anthropic/claude-opus-4.7`; do not use that
+prefix for the first-party Anthropic Messages API.
+
+To check your account's live first-party Claude catalog:
+
+```bash
+curl https://api.anthropic.com/v1/models \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01"
 ```
 
 ### OpenAI

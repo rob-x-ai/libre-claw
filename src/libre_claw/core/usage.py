@@ -22,7 +22,7 @@ OPENROUTER_MODEL_PRESETS: tuple[tuple[str, str], ...] = (
     ("qwen/qwen3.7-max", "Primary high-capacity coding preset."),
     ("openrouter/auto", "Let OpenRouter route across available providers."),
     ("moonshotai/kimi-k2", "Long-context coding and repo analysis preset."),
-    ("anthropic/claude-sonnet-4.5", "Claude coding preset through OpenRouter."),
+    ("anthropic/claude-sonnet-4.6", "Claude coding preset through OpenRouter."),
     ("openai/gpt-5.5", "OpenAI flagship preset through OpenRouter."),
 )
 
