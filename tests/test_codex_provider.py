@@ -72,7 +72,7 @@ async def test_codex_provider_runs_codex_exec_with_prompt(monkeypatch, tmp_path:
     ]
 
     assert any(isinstance(event, TextDelta) and event.text == "Codex works" for event in events)
-    assert captured["args"][:3] == ["codex", "exec", "--json"]
+    assert captured["args"][:5] == ["codex", "--ask-for-approval", "never", "exec", "--json"]
     assert "--model" in captured["args"]
     assert "build this" in str(captured["input_text"])
     assert "System text" in str(captured["input_text"])

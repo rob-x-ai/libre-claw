@@ -58,6 +58,8 @@ class CodexProvider(LLMProvider):
         prompt = _format_codex_prompt(messages, system)
         args = [
             self.executable,
+            "--ask-for-approval",
+            self.approval_policy,
             "exec",
             "--json",
             "--ephemeral",
@@ -65,8 +67,6 @@ class CodexProvider(LLMProvider):
             self.model,
             "--sandbox",
             self.sandbox,
-            "--ask-for-approval",
-            self.approval_policy,
             "--cd",
             str(self.working_directory),
             "-",
