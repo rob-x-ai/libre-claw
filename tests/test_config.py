@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from libre_claw.config import (
+    configure_telegram,
     default_config_path,
     global_config_path,
     load_config,
@@ -163,6 +164,26 @@ def test_set_global_default_model_updates_user_config(monkeypatch, tmp_path: Pat
     assert config.general.default_model == "qwen/qwen3.7-max"
     assert config.providers["openrouter"]["default_model"] == "qwen/qwen3.7-max"
     assert config.tui.show_file_tree is False
+
+
+def test_configure_telegram_updates_user_config_without_token(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    written = configure_telegram((123, 456), use_daemon=True)
+
+    assert written == user_config_path()
+    text = written.read_text(encoding="utf-8")
+    assert "[telegram]" in text
+    assert "enabled = true" in text
+    assert "use_daemon = true" in text
+    assert "allowed_user_ids = [123, 456]" in text
+    assert "TELEGRAM_BOT_TOKEN" in text
+    assert "bot_token =" not in text
+    config = load_config()
+    assert config.telegram.enabled is True
+    assert config.telegram.use_daemon is True
+    assert config.telegram.allowed_user_ids == (123, 456)
 
 
 def test_global_config_path_prefers_active_user_config(monkeypatch, tmp_path: Path) -> None:

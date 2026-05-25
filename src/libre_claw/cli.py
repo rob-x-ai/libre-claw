@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import NoReturn
 
@@ -15,9 +16,12 @@ from libre_claw.auth.codex import CodexCliError, CodexCommandResult, codex_logou
 from libre_claw.config import (
     ConfigError,
     LibreClawConfig,
+    configure_telegram,
     default_config_path,
+    global_config_path,
     load_config,
     packaged_default_config_text,
+    set_global_default_model,
     user_config_path,
 )
 from libre_claw.daemon import DaemonServer
@@ -73,19 +77,127 @@ def main(ctx: click.Context, config_path: Path | None, working_directory: Path |
     app.run()
 
 
-@main.command("telegram")
+@main.group("telegram", invoke_without_command=True)
 @click.pass_context
 def telegram_command(ctx: click.Context) -> None:
-    """Run Libre Claw as a standalone Telegram bot daemon."""
+    """Set up or run the Telegram bot bridge."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _run_telegram_bot(ctx)
+
+
+@telegram_command.command("run")
+@click.pass_context
+def telegram_run_command(ctx: click.Context) -> None:
+    """Run only the Telegram bot bridge."""
+    _run_telegram_bot(ctx)
+
+
+@telegram_command.command("up")
+@click.option("--host", help="Host interface for the local daemon API.")
+@click.option("--port", type=int, help="Port for the local daemon API.")
+@click.pass_context
+def telegram_up_command(ctx: click.Context, host: str | None, port: int | None) -> None:
+    """Run the local daemon and Telegram bot together."""
+    config = _load_context_config(ctx)
+    config = replace(config, telegram=replace(config.telegram, enabled=True, use_daemon=True))
+    click.echo(f"Starting Libre Claw daemon on http://{host or config.daemon.host}:{port or config.daemon.port}")
+    click.echo("Starting Telegram bridge. Press Ctrl+C to stop both.")
+    try:
+        asyncio.run(_run_telegram_stack(config, host=host, port=port))
+    except RuntimeError as exc:
+        _raise_click_error(str(exc))
+    except KeyboardInterrupt:
+        click.echo("Stopped Libre Claw Telegram stack.")
+
+
+@telegram_command.command("setup")
+@click.option("--bot-token", help="Telegram bot token. Omit to enter it securely.")
+@click.option("--user-id", "user_ids", type=int, multiple=True, help="Allowed Telegram numeric user ID. Can be repeated.")
+@click.option("--no-daemon", is_flag=True, help="Do not route Telegram runs through the local daemon.")
+@click.option("--provider", help="Optional default provider to persist, for example openrouter.")
+@click.option("--model", help="Optional default model to persist, for example qwen/qwen3.7-max.")
+@click.pass_context
+def telegram_setup_command(
+    ctx: click.Context,
+    bot_token: str | None,
+    user_ids: tuple[int, ...],
+    no_daemon: bool,
+    provider: str | None,
+    model: str | None,
+) -> None:
+    """Configure Telegram in one guided command."""
+    config = _load_context_config(ctx)
+    token = bot_token or click.prompt("Telegram bot token from @BotFather", hide_input=True, confirmation_prompt=True)
+    if not user_ids:
+        user_ids = (click.prompt("Your numeric Telegram user ID", type=int),)
+
+    store = ApiKeyStore.from_config(config.auth)
+    try:
+        location = store.set_api_key("telegram", token)
+        path = configure_telegram(
+            tuple(user_ids),
+            enabled=True,
+            use_daemon=not no_daemon,
+            bot_token_env=config.telegram.bot_token_env,
+            config_path=global_config_path(config),
+        )
+        if provider and model:
+            set_global_default_model(provider, model, config_path=path)
+    except (ConfigError, KeyStorageError) as exc:
+        _raise_click_error(str(exc))
+
+    click.echo(f"Stored Telegram bot token in {location.replace('_', ' ')}.")
+    click.echo(f"Updated Telegram config at {path}.")
+    click.echo("Next: run `libre-claw telegram up` and message your bot /start.")
+
+
+@telegram_command.command("status")
+@click.pass_context
+def telegram_status_command(ctx: click.Context) -> None:
+    """Show Telegram readiness without printing secrets."""
+    config = _load_context_config(ctx)
+    store = ApiKeyStore.from_config(config.auth)
+    try:
+        token_source = store.get_api_key("telegram", config.telegram.bot_token_env).source
+    except KeyStorageError as exc:
+        _raise_click_error(str(exc))
+    click.echo(f"enabled: {config.telegram.enabled}")
+    click.echo(f"use_daemon: {config.telegram.use_daemon}")
+    click.echo(f"allowed_user_ids: {list(config.telegram.allowed_user_ids)}")
+    click.echo(f"bot_token: {token_source}")
+    click.echo(f"daemon: http://{config.daemon.host}:{config.daemon.port}")
+
+
+def _run_telegram_bot(ctx: click.Context) -> None:
     config = _load_context_config(ctx)
 
     bot = TelegramBot(config)
-    import asyncio
 
     try:
         asyncio.run(bot.run())
     except RuntimeError as exc:
         _raise_click_error(str(exc))
+
+
+async def _run_telegram_stack(config: LibreClawConfig, host: str | None = None, port: int | None = None) -> None:
+    server = DaemonServer(config)
+    server_task = asyncio.create_task(server.run(host=host, port=port), name="libre-claw-daemon")
+    await asyncio.sleep(0.25)
+    bot_task = asyncio.create_task(TelegramBot(config).run(), name="libre-claw-telegram")
+    tasks = {server_task, bot_task}
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        for task in done:
+            task.result()
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @main.command("daemon")
@@ -174,6 +286,7 @@ def auth_status(ctx: click.Context) -> None:
         for name, provider_config in config.providers.items()
         if name in {"anthropic", "openai", "openrouter", "ollama"}
     ]
+    providers.append(("telegram", config.telegram.bot_token_env))
     try:
         statuses = store.key_status(providers)
     except KeyStorageError as exc:

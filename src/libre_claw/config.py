@@ -242,6 +242,45 @@ def set_global_default_model(
     return path
 
 
+def configure_telegram(
+    allowed_user_ids: tuple[int, ...],
+    *,
+    enabled: bool = True,
+    use_daemon: bool = True,
+    bot_token_env: str = "TELEGRAM_BOT_TOKEN",
+    config_path: Path | str | None = None,
+) -> Path:
+    """Persist Telegram bridge config without storing the bot token."""
+    if not allowed_user_ids:
+        raise ConfigError("At least one Telegram user ID is required.")
+    if not bot_token_env.strip():
+        raise ConfigError("Telegram bot token env var name cannot be empty.")
+
+    path = Path(config_path).expanduser() if config_path is not None else user_config_path()
+    updates = {
+        "telegram": {
+            "enabled": enabled,
+            "use_daemon": use_daemon,
+            "bot_token_env": bot_token_env.strip(),
+            "allowed_user_ids": list(allowed_user_ids),
+        },
+    }
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        updated = _update_toml_sections(existing, updates)
+        tomllib.loads(updated)
+        path.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        msg = f"Could not write config file {path}: {exc}"
+        raise ConfigError(msg) from exc
+    except tomllib.TOMLDecodeError as exc:
+        msg = f"Could not update config file {path}: {exc}"
+        raise ConfigError(msg) from exc
+    return path
+
+
 def global_config_path(config: LibreClawConfig | None = None) -> Path:
     """Return the config file that `/model --global` should update."""
     if config is None:
@@ -438,7 +477,7 @@ _SECTION_RE = re.compile(r"^\s*\[([A-Za-z0-9_.-]+)\]\s*(?:#.*)?$")
 _KEY_RE = re.compile(r"^(\s*)([A-Za-z0-9_-]+)(\s*=).*$")
 
 
-def _update_toml_sections(text: str, updates: Mapping[str, Mapping[str, str]]) -> str:
+def _update_toml_sections(text: str, updates: Mapping[str, Mapping[str, Any]]) -> str:
     lines = text.splitlines()
     output: list[str] = []
     seen: dict[str, set[str]] = {section: set() for section in updates}
@@ -449,7 +488,7 @@ def _update_toml_sections(text: str, updates: Mapping[str, Mapping[str, str]]) -
             return
         missing = [key for key in updates[section] if key not in seen[section]]
         for key in missing:
-            output.append(f"{key} = {_toml_string(updates[section][key])}")
+            output.append(f"{key} = {_toml_value(updates[section][key])}")
             seen[section].add(key)
 
     for line in lines:
@@ -465,7 +504,7 @@ def _update_toml_sections(text: str, updates: Mapping[str, Mapping[str, str]]) -
             key = key_match.group(2)
             section_updates = updates[current_section]
             if key in section_updates:
-                output.append(f"{key_match.group(1)}{key}{key_match.group(3)} {_toml_string(section_updates[key])}")
+                output.append(f"{key_match.group(1)}{key}{key_match.group(3)} {_toml_value(section_updates[key])}")
                 seen[current_section].add(key)
                 continue
 
@@ -481,13 +520,19 @@ def _update_toml_sections(text: str, updates: Mapping[str, Mapping[str, str]]) -
             output.append("")
         output.append(f"[{section}]")
         for key in missing:
-            output.append(f"{key} = {_toml_string(values[key])}")
+            output.append(f"{key} = {_toml_value(values[key])}")
             seen[section].add(key)
 
     return "\n".join(output).rstrip() + "\n"
 
 
-def _toml_string(value: str) -> str:
+def _toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    if isinstance(value, tuple | list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     return json.dumps(value)
 
 

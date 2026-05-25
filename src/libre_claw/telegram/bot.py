@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 
+from libre_claw.auth.api_keys import ApiKeyStore, KeyStorageError
 from libre_claw.config import LibreClawConfig
 from libre_claw.daemon import DaemonClient, daemon_base_url
 from libre_claw.telegram.auth import TelegramAuth
@@ -25,9 +26,12 @@ class TelegramBot:
         self.auth = TelegramAuth.from_config(config.telegram)
 
     async def run(self) -> None:
-        token = os.getenv(self.config.telegram.bot_token_env)
+        token = self._bot_token()
         if not token:
-            msg = f"Missing Telegram bot token. Set {self.config.telegram.bot_token_env}."
+            msg = (
+                "Missing Telegram bot token. Run `libre-claw telegram setup` "
+                f"or set {self.config.telegram.bot_token_env}."
+            )
             raise RuntimeError(msg)
         if Application is None:
             raise RuntimeError("The python-telegram-bot package is not installed.")
@@ -55,3 +59,13 @@ class TelegramBot:
             await application.updater.stop()
             await application.stop()
             await application.shutdown()
+
+    def _bot_token(self) -> str | None:
+        token = os.getenv(self.config.telegram.bot_token_env)
+        if token:
+            return token
+        try:
+            lookup = ApiKeyStore.from_config(self.config.auth).get_api_key("telegram", self.config.telegram.bot_token_env)
+        except KeyStorageError:
+            return None
+        return lookup.value

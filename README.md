@@ -542,9 +542,10 @@ enabled = true
 use_daemon = true
 ```
 
-Run `libre-claw daemon` and `libre-claw telegram` together. Telegram inline
-approval buttons then resolve the same daemon run through the local API, so the
-run can continue even if another surface is watching it.
+For users, the easy path is `libre-claw telegram up`, which starts the local
+daemon and Telegram bridge together. Telegram inline approval buttons then
+resolve the same daemon run through the local API, so the run can continue even
+if another surface is watching it.
 
 ## Automations
 
@@ -717,20 +718,45 @@ Click the header to reveal the latest release notes from `RELEASE.md`.
 
 ## Telegram
 
-The standalone Telegram daemon uses the same agent core:
+The simple setup flow stores the bot token securely through keyring or Libre
+Claw's encrypted fallback file, enables Telegram, allowlists your Telegram user
+ID, and defaults Telegram runs to daemon mode:
 
 ```bash
-export TELEGRAM_BOT_TOKEN="..."
-libre-claw telegram
+libre-claw telegram setup --user-id 123456789
+libre-claw telegram up
 ```
 
-Configure allowed Telegram user IDs in `~/.libre-claw/config.toml`:
+You can pass the token and model non-interactively:
+
+```bash
+libre-claw telegram setup \
+  --bot-token "$TELEGRAM_BOT_TOKEN" \
+  --user-id 123456789 \
+  --provider openrouter \
+  --model qwen/qwen3.7-max
+libre-claw telegram up
+```
+
+Useful Telegram CLI commands:
+
+```bash
+libre-claw telegram status
+libre-claw telegram run   # bot only
+libre-claw telegram up    # daemon + bot together
+```
+
+Manual config still works in `~/.libre-claw/config.toml`:
 
 ```toml
 [telegram]
 enabled = true
+use_daemon = true
 allowed_user_ids = [123456789]
 ```
+
+The bot token is read from the secure key store or `TELEGRAM_BOT_TOKEN`; it is
+not stored in TOML.
 
 ## Configuration
 

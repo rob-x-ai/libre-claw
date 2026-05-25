@@ -11,6 +11,7 @@ from libre_claw.config import load_config
 from libre_claw.core.session import ChatMessage
 from libre_claw.providers.base import Done, LLMProvider, StreamEvent, TextDelta, ToolCallReady, ToolSchema
 from libre_claw.telegram.auth import TelegramAuth
+from libre_claw.telegram.bot import TelegramBot
 from libre_claw.telegram.bridge import (
     TelegramBridge,
     TelegramDone,
@@ -98,6 +99,25 @@ def test_telegram_auth_allowlist() -> None:
     assert auth.is_allowed(123) is True
     assert auth.is_allowed(456) is False
     assert auth.is_allowed(None) is False
+
+
+def test_telegram_bot_reads_secure_stored_token(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    class Lookup:
+        value = "stored-telegram-token"
+
+    class Store:
+        def get_api_key(self, provider: str, env_var: str | None = None) -> Lookup:
+            assert provider == "telegram"
+            assert env_var == "TELEGRAM_BOT_TOKEN"
+            return Lookup()
+
+    monkeypatch.setattr("libre_claw.telegram.bot.ApiKeyStore.from_config", lambda config: Store())
+
+    assert TelegramBot(load_config())._bot_token() == "stored-telegram-token"
 
 
 async def test_telegram_bridge_streams_text(monkeypatch, tmp_path: Path) -> None:
