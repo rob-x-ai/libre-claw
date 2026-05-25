@@ -106,3 +106,10 @@ max_message_length = 4000
 stream_update_interval = 1.5
 default_provider = "anthropic"
 default_model = "claude-opus-4-6"
+
+[goal]
+max_turns = 20
+judge_provider = "current" # current | anthropic | openai | openrouter | ollama | codex
+judge_model = "" # empty means use the selected judge provider default/current model
+judge_temperature = 0.0
+judge_max_tokens = 1024

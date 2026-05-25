@@ -88,6 +88,15 @@ class TelegramConfig:
 
 
 @dataclass(frozen=True)
+class GoalConfig:
+    max_turns: int
+    judge_provider: str
+    judge_model: str
+    judge_temperature: float
+    judge_max_tokens: int
+
+
+@dataclass(frozen=True)
 class LibreClawConfig:
     general: GeneralConfig
     agent: AgentConfig
@@ -96,6 +105,7 @@ class LibreClawConfig:
     auth: AuthConfig
     tui: TUIConfig
     telegram: TelegramConfig
+    goal: GoalConfig
     providers: Mapping[str, Mapping[str, Any]]
     source_paths: tuple[Path, ...] = field(default_factory=tuple)
 
@@ -323,6 +333,13 @@ def _load_default_config() -> ConfigTable:
             "default_provider": "anthropic",
             "default_model": "claude-opus-4-6",
         },
+        "goal": {
+            "max_turns": 20,
+            "judge_provider": "current",
+            "judge_model": "",
+            "judge_temperature": 0.0,
+            "judge_max_tokens": 1024,
+        },
     }
 
 
@@ -457,6 +474,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
     auth = _section(data, "auth")
     tui = _section(data, "tui")
     telegram = _section(data, "telegram")
+    goal = _section(data, "goal")
 
     return LibreClawConfig(
         general=GeneralConfig(
@@ -505,6 +523,13 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             stream_update_interval=_float(telegram, "stream_update_interval"),
             default_provider=_str(telegram, "default_provider"),
             default_model=_str(telegram, "default_model"),
+        ),
+        goal=GoalConfig(
+            max_turns=_int(goal, "max_turns"),
+            judge_provider=_str(goal, "judge_provider"),
+            judge_model=_str(goal, "judge_model"),
+            judge_temperature=_float(goal, "judge_temperature"),
+            judge_max_tokens=_int(goal, "judge_max_tokens"),
         ),
         providers=_providers(data),
         source_paths=source_paths,

@@ -18,6 +18,8 @@ and run the Telegram daemon.
   Ollama endpoints.
 - Built-in tools: `read_file`, `write_file`, `edit_file`, `list_directory`,
   and `bash`.
+- `/goal` supervised mode that keeps the agent working for up to a bounded
+  number of turns until a separate judge model marks the objective complete.
 - Interactive permission prompts for write/edit/shell actions.
 - File explorer, hidden on startup, whose root can move up and down with the user.
 - SQLite-backed memory, saved sessions, and context compaction.
@@ -264,6 +266,7 @@ Legacy configs that still say `default_provider = "local"` or
 - `/save [name]`
 - `/load <name>`
 - `/compact [status|--force] [--keep N]`
+- `/goal <objective>|status|stop|max N`
 - `/tools expand|collapse|toggle <index>`
 - `/memory list|add <fact>|forget <id>`
 - `/telegram`
@@ -294,6 +297,29 @@ memory facts, and conversation against `[agent].context_window_tokens`.
 Use `/compact status` for details, `/compact` for normal compaction, and
 `/compact --force --keep 4` when you want to summarize aggressively while
 keeping only the latest four messages.
+
+## Goal Mode
+
+Use `/goal` for bounded autopilot work:
+
+```text
+/goal Fix the failing tests and commit the result
+```
+
+Libre Claw runs one normal agent turn, asks a separate judge model whether the
+goal is done, then reprompts the agent with the judge's next instruction until
+the judge returns done or the max-turn limit is reached. The default limit is
+20 turns.
+
+Useful controls:
+
+- `/goal status`
+- `/goal stop`
+- `/goal max 20`
+
+The judge has no tools. It only reads the transcript and returns a strict
+done/continue decision, so file and shell permissions still go through the
+normal Libre Claw approval flow.
 
 ## Token And Cost Tracking
 

@@ -60,6 +60,7 @@ def test_tui_phase_four_helper_state(monkeypatch, tmp_path: Path) -> None:
     assert app._palette_matches("telegram")[0].name == "/telegram"
     assert app._slash_suggestion_matches("/")[0].name == "/help"
     assert [command.name for command in app._slash_suggestion_matches("/m")] == ["/model", "/memory"]
+    assert app._slash_suggestion_matches("/g")[0].name == "/goal"
     assert app._slash_suggestion_matches("/memory ") == []
 
 
@@ -203,6 +204,21 @@ async def test_model_global_flag_updates_next_launch_for_codex(monkeypatch, tmp_
     assert reloaded.providers["codex"]["default_model"] == "gpt-5.5"
     assert app.config.general.default_provider == "codex"
     assert app.config.general.default_model == "gpt-5.5"
+
+
+async def test_goal_commands_update_session_limit_and_report_status(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test():
+        await app._handle_command("/goal max 5")
+        await app._handle_command("/goal status")
+
+    assert app._goal_max_turns == 5
+    assert any("Goal max turns set to 5" in entry.content for entry in app.transcript)
+    assert any("No active goal. Max turns: 5." in entry.content for entry in app.transcript)
 
 
 def test_assistant_label_uses_purple_accent(monkeypatch, tmp_path: Path) -> None:

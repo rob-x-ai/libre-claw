@@ -12,6 +12,13 @@ __all__ = [
     "AgentTextDelta",
     "AgentToolCall",
     "AgentToolResult",
+    "GoalComplete",
+    "GoalEvent",
+    "GoalJudgeResult",
+    "GoalRunner",
+    "GoalStopped",
+    "GoalTurnStarted",
+    "JudgeDecision",
     "Session",
 ]
 
@@ -24,5 +31,14 @@ from libre_claw.core.agent import (
     AgentTextDelta,
     AgentToolCall,
     AgentToolResult,
+)
+from libre_claw.core.goal import (
+    GoalComplete,
+    GoalEvent,
+    GoalJudgeResult,
+    GoalRunner,
+    GoalStopped,
+    GoalTurnStarted,
+    JudgeDecision,
 )
 from libre_claw.core.session import Session

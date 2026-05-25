@@ -30,6 +30,11 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.auth.keyring_service == "libre-claw"
     assert config.auth.token_ttl_seconds == 3600
     assert config.agent.context_window_tokens == 200000
+    assert config.goal.max_turns == 20
+    assert config.goal.judge_provider == "current"
+    assert config.goal.judge_model == ""
+    assert config.goal.judge_temperature == 0.0
+    assert config.goal.judge_max_tokens == 1024
     assert "Kroonen AI Inc. (https://kroonen.ai)" in config.agent.system_prompt
     assert "Current toolset: read_file, write_file, edit_file, list_directory, and bash." in config.agent.system_prompt
     assert config.agent.system_prompt_extra == ""

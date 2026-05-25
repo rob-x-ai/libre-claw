@@ -41,6 +41,12 @@ from libre_claw.core import (
     AgentTextDelta,
     AgentToolCall,
     AgentToolResult,
+    GoalComplete,
+    GoalJudgeResult,
+    GoalRunner,
+    GoalStopped,
+    GoalTurnStarted,
+    JudgeDecision,
     Session,
 )
 from libre_claw.core.memory import MemoryStore
@@ -48,7 +54,7 @@ from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
 from libre_claw.core.session import ChatMessage, estimate_context_tokens
 from libre_claw.core.tools import ToolCall, ToolResult
-from libre_claw.providers import ProviderConfigurationError, Usage, combine_usage, create_provider
+from libre_claw.providers import LLMProvider, ProviderConfigurationError, Usage, combine_usage, create_provider
 from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry
 
@@ -140,6 +146,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/save", "/save [name]", "Save the current session"),
     SlashCommand("/load", "/load <name>", "Load a saved session"),
     SlashCommand("/compact", "/compact [status|--force] [--keep N]", "Show or compact context"),
+    SlashCommand("/goal", "/goal <objective>|status|stop|max N", "Run a judged multi-turn goal loop"),
     SlashCommand("/memory", "/memory list|add <fact>|forget <id>", "Manage persistent memory facts"),
     SlashCommand("/telegram", "/telegram", "Show Telegram bridge status"),
     SlashCommand("/tools", "/tools expand|collapse|toggle <index>", "Control tool call details"),
@@ -519,6 +526,10 @@ class LibreClawApp(App[None]):
         self._tool_entry_by_call_id: dict[str, int] = {}
         self._started_at = time.monotonic()
         self._last_assistant_response = ""
+        self._goal_description: str | None = None
+        self._goal_turn = 0
+        self._goal_max_turns = self.config.goal.max_turns
+        self._last_goal_decision: JudgeDecision | None = None
 
         self._rebuild_agent()
 
@@ -705,6 +716,9 @@ class LibreClawApp(App[None]):
         if command == "/compact":
             self._compact_context(argument)
             return
+        if command == "/goal":
+            await self._handle_goal_command(argument)
+            return
         if command == "/memory":
             await self._handle_memory_command(argument)
             return
@@ -822,6 +836,106 @@ class LibreClawApp(App[None]):
             self._pending_permission = None
             self._hide_permission_prompt()
             self._active_task = None
+            self.query_one("#input", Input).focus()
+
+    async def _stream_goal_response(self, goal: str, assistant_index: int, judge_provider: LLMProvider) -> None:
+        if self.agent is None:
+            return
+
+        stream_buffer = StreamRenderBuffer(
+            interval=STREAM_RENDER_INTERVAL,
+            max_buffered_chars=STREAM_RENDER_MAX_BUFFERED_CHARS,
+        )
+        current_assistant_index = assistant_index
+        runner = GoalRunner(
+            agent=self.agent,
+            judge_provider=judge_provider,
+            session=self.session,
+            goal=goal,
+            max_turns=self._goal_max_turns,
+            judge_temperature=self.config.goal.judge_temperature,
+            judge_max_tokens=self.config.goal.judge_max_tokens,
+        )
+
+        try:
+            async for event in runner.run():
+                if isinstance(event, GoalTurnStarted):
+                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
+                    self._goal_turn = event.turn
+                    if event.turn > 1:
+                        current_assistant_index = self._append_assistant("")
+                    self._append_system(f"Goal turn {event.turn}/{event.max_turns} started.")
+                    self._update_status()
+                    continue
+
+                if isinstance(event, AgentTextDelta):
+                    stream_buffer.append(event.text)
+                    if stream_buffer.should_flush(time.monotonic()):
+                        self._flush_stream_buffer(current_assistant_index, stream_buffer)
+                    continue
+
+                if isinstance(event, AgentToolCall):
+                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
+                    self._append_tool_call(event.call)
+                    continue
+
+                if isinstance(event, AgentPermissionRequest):
+                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
+                    self._pending_permission = event
+                    self._show_permission_prompt(event)
+                    continue
+
+                if isinstance(event, AgentToolResult):
+                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
+                    self._append_tool_result(event.call, event.result)
+                    continue
+
+                if isinstance(event, AgentDone):
+                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
+                    if event.usage is not None:
+                        self.usage = combine_usage(self.usage, event.usage) or self.usage
+                        self._update_status()
+                    continue
+
+                if isinstance(event, AgentError):
+                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
+                    if current_assistant_index < len(self.transcript) and not self.transcript[current_assistant_index].content:
+                        self.transcript.pop(current_assistant_index)
+                        self._render_transcript()
+                    self._append_system(event.message)
+                    continue
+
+                if isinstance(event, GoalJudgeResult):
+                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
+                    self._last_goal_decision = event.decision
+                    if event.usage is not None:
+                        self.usage = combine_usage(self.usage, event.usage) or self.usage
+                    self._append_system(_goal_judge_text(event.turn, event.decision))
+                    self._update_status()
+                    continue
+
+                if isinstance(event, GoalComplete):
+                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
+                    self._append_system(
+                        f"Goal complete after {event.turns} turn(s). Judge: {event.decision.reason}"
+                    )
+                    continue
+
+                if isinstance(event, GoalStopped):
+                    self._flush_stream_buffer(current_assistant_index, stream_buffer)
+                    self._append_system(f"Goal stopped after {event.turns} turn(s): {event.reason}")
+                    continue
+        except asyncio.CancelledError:
+            self._flush_stream_buffer(current_assistant_index, stream_buffer)
+            self._append_system("Goal cancelled.")
+        finally:
+            self._flush_stream_buffer(current_assistant_index, stream_buffer)
+            self._pending_permission = None
+            self._hide_permission_prompt()
+            self._active_task = None
+            self._goal_description = None
+            self._goal_turn = 0
+            self._update_status()
             self.query_one("#input", Input).focus()
 
     def _flush_stream_buffer(self, assistant_index: int, stream_buffer: StreamRenderBuffer) -> None:
@@ -1096,6 +1210,88 @@ class LibreClawApp(App[None]):
             f"Compacted context from {before} messages to {after}. "
             f"Context {before_meter.percent}% -> {after_meter.percent}%."
         )
+
+    async def _handle_goal_command(self, argument: str) -> None:
+        parts = argument.split(maxsplit=1)
+        action = parts[0].lower() if parts else ""
+        value = parts[1].strip() if len(parts) > 1 else ""
+
+        if action in {"", "help"}:
+            self._append_system(_goal_help_text(self.config, self._goal_max_turns))
+            return
+
+        if action == "status":
+            self._append_system(self._goal_status_text())
+            return
+
+        if action == "stop":
+            if self._goal_description is None:
+                self._append_system("No active goal to stop.")
+                return
+            self._cancel_active_generation()
+            return
+
+        if action == "max":
+            if not value.isdigit() or int(value) < 1:
+                self._append_system("Usage: /goal max <turns>, with turns >= 1")
+                return
+            self._goal_max_turns = int(value)
+            self._append_system(f"Goal max turns set to {self._goal_max_turns} for this session.")
+            return
+
+        if self._active_task is not None and not self._active_task.done():
+            self._append_system("A response is already streaming. Use /cancel or /goal stop to stop it.")
+            return
+        if self.agent is None:
+            self._append_system(self.provider_error or "No provider is available.")
+            return
+
+        goal = argument.strip()
+        try:
+            judge_provider, judge_label = self._create_goal_judge_provider()
+        except ProviderConfigurationError as exc:
+            self._append_system(f"Goal judge provider is not available: {exc}")
+            return
+
+        self._goal_description = goal
+        self._goal_turn = 0
+        self._last_goal_decision = None
+        self._append_user(f"Goal: {goal}")
+        self._append_system(
+            f"Goal started with max {self._goal_max_turns} turn(s). Judge: {judge_label}. "
+            "Use /goal stop to cancel."
+        )
+        assistant_index = self._append_assistant("")
+        self._active_task = asyncio.create_task(self._stream_goal_response(goal, assistant_index, judge_provider))
+
+    def _create_goal_judge_provider(self) -> tuple[LLMProvider, str]:
+        configured_provider = self.config.goal.judge_provider.strip().lower()
+        provider = (
+            _canonical_tui_provider(self.config.general.default_provider)
+            if configured_provider in {"", "current"}
+            else _canonical_tui_provider(configured_provider)
+        )
+        if provider not in SUPPORTED_PROVIDERS:
+            raise ProviderConfigurationError(
+                "[goal].judge_provider must be 'current', 'anthropic', 'openai', 'openrouter', 'ollama', or 'codex'."
+            )
+
+        model = self.config.goal.judge_model.strip()
+        if not model:
+            model = _effective_model(_replace_general(self.config, default_provider=provider))
+        judge_config = _replace_general(self.config, default_provider=provider, default_model=model)
+        return create_provider(judge_config), f"{provider}:{model}"
+
+    def _goal_status_text(self) -> str:
+        if self._goal_description is None:
+            return f"No active goal. Max turns: {self._goal_max_turns}."
+        lines = [
+            f"Goal active: turn {self._goal_turn}/{self._goal_max_turns}",
+            self._goal_description,
+        ]
+        if self._last_goal_decision is not None:
+            lines.append(f"Last judge: {_goal_judge_text(self._goal_turn, self._last_goal_decision)}")
+        return "\n".join(lines)
 
     def _handle_tools_command(self, argument: str) -> None:
         parts = argument.split()
@@ -1486,6 +1682,19 @@ class LibreClawApp(App[None]):
                 for suggestion in suggestions
                 if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
             ][:6]
+
+        if lowered.startswith("/goal "):
+            query = lowered.removeprefix("/goal ").strip()
+            suggestions = [
+                SlashCommand("/goal status", "/goal status", "Show active goal progress"),
+                SlashCommand("/goal stop", "/goal stop", "Cancel active goal mode"),
+                SlashCommand("/goal max 20", "/goal max 20", "Set max turns for this session"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
         return []
 
     def _slash_suggestion_text(self, suggestions: list[SlashCommand]) -> str:
@@ -1581,7 +1790,10 @@ class LibreClawApp(App[None]):
         model = _effective_model(self.config)
         meter = self._context_meter()
         elapsed = int(time.monotonic() - self._started_at)
-        active = "running" if self._active_task is not None and not self._active_task.done() else "idle"
+        if self._goal_description is not None and self._active_task is not None and not self._active_task.done():
+            active = f"goal {self._goal_turn}/{self._goal_max_turns}"
+        else:
+            active = "running" if self._active_task is not None and not self._active_task.done() else "idle"
         return (
             f"Libre Claw v{__version__} | {provider}:{model} | {_format_usage_cost(self.usage)} | "
             f"{_token_status_text(self.usage, meter)} | ctx {_context_status_text(meter)} | {elapsed}s | {active}"
@@ -1596,6 +1808,8 @@ class LibreClawApp(App[None]):
             return "Command palette query..."
         if self._pending_permission is not None:
             return "Permission prompt active: click a choice or press y/n/a/!"
+        if self._goal_description is not None:
+            return "Goal mode active... (/goal status, /goal stop)"
         return "Type a message... (/help, Ctrl+B files, Ctrl+P palette, Ctrl+C exit)"
 
 
@@ -1620,6 +1834,7 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
         auth=config.auth,
         tui=config.tui,
         telegram=config.telegram,
+        goal=config.goal,
         providers=config.providers,
         source_paths=config.source_paths,
     )
@@ -1704,6 +1919,35 @@ def _provider_help_text(config: LibreClawConfig) -> str:
         "Use `/provider anthropic|openai|openrouter|ollama|codex`, or use `/model <provider>:<name>` to switch both.",
         "For Codex/ChatGPT auth, run `/codex login` then `/provider codex`.",
     ]
+    return "\n".join(lines)
+
+
+def _goal_help_text(config: LibreClawConfig, session_max_turns: int) -> str:
+    configured_provider = config.goal.judge_provider or "current"
+    judge_provider = (
+        _canonical_tui_provider(config.general.default_provider)
+        if configured_provider == "current"
+        else _canonical_tui_provider(configured_provider)
+    )
+    judge_model = config.goal.judge_model or _effective_model(_replace_general(config, default_provider=judge_provider))
+    return "\n".join(
+        [
+            "Goal mode runs the agent repeatedly until a separate judge marks the goal done.",
+            f"Usage: /goal <objective>",
+            f"Session max turns: {session_max_turns}",
+            f"Configured max turns: {config.goal.max_turns}",
+            f"Judge: {judge_provider}:{judge_model}",
+            "Commands: /goal status, /goal stop, /goal max <turns>",
+        ]
+    )
+
+
+def _goal_judge_text(turn: int, decision: JudgeDecision) -> str:
+    state = "done" if decision.done else "continue"
+    confidence = int(round(decision.confidence * 100))
+    lines = [f"Judge turn {turn}: {state} ({confidence}% confidence).", decision.reason]
+    if not decision.done and decision.next_prompt:
+        lines.append(f"Next: {decision.next_prompt}")
     return "\n".join(lines)
 
 

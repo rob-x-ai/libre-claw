@@ -13,6 +13,9 @@ First shippable Libre Claw release from Kroonen AI Inc.
   `~/.libre-claw/config.toml`.
 - Status bar context meter plus `/compact status`, `/compact --force`, and
   `/compact --keep N` controls for context-window management.
+- `/goal <objective>` supervised mode runs bounded multi-turn work, asks a
+  separate no-tools judge model whether the goal is complete after each turn,
+  and supports `/goal status`, `/goal stop`, and `/goal max N`.
 - File explorer hidden by default, with parent-directory navigation, agent
   working-directory sync, a visible `Hide` control, a left-side `Files` rail
   for restoring the sidebar, and `Ctrl+B` toggling.
@@ -34,7 +37,8 @@ First shippable Libre Claw release from Kroonen AI Inc.
   interrupt handling, context compaction, and configurable system prompt from
   TOML.
 - Built-in `read_file`, `write_file`, `edit_file`, `list_directory`, and
-  `bash` tools.
+  `bash` tools, with bounded reads/listing, atomic writes/edits, occurrence
+  targeting, diffs, and bounded shell output.
 - Interactive TUI permission panel with approve, deny, always allow tool, and
   always allow exact command options. Dangerous sandbox-blocked commands show a
   warning and require one-time approval or denial.
