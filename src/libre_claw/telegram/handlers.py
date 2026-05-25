@@ -81,6 +81,13 @@ class TelegramHandlers:
         self.bridge.config = _replace_general(self.bridge.config, default_provider=provider)
         await update.effective_message.reply_text(f"Provider set to {provider}.")
 
+    async def schedule(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        text = " ".join(context.args or [])
+        response = await self.bridge.schedule_text(update.effective_chat.id, text)
+        await update.effective_message.reply_text(_truncate(response, self.bridge.config.telegram.max_message_length))
+
     async def message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return

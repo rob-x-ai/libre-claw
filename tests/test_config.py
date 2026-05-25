@@ -40,6 +40,10 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.daemon.host == "127.0.0.1"
     assert config.daemon.port == 8766
     assert config.daemon.poll_interval == 0.5
+    assert config.automations.enabled is True
+    assert config.automations.root == tmp_path / ".libre-claw" / "automations"
+    assert config.automations.poll_interval == 30.0
+    assert config.automations.max_due_per_tick == 5
     assert config.mcp.enabled is False
     assert config.mcp.allowlist == ()
     assert config.mcp.permission_level == "ask"

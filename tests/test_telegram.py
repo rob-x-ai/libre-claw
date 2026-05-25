@@ -169,3 +169,22 @@ async def test_telegram_bridge_can_use_daemon_runs_for_approvals(monkeypatch, tm
     assert prompt.prompt_id == "daemon:run-1:toolu_1"
     assert resolved is True
     assert daemon.resolutions == [("run-1", "toolu_1", "allow_once")]
+
+
+async def test_telegram_bridge_schedule_command_creates_telegram_route(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    bridge = TelegramBridge(config)
+    await bridge.initialize()
+
+    examples = await bridge.schedule_text(42, "examples")
+    created = await bridge.schedule_text(42, "add daily 08:30 | Morning brief | Summarize priorities")
+    listed = await bridge.schedule_text(42, "list")
+    automation = (await bridge.automation_store.list())[0]
+
+    assert "Morning brief" in examples
+    assert "Scheduled:" in created
+    assert automation.route == "telegram"
+    assert automation.telegram_chat_id == 42
+    assert automation.automation_id in listed

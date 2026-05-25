@@ -34,6 +34,11 @@ First shippable Libre Claw release from Kroonen AI Inc.
   durable daemon run.
 - Daemon run requests reject per-request `working_directory` overrides; the
   daemon uses the trusted configured root only.
+- Recurring local automations with `[automations]` config, `/schedule`
+  commands, daemon due-run execution, cron-like schedules, saved Markdown
+  reports, and route metadata for TUI, Telegram, or report workflows.
+- `/schedule examples` ships ready-made daily repo health check, weekly
+  dependency review, and morning brief automation prompts.
 - MCP stdio bridge with `[mcp]` config, explicit server/tool allowlisting,
   `mcp__server__tool` wrappers, `/tools list` visibility, and normal Libre Claw
   permission policies for external tools.

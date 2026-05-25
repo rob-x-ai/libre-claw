@@ -12,6 +12,11 @@ __all__ = [
     "AgentTextDelta",
     "AgentToolCall",
     "AgentToolResult",
+    "AutomationError",
+    "AutomationRecord",
+    "AutomationRoute",
+    "AutomationStatus",
+    "AutomationStore",
     "GoalComplete",
     "GoalEvent",
     "GoalJudgeResult",
@@ -32,8 +37,11 @@ __all__ = [
     "SkillError",
     "SkillScope",
     "SkillStore",
+    "automation_examples",
+    "automation_is_due",
     "pending_approvals",
     "mcp_tool_specs",
+    "next_scheduled_at",
     "run_changes_text",
     "run_plan_text",
 ]
@@ -47,6 +55,16 @@ from libre_claw.core.agent import (
     AgentTextDelta,
     AgentToolCall,
     AgentToolResult,
+)
+from libre_claw.core.automations import (
+    AutomationError,
+    AutomationRecord,
+    AutomationRoute,
+    AutomationStatus,
+    AutomationStore,
+    automation_examples,
+    automation_is_due,
+    next_scheduled_at,
 )
 from libre_claw.core.goal import (
     GoalComplete,

@@ -20,6 +20,10 @@ from libre_claw.core import (
     AgentTextDelta,
     AgentToolCall,
     AgentToolResult,
+    AutomationError,
+    AutomationRecord,
+    AutomationRoute,
+    AutomationStore,
     RunEvent,
     RunRecord,
     RunState,
@@ -63,8 +67,10 @@ class DaemonServer:
         self.provider_factory = provider_factory
         self.registry_factory = registry_factory
         self.memory_store = MemoryStore()
+        self.automation_store = AutomationStore(config.automations.root)
         self.active_runs: dict[str, ActiveRun] = {}
         self._app: web.Application | None = None
+        self._automation_task: asyncio.Task[None] | None = None
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -77,6 +83,12 @@ class DaemonServer:
                 web.get("/runs/{run_id}/events", self.get_events),
                 web.post("/runs/{run_id}/cancel", self.cancel_run),
                 web.post("/runs/{run_id}/permissions/{tool_call_id}", self.resolve_permission),
+                web.get("/automations", self.list_automations),
+                web.post("/automations", self.create_automation),
+                web.get("/automations/{automation_id}", self.get_automation),
+                web.delete("/automations/{automation_id}", self.delete_automation),
+                web.post("/automations/{automation_id}/pause", self.pause_automation),
+                web.post("/automations/{automation_id}/resume", self.resume_automation),
             ]
         )
         app.on_startup.append(self._on_startup)
@@ -96,13 +108,20 @@ class DaemonServer:
 
     async def _on_startup(self, _app: web.Application) -> None:
         await self.memory_store.initialize()
+        if self.config.automations.enabled:
+            self._automation_task = asyncio.create_task(self._automation_loop())
 
     async def _on_cleanup(self, _app: web.Application) -> None:
+        if self._automation_task is not None and not self._automation_task.done():
+            self._automation_task.cancel()
         for active in list(self.active_runs.values()):
             if not active.task.done():
                 active.task.cancel()
-        if self.active_runs:
-            await asyncio.gather(*(active.task for active in self.active_runs.values()), return_exceptions=True)
+        tasks = [active.task for active in self.active_runs.values()]
+        if self._automation_task is not None:
+            tasks.append(self._automation_task)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def health(self, _request: web.Request) -> web.Response:
         return web.json_response(
@@ -224,6 +243,61 @@ class DaemonServer:
         await self.run_store.update_state(run_id, "running")
         return web.json_response({"run_id": run_id, "tool_call_id": tool_call_id, "resolution": resolution})
 
+    async def list_automations(self, request: web.Request) -> web.Response:
+        limit = _positive_int(request.query.get("limit"), default=50, maximum=200)
+        automations = await self.automation_store.list(limit=limit)
+        return web.json_response({"automations": [_automation_payload(record) for record in automations]})
+
+    async def get_automation(self, request: web.Request) -> web.Response:
+        automation_id = request.match_info["automation_id"]
+        automation = await self.automation_store.load(automation_id)
+        if automation is None:
+            return _json_error("Unknown automation.", status=404)
+        return web.json_response({"automation": _automation_payload(automation)})
+
+    async def create_automation(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _json_error("Request body must be JSON.")
+        if not isinstance(payload, Mapping):
+            return _json_error("Request body must be a JSON object.")
+        try:
+            route = cast(AutomationRoute, str(payload.get("route", "report")).lower())
+            telegram_chat_id = payload.get("telegram_chat_id")
+            automation = await self.automation_store.create(
+                name=str(payload.get("name", "")).strip(),
+                prompt=str(payload.get("prompt", "")).strip(),
+                schedule=str(payload.get("schedule", "")).strip(),
+                route=route,
+                provider=str(payload.get("provider") or self.config.general.default_provider),
+                model=str(payload.get("model") or self.config.general.default_model),
+                working_directory=self.config.general.working_directory,
+                telegram_chat_id=telegram_chat_id if isinstance(telegram_chat_id, int) else None,
+                metadata={"created_by": "daemon_api"},
+            )
+        except AutomationError as exc:
+            return _json_error(str(exc))
+        return web.json_response({"automation": _automation_payload(automation)}, status=201)
+
+    async def pause_automation(self, request: web.Request) -> web.Response:
+        automation = await self.automation_store.update_status(request.match_info["automation_id"], "paused")
+        if automation is None:
+            return _json_error("Unknown automation.", status=404)
+        return web.json_response({"automation": _automation_payload(automation)})
+
+    async def resume_automation(self, request: web.Request) -> web.Response:
+        automation = await self.automation_store.update_status(request.match_info["automation_id"], "active")
+        if automation is None:
+            return _json_error("Unknown automation.", status=404)
+        return web.json_response({"automation": _automation_payload(automation)})
+
+    async def delete_automation(self, request: web.Request) -> web.Response:
+        deleted = await self.automation_store.delete(request.match_info["automation_id"])
+        if not deleted:
+            return _json_error("Unknown automation.", status=404)
+        return web.json_response({"deleted": True})
+
     def _config_for_payload(self, payload: Mapping[str, Any]) -> LibreClawConfig:
         provider = str(payload.get("provider") or self.config.general.default_provider)
         model = str(payload.get("model") or self.config.general.default_model)
@@ -245,6 +319,7 @@ class DaemonServer:
             telegram=self.config.telegram,
             goal=self.config.goal,
             daemon=self.config.daemon,
+            automations=self.config.automations,
             mcp=self.config.mcp,
             providers=self.config.providers,
             source_paths=self.config.source_paths,
@@ -334,6 +409,113 @@ class DaemonServer:
             )
             await self.run_store.append_event(run.run_id, "run_finished", {"state": state})
 
+    async def _automation_loop(self) -> None:
+        try:
+            while True:
+                await self._tick_automations()
+                await asyncio.sleep(max(1.0, self.config.automations.poll_interval))
+        except asyncio.CancelledError:
+            raise
+
+    async def _tick_automations(self) -> None:
+        due = await self.automation_store.due(limit=max(1, self.config.automations.max_due_per_tick))
+        for automation in due:
+            try:
+                await self._start_automation_run(automation)
+            except Exception as exc:
+                await self._record_automation_error(automation, exc)
+
+    async def _start_automation_run(self, automation: AutomationRecord) -> RunRecord:
+        config = self._config_for_automation(automation)
+        title = f"Scheduled: {automation.name}"
+        run = await self.run_store.create_run(
+            title,
+            kind="chat",
+            provider=config.general.default_provider,
+            model=config.general.default_model,
+            working_directory=config.general.working_directory,
+            state="queued",
+        )
+        report_path = self.automation_store.report_path(automation.automation_id, run.run_id)
+        await self.automation_store.mark_run(automation.automation_id, run.run_id, report_path=report_path)
+        await self.run_store.append_event(
+            run.run_id,
+            "automation_triggered",
+            {
+                "automation_id": automation.automation_id,
+                "name": automation.name,
+                "schedule": automation.schedule,
+                "route": automation.route,
+                "telegram_chat_id": automation.telegram_chat_id,
+                "report_path": str(report_path),
+            },
+        )
+        task = asyncio.create_task(self._run_automation_agent(automation, run, config, report_path))
+        active = ActiveRun(run_id=run.run_id, task=task)
+        self.active_runs[run.run_id] = active
+        task.add_done_callback(lambda _task, run_id=run.run_id: self.active_runs.pop(run_id, None))
+        return run
+
+    async def _run_automation_agent(
+        self,
+        automation: AutomationRecord,
+        run: RunRecord,
+        config: LibreClawConfig,
+        report_path: Path,
+    ) -> None:
+        await self._run_agent(run, automation.prompt, config)
+        await asyncio.to_thread(_write_automation_report, automation, run, report_path)
+
+    def _config_for_automation(self, automation: AutomationRecord) -> LibreClawConfig:
+        provider = automation.provider or self.config.general.default_provider
+        model = automation.model or self.config.general.default_model
+        general = GeneralConfig(
+            default_provider="ollama" if provider == "local" else provider,
+            default_model=model,
+            working_directory=self.config.general.working_directory,
+            theme=self.config.general.theme,
+            log_level=self.config.general.log_level,
+        )
+        return LibreClawConfig(
+            general=general,
+            agent=self.config.agent,
+            permissions=self.config.permissions,
+            sandbox=self.config.sandbox,
+            auth=self.config.auth,
+            tui=self.config.tui,
+            telegram=self.config.telegram,
+            goal=self.config.goal,
+            daemon=self.config.daemon,
+            automations=self.config.automations,
+            mcp=self.config.mcp,
+            providers=self.config.providers,
+            source_paths=self.config.source_paths,
+        )
+
+    async def _record_automation_error(self, automation: AutomationRecord, exc: Exception) -> None:
+        run = await self.run_store.create_run(
+            f"Scheduled failed: {automation.name}",
+            kind="chat",
+            provider=automation.provider or self.config.general.default_provider,
+            model=automation.model or self.config.general.default_model,
+            working_directory=self.config.general.working_directory,
+            state="failed",
+        )
+        message = str(exc)
+        await self.run_store.append_event(
+            run.run_id,
+            "automation_error",
+            {"automation_id": automation.automation_id, "name": automation.name, "message": message},
+        )
+        await self.run_store.finish_run(
+            run.run_id,
+            "failed",
+            plan="",
+            summary=message,
+            verification=f"Automation {automation.automation_id} failed before run start.\n",
+            diff="",
+        )
+
     async def _create_agent(self, config: LibreClawConfig) -> Agent:
         provider = self.provider_factory(config)
         facts = await self.memory_store.list_facts()
@@ -396,6 +578,24 @@ class DaemonClient:
             f"/runs/{run_id}/permissions/{tool_call_id}",
             json={"resolution": resolution},
         )
+
+    async def list_automations(self, limit: int = 50) -> dict[str, Any]:
+        return await self._request("GET", f"/automations?limit={limit}")
+
+    async def create_automation(self, **payload: Any) -> dict[str, Any]:
+        return await self._request("POST", "/automations", json=payload)
+
+    async def get_automation(self, automation_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/automations/{automation_id}")
+
+    async def pause_automation(self, automation_id: str) -> dict[str, Any]:
+        return await self._request("POST", f"/automations/{automation_id}/pause")
+
+    async def resume_automation(self, automation_id: str) -> dict[str, Any]:
+        return await self._request("POST", f"/automations/{automation_id}/resume")
+
+    async def delete_automation(self, automation_id: str) -> dict[str, Any]:
+        return await self._request("DELETE", f"/automations/{automation_id}")
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         async with httpx.AsyncClient(
@@ -468,6 +668,29 @@ def _event_payload(event: RunEvent) -> dict[str, Any]:
     }
 
 
+def _automation_payload(record: AutomationRecord) -> dict[str, Any]:
+    return {
+        "automation_id": record.automation_id,
+        "name": record.name,
+        "prompt": record.prompt,
+        "schedule": record.schedule,
+        "route": record.route,
+        "status": record.status,
+        "provider": record.provider,
+        "model": record.model,
+        "working_directory": record.working_directory,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "next_run_at": record.next_run_at,
+        "last_run_at": record.last_run_at,
+        "last_run_id": record.last_run_id,
+        "telegram_chat_id": record.telegram_chat_id,
+        "report_path": record.report_path,
+        "metadata": record.metadata,
+        "path": str(record.path),
+    }
+
+
 def _artifact_payload(run: RunRecord) -> dict[str, dict[str, Any]]:
     payload: dict[str, dict[str, Any]] = {}
     for name in RUN_ARTIFACT_NAMES:
@@ -497,3 +720,42 @@ def _usage_payload(usage: Usage) -> dict[str, Any]:
         "reasoning_tokens": usage.reasoning_tokens,
         "cost": usage.cost,
     }
+
+
+def _write_automation_report(automation: AutomationRecord, run: RunRecord, report_path: Path) -> None:
+    summary = _read_artifact(run, "summary.md").strip()
+    verification = _read_artifact(run, "verification.md").strip()
+    diff_path = run.path / "diff.patch"
+    try:
+        diff_size = diff_path.stat().st_size
+    except OSError:
+        diff_size = 0
+    lines = [
+        f"# {automation.name}",
+        "",
+        f"- Automation: `{automation.automation_id}`",
+        f"- Run: `{run.run_id}`",
+        f"- Schedule: `{automation.schedule}`",
+        f"- Route: `{automation.route}`",
+        f"- Model: `{run.provider}:{run.model}`",
+        f"- Working directory: `{run.working_directory or 'unknown'}`",
+        "",
+        "## Summary",
+        "",
+        summary or "No assistant summary was produced.",
+        "",
+        "## Verification",
+        "",
+        verification or "No verification artifact was produced.",
+        "",
+        "## Artifacts",
+        "",
+        f"- Run directory: `{run.path}`",
+        f"- Diff size: {diff_size} bytes",
+    ]
+    if automation.route == "telegram" and automation.telegram_chat_id is not None:
+        lines.append(f"- Telegram chat: `{automation.telegram_chat_id}`")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = report_path.with_name(f".{report_path.name}.tmp")
+    tmp_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    tmp_path.replace(report_path)

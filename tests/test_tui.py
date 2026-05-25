@@ -11,6 +11,7 @@ from pathlib import Path
 from rich.console import Console
 
 from libre_claw.config import load_config
+from libre_claw.core.automations import AutomationStore
 from libre_claw.core.agent import (
     AgentDone,
     AgentError,
@@ -37,6 +38,7 @@ from libre_claw.tui.app import (
     _collect_run_artifacts,
     _model_help_text,
     _parse_compact_options,
+    _parse_schedule_command,
     _parse_skills_command,
     _parse_model_argument,
     _replace_general,
@@ -299,6 +301,19 @@ def test_skills_command_parser_handles_scopes_and_content() -> None:
     }
 
 
+def test_schedule_command_parser_handles_add_and_mutations() -> None:
+    assert _parse_schedule_command("") == {"action": "list"}
+    assert _parse_schedule_command("examples") == {"action": "examples"}
+    assert _parse_schedule_command("pause auto-1") == {"action": "pause", "automation_id": "auto-1"}
+    assert _parse_schedule_command("add --route tui daily 09:00 | Daily | Check repo") == {
+        "action": "add",
+        "route": "tui",
+        "schedule": "daily 09:00",
+        "name": "Daily",
+        "prompt": "Check repo",
+    }
+
+
 async def test_skills_commands_manage_user_and_project_skills(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.chdir(tmp_path)
@@ -318,6 +333,30 @@ async def test_skills_commands_manage_user_and_project_skills(monkeypatch, tmp_p
     assert any("Updated project skill pytest-debug" in entry.content for entry in app.transcript)
     assert any("Skill deleted." in entry.content for entry in app.transcript)
     assert not (tmp_path / ".libre-claw" / "skills" / "pytest-debug.md").exists()
+
+
+async def test_schedule_commands_manage_recurring_runs(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+    app.automation_store = AutomationStore(tmp_path / "automations")
+
+    async with app.run_test():
+        await app._handle_command("/schedule examples")
+        await app._handle_command("/schedule add daily 09:00 | Daily | Check repo")
+        automation = (await app.automation_store.list())[0]
+        await app._handle_command("/schedule list")
+        await app._handle_command(f"/schedule pause {automation.automation_id}")
+        await app._handle_command(f"/schedule resume {automation.automation_id}")
+        await app._handle_command(f"/schedule delete {automation.automation_id}")
+
+    assert any("Daily repo health check" in entry.content for entry in app.transcript)
+    assert any("Scheduled:" in entry.content for entry in app.transcript)
+    assert any("Schedules:" in entry.content for entry in app.transcript)
+    assert any("Updated schedule:" in entry.content for entry in app.transcript)
+    assert any("Deleted schedule" in entry.content for entry in app.transcript)
+    assert await app.automation_store.list() == []
 
 
 async def test_tui_daemon_mode_streams_daemon_events(monkeypatch, tmp_path: Path) -> None:

@@ -43,6 +43,10 @@ from libre_claw.core import (
     AgentTextDelta,
     AgentToolCall,
     AgentToolResult,
+    AutomationError,
+    AutomationRecord,
+    AutomationRoute,
+    AutomationStore,
     GoalComplete,
     GoalJudgeResult,
     GoalRunner,
@@ -54,6 +58,7 @@ from libre_claw.core import (
     RunState,
     RunStore,
     Session,
+    automation_examples,
 )
 from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
@@ -173,6 +178,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/approvals", "/approvals", "Show blocked tool approvals"),
     SlashCommand("/changes", "/changes [id]", "Show what changed since your last review"),
     SlashCommand("/skills", "/skills list|add|edit|delete", "Manage Libre Claw skills"),
+    SlashCommand("/schedule", "/schedule list|add|pause|resume|delete|examples", "Manage recurring local runs"),
     SlashCommand("/memory", "/memory list|add <fact>|forget <id>", "Manage persistent memory facts"),
     SlashCommand("/telegram", "/telegram", "Show Telegram bridge status"),
     SlashCommand("/tools", "/tools list|expand|collapse|toggle <index>", "Inspect and control tool details"),
@@ -587,6 +593,7 @@ class LibreClawApp(App[None]):
         self.memory_store = MemoryStore()
         self.skill_store = SkillStore(self.config.general.working_directory)
         self.run_store = RunStore()
+        self.automation_store = AutomationStore(self.config.automations.root)
         self.daemon_client = DaemonClient(daemon_base_url(self.config)) if self.config.tui.use_daemon else None
         self.memory_facts: list[str] = []
         self.agent: Agent | None = None
@@ -852,6 +859,9 @@ class LibreClawApp(App[None]):
             return
         if command == "/skills":
             await self._handle_skills_command(argument)
+            return
+        if command == "/schedule":
+            await self._handle_schedule_command(argument)
             return
         if command == "/memory":
             await self._handle_memory_command(argument)
@@ -1651,6 +1661,107 @@ class LibreClawApp(App[None]):
             return
 
         self._append_system(_skills_help_text())
+
+    async def _handle_schedule_command(self, argument: str) -> None:
+        try:
+            parsed = _parse_schedule_command(argument)
+        except AutomationError as exc:
+            self._append_system(str(exc))
+            return
+
+        action = str(parsed["action"])
+        if action == "list":
+            try:
+                payloads = await self._list_schedule_payloads()
+            except Exception as exc:
+                self._append_system(f"Could not list schedules: {exc}")
+                return
+            self._append_system(_automation_list_text(payloads))
+            return
+
+        if action == "examples":
+            self._append_system(_schedule_examples_text())
+            return
+
+        if action == "add":
+            route = cast(AutomationRoute, parsed.get("route", "report"))
+            payload = {
+                "name": str(parsed["name"]),
+                "prompt": str(parsed["prompt"]),
+                "schedule": str(parsed["schedule"]),
+                "route": route,
+                "provider": _canonical_tui_provider(self.config.general.default_provider),
+                "model": _effective_model(self.config),
+            }
+            try:
+                created = await self._create_schedule_payload(payload)
+            except Exception as exc:
+                self._append_system(f"Could not create schedule: {exc}")
+                return
+            self._append_system("Scheduled:\n" + _automation_line(_object_payload(created.get("automation", created))))
+            return
+
+        automation_id = str(parsed.get("automation_id", ""))
+        if action in {"pause", "resume", "delete"}:
+            try:
+                result = await self._mutate_schedule_payload(action, automation_id)
+            except Exception as exc:
+                self._append_system(f"Could not {action} schedule: {exc}")
+                return
+            if action == "delete":
+                self._append_system(f"Deleted schedule {automation_id}.")
+            else:
+                self._append_system("Updated schedule:\n" + _automation_line(_object_payload(result.get("automation", result))))
+            return
+
+        self._append_system(_schedule_help_text())
+
+    async def _list_schedule_payloads(self) -> list[dict[str, Any]]:
+        if self.daemon_client is not None:
+            payload = await self.daemon_client.list_automations()
+            automations = payload.get("automations", [])
+            return [dict(item) for item in automations if isinstance(item, dict)]
+        automations = await self.automation_store.list()
+        return [_automation_record_payload(record) for record in automations]
+
+    async def _create_schedule_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.daemon_client is not None:
+            return await self.daemon_client.create_automation(**payload)
+        record = await self.automation_store.create(
+            name=str(payload["name"]),
+            prompt=str(payload["prompt"]),
+            schedule=str(payload["schedule"]),
+            route=cast(AutomationRoute, payload.get("route", "report")),
+            provider=str(payload.get("provider", "")),
+            model=str(payload.get("model", "")),
+            working_directory=self.config.general.working_directory,
+            metadata={"created_by": "tui"},
+        )
+        return {"automation": _automation_record_payload(record)}
+
+    async def _mutate_schedule_payload(self, action: str, automation_id: str) -> dict[str, Any]:
+        if self.daemon_client is not None:
+            if action == "pause":
+                return await self.daemon_client.pause_automation(automation_id)
+            if action == "resume":
+                return await self.daemon_client.resume_automation(automation_id)
+            if action == "delete":
+                return await self.daemon_client.delete_automation(automation_id)
+        if action == "pause":
+            record = await self.automation_store.update_status(automation_id, "paused")
+            if record is None:
+                raise AutomationError("Unknown automation.")
+            return {"automation": _automation_record_payload(record)}
+        if action == "resume":
+            record = await self.automation_store.update_status(automation_id, "active")
+            if record is None:
+                raise AutomationError("Unknown automation.")
+            return {"automation": _automation_record_payload(record)}
+        if action == "delete":
+            if not await self.automation_store.delete(automation_id):
+                raise AutomationError("Unknown automation.")
+            return {"deleted": True}
+        raise AutomationError(_schedule_help_text())
 
     def _compact_context(self, argument: str = "") -> None:
         options = _parse_compact_options(argument)
@@ -2460,6 +2571,25 @@ class LibreClawApp(App[None]):
                 for suggestion in suggestions
                 if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
             ][:6]
+        if lowered.startswith("/schedule "):
+            query = lowered.removeprefix("/schedule ").strip()
+            suggestions = [
+                SlashCommand("/schedule list", "/schedule list", "List recurring runs"),
+                SlashCommand("/schedule examples", "/schedule examples", "Show ready-made schedules"),
+                SlashCommand(
+                    "/schedule add daily 09:00 | Daily repo health check | ",
+                    "/schedule add <schedule> | <name> | <prompt>",
+                    "Create a recurring run",
+                ),
+                SlashCommand("/schedule pause ", "/schedule pause <id>", "Pause a schedule"),
+                SlashCommand("/schedule resume ", "/schedule resume <id>", "Resume a schedule"),
+                SlashCommand("/schedule delete ", "/schedule delete <id>", "Delete a schedule"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
         return []
 
     def _slash_suggestion_text(self, suggestions: list[SlashCommand]) -> str:
@@ -2601,6 +2731,7 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
         telegram=config.telegram,
         goal=config.goal,
         daemon=config.daemon,
+        automations=config.automations,
         mcp=config.mcp,
         providers=config.providers,
         source_paths=config.source_paths,
@@ -2770,6 +2901,123 @@ def _skills_list_text(skills: list[Skill]) -> str:
         f"{skill.scope}:{skill.name} - {skill.title} ({skill.path})"
         for skill in skills
     )
+
+
+def _parse_schedule_command(argument: str) -> dict[str, object]:
+    stripped = argument.strip()
+    if not stripped:
+        return {"action": "list"}
+    parts = stripped.split(maxsplit=1)
+    action = parts[0].lower()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    if action in {"list", "ls"}:
+        return {"action": "list"}
+    if action == "examples":
+        return {"action": "examples"}
+    if action in {"pause", "resume", "delete", "del", "rm"}:
+        if not rest:
+            raise AutomationError(f"Usage: /schedule {action} <id>")
+        return {"action": "delete" if action in {"del", "rm"} else action, "automation_id": rest.split()[0]}
+    if action != "add":
+        raise AutomationError(_schedule_help_text())
+
+    fields = [field.strip() for field in rest.split("|", maxsplit=2)]
+    if len(fields) != 3 or not all(fields):
+        raise AutomationError("Usage: /schedule add [--route report|tui|telegram] <schedule> | <name> | <prompt>")
+
+    left_tokens = shlex.split(fields[0])
+    route: AutomationRoute = "report"
+    cleaned_tokens: list[str] = []
+    index = 0
+    while index < len(left_tokens):
+        token = left_tokens[index]
+        if token == "--route":
+            if index + 1 >= len(left_tokens):
+                raise AutomationError("--route requires report, tui, or telegram.")
+            route_text = left_tokens[index + 1].lower()
+            if route_text not in {"report", "tui", "telegram"}:
+                raise AutomationError("--route must be report, tui, or telegram.")
+            route = cast(AutomationRoute, route_text)
+            index += 2
+            continue
+        cleaned_tokens.append(token)
+        index += 1
+
+    schedule = " ".join(cleaned_tokens).strip()
+    if not schedule:
+        raise AutomationError("Schedule is required.")
+    return {
+        "action": "add",
+        "route": route,
+        "schedule": schedule,
+        "name": fields[1],
+        "prompt": fields[2],
+    }
+
+
+def _schedule_help_text() -> str:
+    return "\n".join(
+        [
+            "Usage:",
+            "/schedule list",
+            "/schedule examples",
+            "/schedule add [--route report|tui|telegram] <schedule> | <name> | <prompt>",
+            "/schedule pause <id>",
+            "/schedule resume <id>",
+            "/schedule delete <id>",
+            "",
+            "Schedules: daily HH:MM, weekly mon HH:MM, every N minutes, hourly, or five-field cron.",
+        ]
+    )
+
+
+def _schedule_examples_text() -> str:
+    lines = ["Schedule examples:"]
+    for name, schedule, prompt in automation_examples():
+        lines.append(f"/schedule add {schedule} | {name} | {prompt}")
+    return "\n".join(lines)
+
+
+def _automation_list_text(automations: list[dict[str, Any]]) -> str:
+    if not automations:
+        return "No schedules yet. Try `/schedule examples`."
+    return "Schedules:\n" + "\n".join(_automation_line(record) for record in automations)
+
+
+def _automation_line(record: dict[str, Any]) -> str:
+    last_run = record.get("last_run_id") or "never"
+    report = record.get("report_path")
+    suffix = f" report={report}" if report else ""
+    return (
+        f"{record.get('automation_id', '')} [{record.get('status', 'unknown')}] "
+        f"{record.get('schedule', '')} -> {record.get('route', 'report')} "
+        f"next={record.get('next_run_at', 'unknown')} last={last_run} "
+        f"{record.get('name', 'Untitled')}{suffix}"
+    ).strip()
+
+
+def _automation_record_payload(record: AutomationRecord) -> dict[str, Any]:
+    return {
+        "automation_id": record.automation_id,
+        "name": record.name,
+        "prompt": record.prompt,
+        "schedule": record.schedule,
+        "route": record.route,
+        "status": record.status,
+        "provider": record.provider,
+        "model": record.model,
+        "working_directory": record.working_directory,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "next_run_at": record.next_run_at,
+        "last_run_at": record.last_run_at,
+        "last_run_id": record.last_run_id,
+        "telegram_chat_id": record.telegram_chat_id,
+        "report_path": record.report_path,
+        "metadata": record.metadata,
+        "path": str(record.path),
+    }
 
 
 def _usage_payload(usage: Usage) -> dict[str, Any]:

@@ -106,6 +106,14 @@ class DaemonConfig:
 
 
 @dataclass(frozen=True)
+class AutomationsConfig:
+    enabled: bool
+    root: Path
+    poll_interval: float
+    max_due_per_tick: int
+
+
+@dataclass(frozen=True)
 class MCPConfig:
     enabled: bool
     allowlist: tuple[str, ...]
@@ -125,6 +133,7 @@ class LibreClawConfig:
     telegram: TelegramConfig
     goal: GoalConfig
     daemon: DaemonConfig
+    automations: AutomationsConfig
     mcp: MCPConfig
     providers: Mapping[str, Mapping[str, Any]]
     source_paths: tuple[Path, ...] = field(default_factory=tuple)
@@ -370,6 +379,12 @@ def _load_default_config() -> ConfigTable:
             "port": 8766,
             "poll_interval": 0.5,
         },
+        "automations": {
+            "enabled": True,
+            "root": "~/.libre-claw/automations",
+            "poll_interval": 30.0,
+            "max_due_per_tick": 5,
+        },
         "mcp": {
             "enabled": False,
             "allowlist": [],
@@ -513,6 +528,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
     telegram = _section(data, "telegram")
     goal = _section(data, "goal")
     daemon = _section(data, "daemon")
+    automations = _section(data, "automations")
     mcp = _section(data, "mcp")
 
     return LibreClawConfig(
@@ -576,6 +592,12 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             host=_str(daemon, "host"),
             port=_int(daemon, "port"),
             poll_interval=_float(daemon, "poll_interval"),
+        ),
+        automations=AutomationsConfig(
+            enabled=_bool(automations, "enabled"),
+            root=_path(automations, "root"),
+            poll_interval=_float(automations, "poll_interval"),
+            max_due_per_tick=_int(automations, "max_due_per_tick"),
         ),
         mcp=MCPConfig(
             enabled=_bool(mcp, "enabled"),

@@ -121,6 +121,12 @@ host = "127.0.0.1"
 port = 8766
 poll_interval = 0.5
 
+[automations]
+enabled = true
+root = "~/.libre-claw/automations"
+poll_interval = 30.0
+max_due_per_tick = 5
+
 [mcp]
 enabled = false
 allowlist = [] # expose only server.tool names listed here; empty means use each server's tools list

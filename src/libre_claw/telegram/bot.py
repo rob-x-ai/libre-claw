@@ -42,6 +42,7 @@ class TelegramBot:
         application.add_handler(CommandHandler("cancel", handlers.cancel))
         application.add_handler(CommandHandler("model", handlers.model))
         application.add_handler(CommandHandler("provider", handlers.provider))
+        application.add_handler(CommandHandler("schedule", handlers.schedule))
         application.add_handler(CallbackQueryHandler(handlers.callback))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.message))
 

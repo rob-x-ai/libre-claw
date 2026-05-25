@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from libre_claw.config import load_config
+from libre_claw.core.automations import AutomationStore
 from libre_claw.core.runs import RunStore
 from libre_claw.core.session import ChatMessage
 from libre_claw.core.tools import BaseTool, ToolContext, ToolRegistry, ToolResult
@@ -249,3 +250,85 @@ async def test_daemon_injects_project_skills(monkeypatch, tmp_path: Path) -> Non
     assert provider.system_prompts
     assert provider.system_prompts[0] is not None
     assert "Skill: Pytest Debug" in provider.system_prompts[0]
+
+
+async def test_daemon_automation_api_crud(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: ScriptedProvider([[TextDelta("ok"), Done()]]),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+    server.automation_store = AutomationStore(tmp_path / "automations")
+
+    created = await server.create_automation(
+        RequestStub(
+            body={
+                "name": "Daily health",
+                "prompt": "Check repo health",
+                "schedule": "daily 09:00",
+                "route": "report",
+            }
+        )  # type: ignore[arg-type]
+    )
+    automation = _response_payload(created)["automation"]
+    automation_id = automation["automation_id"]
+
+    listed = _response_payload(await server.list_automations(RequestStub()))  # type: ignore[arg-type]
+    paused = _response_payload(
+        await server.pause_automation(RequestStub(match_info={"automation_id": automation_id}))  # type: ignore[arg-type]
+    )
+    resumed = _response_payload(
+        await server.resume_automation(RequestStub(match_info={"automation_id": automation_id}))  # type: ignore[arg-type]
+    )
+    deleted = _response_payload(
+        await server.delete_automation(RequestStub(match_info={"automation_id": automation_id}))  # type: ignore[arg-type]
+    )
+
+    assert created.status == 201
+    assert listed["automations"][0]["automation_id"] == automation_id
+    assert paused["automation"]["status"] == "paused"
+    assert resumed["automation"]["status"] == "active"
+    assert deleted["deleted"] is True
+
+
+async def test_daemon_tick_runs_due_automation_and_writes_report(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    provider = ScriptedProvider([[TextDelta("scheduled done"), Done(Usage(input_tokens=2, output_tokens=3))]])
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: provider,
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+    server.automation_store = AutomationStore(tmp_path / "automations")
+    automation = await server.automation_store.create(
+        name="Due",
+        prompt="Run scheduled work",
+        schedule="every 1 minutes",
+        route="report",
+        provider="openrouter",
+        model="openrouter/auto",
+    )
+    past_payload = automation.path.read_text(encoding="utf-8").replace(
+        automation.next_run_at,
+        "2000-01-01T00:00:00+00:00",
+    )
+    automation.path.write_text(past_payload, encoding="utf-8")
+
+    await server._tick_automations()
+    runs = await server.run_store.list_runs(limit=1)
+    run = runs[0]
+    await _wait_for_state(server, run.run_id, "done")
+    updated = await server.automation_store.load(automation.automation_id)
+    events = await server.run_store.load_events(run.run_id)
+
+    assert run.title == "Scheduled: Due"
+    assert updated is not None
+    assert updated.last_run_id == run.run_id
+    assert updated.report_path is not None
+    assert Path(updated.report_path).exists()
+    assert any(event.type == "automation_triggered" for event in events)

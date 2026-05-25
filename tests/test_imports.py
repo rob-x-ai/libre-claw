@@ -16,6 +16,7 @@ def test_phase_one_modules_import() -> None:
         "libre_claw.auth.tokens",
         "libre_claw.daemon",
         "libre_claw.core.agent",
+        "libre_claw.core.automations",
         "libre_claw.core.memory",
         "libre_claw.core.mcp",
         "libre_claw.core.permissions",

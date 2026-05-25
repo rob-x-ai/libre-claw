@@ -30,6 +30,8 @@ and run the Telegram daemon.
   permission approval.
 - Optional TUI daemon mode so the TUI can start and poll daemon-owned runs
   instead of owning execution itself.
+- Recurring local automations with `/schedule`, cron-like schedules, daemon
+  execution, saved reports, and TUI/Telegram route metadata.
 - MCP stdio integration for explicitly configured and allowlisted external
   tools, surfaced through the normal tool registry and permission system.
 - User and project skills loaded from `~/.libre-claw/skills/` and
@@ -435,6 +437,11 @@ Useful API endpoints:
 - `POST /runs/<run-id>/cancel`
 - `POST /runs/<run-id>/permissions/<tool-call-id>` with
   `{"resolution": "allow_once"}`
+- `GET /automations`
+- `POST /automations` with `{"name": "...", "schedule": "daily 09:00", "prompt": "..."}`
+- `POST /automations/<automation-id>/pause`
+- `POST /automations/<automation-id>/resume`
+- `DELETE /automations/<automation-id>`
 
 The daemon owns active run tasks, writes to the same durable run store, and can
 block a run on tool approval without losing its event history. This is the
@@ -469,6 +476,42 @@ use_daemon = true
 Run `libre-claw daemon` and `libre-claw telegram` together. Telegram inline
 approval buttons then resolve the same daemon run through the local API, so the
 run can continue even if another surface is watching it.
+
+## Automations
+
+P5 adds recurring local runs. The daemon watches
+`~/.libre-claw/automations/`, starts due schedules as normal durable runs, and
+writes saved reports under:
+
+```text
+~/.libre-claw/automations/reports/<automation-id>/<run-id>.md
+```
+
+The TUI command surface:
+
+```text
+/schedule list
+/schedule examples
+/schedule add daily 09:00 | Daily repo health check | Inspect git status, tests, and risks.
+/schedule add weekly mon 10:00 | Weekly dependency review | Review dependency files and CI.
+/schedule add every 30 minutes | Morning brief | Summarize active runs and priorities.
+/schedule pause <automation-id>
+/schedule resume <automation-id>
+/schedule delete <automation-id>
+```
+
+Supported schedules are `daily HH:MM`, `weekly mon HH:MM`, `every N minutes`,
+`hourly`, and a five-field cron subset. Use `--route report`, `--route tui`, or
+`--route telegram` on `/schedule add` to record how the result should be
+surfaced. `report` writes the saved report, `tui` keeps the run visible through
+`/runs` and `/resume`, and `telegram` stores the chat id when created through
+Telegram `/schedule`.
+
+The bundled examples cover:
+
+- Daily repo health check.
+- Weekly dependency review.
+- Morning brief.
 
 ## MCP Tools
 

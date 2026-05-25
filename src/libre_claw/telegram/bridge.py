@@ -4,10 +4,18 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 from dataclasses import dataclass, field
 from typing import Any
 
 from libre_claw.config import LibreClawConfig
+from libre_claw.core.automations import (
+    AutomationError,
+    AutomationRecord,
+    AutomationRoute,
+    AutomationStore,
+    automation_examples,
+)
 from libre_claw.core import (
     Agent,
     AgentDone,
@@ -81,6 +89,7 @@ class TelegramBridge:
         self.memory_store = memory_store or MemoryStore()
         self.daemon_client = daemon_client
         self.skill_store = SkillStore(config.general.working_directory)
+        self.automation_store = AutomationStore(config.automations.root)
         self._states: dict[int, TelegramChatState] = {}
         self._memory_facts: list[str] = []
 
@@ -194,6 +203,86 @@ class TelegramBridge:
             f"({state.usage.input_tokens} input, {state.usage.output_tokens} output). "
             f"Cost: {_format_usage_cost(state.usage)}."
         )
+
+    async def schedule_text(self, chat_id: int, argument: str) -> str:
+        try:
+            parsed = _parse_schedule_text(argument, default_route="telegram")
+        except AutomationError as exc:
+            return str(exc)
+
+        action = str(parsed["action"])
+        if action == "examples":
+            return _schedule_examples_text()
+        if action == "list":
+            return await self._schedule_list_text()
+        if action == "add":
+            payload = {
+                "name": str(parsed["name"]),
+                "prompt": str(parsed["prompt"]),
+                "schedule": str(parsed["schedule"]),
+                "route": str(parsed.get("route", "telegram")),
+                "provider": self.config.general.default_provider,
+                "model": self.config.general.default_model,
+                "telegram_chat_id": chat_id,
+            }
+            try:
+                if self.daemon_client is not None:
+                    created = await self.daemon_client.create_automation(**payload)
+                    record = _object_payload(created.get("automation", created))
+                else:
+                    stored = await self.automation_store.create(
+                        name=payload["name"],
+                        prompt=payload["prompt"],
+                        schedule=payload["schedule"],
+                        route=cast_automation_route(payload["route"]),
+                        provider=payload["provider"],
+                        model=payload["model"],
+                        working_directory=self.config.general.working_directory,
+                        telegram_chat_id=chat_id,
+                        metadata={"created_by": "telegram"},
+                    )
+                    record = _automation_record_payload(stored)
+            except Exception as exc:
+                return f"Could not create schedule: {exc}"
+            return "Scheduled:\n" + _automation_line(record)
+        automation_id = str(parsed.get("automation_id", ""))
+        try:
+            if action == "pause":
+                result = await self._update_schedule_status(automation_id, "paused")
+                return "Updated schedule:\n" + _automation_line(_object_payload(result.get("automation", result)))
+            if action == "resume":
+                result = await self._update_schedule_status(automation_id, "active")
+                return "Updated schedule:\n" + _automation_line(_object_payload(result.get("automation", result)))
+            if action == "delete":
+                if self.daemon_client is not None:
+                    await self.daemon_client.delete_automation(automation_id)
+                elif not await self.automation_store.delete(automation_id):
+                    raise AutomationError("Unknown automation.")
+                return f"Deleted schedule {automation_id}."
+        except Exception as exc:
+            return f"Could not {action} schedule: {exc}"
+        return _schedule_help_text()
+
+    async def _schedule_list_text(self) -> str:
+        if self.daemon_client is not None:
+            payload = await self.daemon_client.list_automations()
+            records = [dict(item) for item in payload.get("automations", []) if isinstance(item, dict)]
+        else:
+            records = [_automation_record_payload(record) for record in await self.automation_store.list()]
+        if not records:
+            return "No schedules yet. Try /schedule examples."
+        return "Schedules:\n" + "\n".join(_automation_line(record) for record in records)
+
+    async def _update_schedule_status(self, automation_id: str, status: str) -> dict[str, Any]:
+        if self.daemon_client is not None:
+            if status == "paused":
+                return await self.daemon_client.pause_automation(automation_id)
+            return await self.daemon_client.resume_automation(automation_id)
+        if status == "paused":
+            record = await self.automation_store.update_status(automation_id, "paused")
+        else:
+            record = await self.automation_store.update_status(automation_id, "active")
+        return {"automation": _automation_record_payload(_require_record(record))}
 
     def _create_agent(self, state: TelegramChatState) -> Agent:
         provider = create_provider(self.config)
@@ -312,3 +401,112 @@ async def _telegram_events_from_daemon_event(run_id: str, event: dict[str, Any])
 
 def _object_payload(value: object) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _parse_schedule_text(argument: str, *, default_route: AutomationRoute) -> dict[str, object]:
+    stripped = argument.strip()
+    if not stripped:
+        return {"action": "list"}
+    parts = stripped.split(maxsplit=1)
+    action = parts[0].lower()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    if action in {"list", "ls"}:
+        return {"action": "list"}
+    if action == "examples":
+        return {"action": "examples"}
+    if action in {"pause", "resume", "delete", "del", "rm"}:
+        if not rest:
+            raise AutomationError(f"Usage: /schedule {action} <id>")
+        return {"action": "delete" if action in {"del", "rm"} else action, "automation_id": rest.split()[0]}
+    if action != "add":
+        raise AutomationError(_schedule_help_text())
+    fields = [field.strip() for field in rest.split("|", maxsplit=2)]
+    if len(fields) != 3 or not all(fields):
+        raise AutomationError("Usage: /schedule add [--route report|tui|telegram] <schedule> | <name> | <prompt>")
+    route = default_route
+    tokens = shlex.split(fields[0])
+    schedule_tokens: list[str] = []
+    index = 0
+    while index < len(tokens):
+        if tokens[index] == "--route":
+            if index + 1 >= len(tokens):
+                raise AutomationError("--route requires report, tui, or telegram.")
+            route = cast_automation_route(tokens[index + 1])
+            index += 2
+            continue
+        schedule_tokens.append(tokens[index])
+        index += 1
+    return {
+        "action": "add",
+        "route": route,
+        "schedule": " ".join(schedule_tokens),
+        "name": fields[1],
+        "prompt": fields[2],
+    }
+
+
+def cast_automation_route(value: object) -> AutomationRoute:
+    route = str(value).lower()
+    if route not in {"report", "tui", "telegram"}:
+        raise AutomationError("Automation route must be report, tui, or telegram.")
+    return route  # type: ignore[return-value]
+
+
+def _require_record(record: AutomationRecord | None) -> AutomationRecord:
+    if record is None:
+        raise AutomationError("Unknown automation.")
+    return record
+
+
+def _schedule_help_text() -> str:
+    return "\n".join(
+        [
+            "Usage:",
+            "/schedule list",
+            "/schedule examples",
+            "/schedule add [--route report|tui|telegram] <schedule> | <name> | <prompt>",
+            "/schedule pause <id>",
+            "/schedule resume <id>",
+            "/schedule delete <id>",
+        ]
+    )
+
+
+def _schedule_examples_text() -> str:
+    lines = ["Schedule examples:"]
+    for name, schedule, prompt in automation_examples():
+        lines.append(f"/schedule add {schedule} | {name} | {prompt}")
+    return "\n".join(lines)
+
+
+def _automation_line(record: dict[str, Any]) -> str:
+    last_run = record.get("last_run_id") or "never"
+    return (
+        f"{record.get('automation_id', '')} [{record.get('status', 'unknown')}] "
+        f"{record.get('schedule', '')} -> {record.get('route', 'report')} "
+        f"next={record.get('next_run_at', 'unknown')} last={last_run} "
+        f"{record.get('name', 'Untitled')}"
+    ).strip()
+
+
+def _automation_record_payload(record: AutomationRecord) -> dict[str, Any]:
+    return {
+        "automation_id": record.automation_id,
+        "name": record.name,
+        "prompt": record.prompt,
+        "schedule": record.schedule,
+        "route": record.route,
+        "status": record.status,
+        "provider": record.provider,
+        "model": record.model,
+        "working_directory": record.working_directory,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "next_run_at": record.next_run_at,
+        "last_run_at": record.last_run_at,
+        "last_run_id": record.last_run_id,
+        "telegram_chat_id": record.telegram_chat_id,
+        "report_path": record.report_path,
+        "metadata": record.metadata,
+        "path": str(record.path),
+    }
