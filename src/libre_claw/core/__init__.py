@@ -24,6 +24,10 @@ __all__ = [
     "RunState",
     "RunStore",
     "Session",
+    "Skill",
+    "SkillError",
+    "SkillScope",
+    "SkillStore",
 ]
 
 from libre_claw.core.agent import (
@@ -47,3 +51,4 @@ from libre_claw.core.goal import (
 )
 from libre_claw.core.runs import RunEvent, RunRecord, RunState, RunStore
 from libre_claw.core.session import Session
+from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore

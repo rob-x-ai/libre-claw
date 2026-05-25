@@ -16,6 +16,7 @@ from libre_claw.core.agent import (
     AgentTextDelta,
     AgentToolCall,
     AgentToolResult,
+    SkillProvider,
 )
 from libre_claw.core.permissions import PermissionManager
 from libre_claw.core.session import ChatMessage, Session, text_block, tool_result_block, tool_use_block
@@ -85,6 +86,7 @@ def make_agent(
     registry: ToolRegistry | None = None,
     max_tool_calls_per_turn: int = 50,
     system_prompt_extra: str = "",
+    skill_provider: SkillProvider | None = None,
 ) -> Agent:
     permissions = PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=True))
     return Agent(
@@ -95,6 +97,7 @@ def make_agent(
         max_tool_calls_per_turn=max_tool_calls_per_turn,
         system_prompt="test system",
         system_prompt_extra=system_prompt_extra,
+        skill_provider=skill_provider,
     )
 
 
@@ -119,7 +122,8 @@ async def test_agent_streams_text_only_response_and_saves_history() -> None:
         AgentDone(Usage(input_tokens=3, output_tokens=2)),
     ]
     assert provider.received_messages[0] == [ChatMessage(role="user", content=[text_block("Hi")])]
-    assert provider.received_system == "test system"
+    assert provider.received_system is not None
+    assert provider.received_system.startswith("test system")
     assert agent.session.messages == [
         ChatMessage(role="user", content=[text_block("Hi")]),
         ChatMessage(role="assistant", content=[text_block("Hello")]),
@@ -132,7 +136,25 @@ async def test_agent_appends_configured_system_prompt_extra() -> None:
 
     await collect_events(agent, "Hi")
 
-    assert provider.received_system == "test system\n\nextra instructions"
+    assert provider.received_system is not None
+    assert provider.received_system.startswith("test system\n\nextra instructions")
+
+
+async def test_agent_loads_relevant_skills_into_system_prompt() -> None:
+    provider = ScriptedProvider([[TextDelta("ok"), Done()]])
+    agent = make_agent(
+        provider,
+        skill_provider=lambda prompt: [
+            "Skill: Pytest Debug\n\nRun focused pytest cases."
+        ] if "pytest" in prompt else [],
+    )
+
+    await collect_events(agent, "debug pytest failure")
+
+    assert provider.received_system is not None
+    assert "Relevant Libre Claw skills" in provider.received_system
+    assert "Skill: Pytest Debug" in provider.received_system
+    assert "/skills add <name>" in provider.received_system
 
 
 async def test_agent_executes_tool_then_continues_to_final_answer() -> None:

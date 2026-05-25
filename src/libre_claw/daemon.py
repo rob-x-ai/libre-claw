@@ -29,6 +29,7 @@ from libre_claw.core import (
 )
 from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
+from libre_claw.core.skills import SkillStore
 from libre_claw.core.tools import ToolRegistry
 from libre_claw.providers import LLMProvider, Usage, create_provider
 from libre_claw.tools_builtin import create_builtin_registry
@@ -330,6 +331,7 @@ class DaemonServer:
     async def _create_agent(self, config: LibreClawConfig) -> Agent:
         provider = self.provider_factory(config)
         facts = await self.memory_store.list_facts()
+        skill_store = SkillStore(config.general.working_directory)
         return Agent(
             session=Session(),
             provider=provider,
@@ -341,6 +343,7 @@ class DaemonServer:
             context_window_tokens=config.agent.context_window_tokens,
             memory_facts=[fact.fact for fact in facts],
             system_prompt_extra=config.agent.system_prompt_extra,
+            skill_provider=skill_store.relevant_skill_texts,
         )
 
 

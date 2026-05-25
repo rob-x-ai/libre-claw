@@ -36,6 +36,7 @@ from libre_claw.tui.app import (
     _collect_run_artifacts,
     _model_help_text,
     _parse_compact_options,
+    _parse_skills_command,
     _parse_model_argument,
     _replace_general,
     _run_verification_text,
@@ -231,6 +232,42 @@ async def test_goal_commands_update_session_limit_and_report_status(monkeypatch,
     assert app._goal_max_turns == 5
     assert any("Goal max turns set to 5" in entry.content for entry in app.transcript)
     assert any("No active goal. Max turns: 5." in entry.content for entry in app.transcript)
+
+
+def test_skills_command_parser_handles_scopes_and_content() -> None:
+    assert _parse_skills_command("") == {"action": "list"}
+    assert _parse_skills_command("add --project release-flow run pytest") == {
+        "action": "add",
+        "scope": "project",
+        "name": "release-flow",
+        "content": "run pytest",
+    }
+    assert _parse_skills_command("delete --user release-flow") == {
+        "action": "delete",
+        "scope": "user",
+        "name": "release-flow",
+    }
+
+
+async def test_skills_commands_manage_user_and_project_skills(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test():
+        await app._handle_command("/skills add --project pytest-debug # Pytest Debug")
+        await app._handle_command("/skills list")
+        await app._handle_command("/skills show pytest-debug")
+        await app._handle_command("/skills edit --project pytest-debug # Pytest Debug Updated")
+        await app._handle_command("/skills delete --project pytest-debug")
+
+    assert any("Added project skill pytest-debug" in entry.content for entry in app.transcript)
+    assert any("project:pytest-debug" in entry.content for entry in app.transcript)
+    assert any("Skill: Pytest Debug" in entry.content for entry in app.transcript)
+    assert any("Updated project skill pytest-debug" in entry.content for entry in app.transcript)
+    assert any("Skill deleted." in entry.content for entry in app.transcript)
+    assert not (tmp_path / ".libre-claw" / "skills" / "pytest-debug.md").exists()
 
 
 async def test_run_commands_list_inspect_resume_and_cancel(monkeypatch, tmp_path: Path) -> None:

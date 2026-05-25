@@ -24,6 +24,10 @@ First shippable Libre Claw release from Kroonen AI Inc.
   a run finishes inside a git repository.
 - Local background daemon API with `libre-claw daemon`, daemon-owned active
   runs, event polling, cancellation, and permission approval endpoints.
+- Skills system with global `~/.libre-claw/skills/`, project-local
+  `.libre-claw/skills/`, AgentSkills-style `SKILL.md` discovery, `/skills`
+  management commands, and relevant skill injection across TUI, Telegram, and
+  daemon agent runs.
 - File explorer hidden by default, with parent-directory navigation, agent
   working-directory sync, a visible `Hide` control, a left-side `Files` rail
   for restoring the sidebar, and `Ctrl+B` toggling.

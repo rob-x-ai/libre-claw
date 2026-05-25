@@ -19,6 +19,7 @@ from libre_claw.core import (
 )
 from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
+from libre_claw.core.skills import SkillStore
 from libre_claw.core.tools import ToolCall
 from libre_claw.providers import ProviderConfigurationError, Usage, combine_usage, create_provider
 from libre_claw.tools_builtin import create_builtin_registry
@@ -69,6 +70,7 @@ class TelegramBridge:
     def __init__(self, config: LibreClawConfig, memory_store: MemoryStore | None = None) -> None:
         self.config = config
         self.memory_store = memory_store or MemoryStore()
+        self.skill_store = SkillStore(config.general.working_directory)
         self._states: dict[int, TelegramChatState] = {}
         self._memory_facts: list[str] = []
 
@@ -163,6 +165,7 @@ class TelegramBridge:
             context_window_tokens=self.config.agent.context_window_tokens,
             memory_facts=self._memory_facts,
             system_prompt_extra=self.config.agent.system_prompt_extra,
+            skill_provider=self.skill_store.relevant_skill_texts,
         )
 
 

@@ -40,6 +40,7 @@ class RequestStub:
 class ScriptedProvider(LLMProvider):
     def __init__(self, responses: list[list[StreamEvent]]) -> None:
         self.responses = responses
+        self.system_prompts: list[str | None] = []
 
     async def complete(
         self,
@@ -50,7 +51,8 @@ class ScriptedProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        del messages, tools, system, stream, temperature, max_tokens
+        del messages, tools, stream, temperature, max_tokens
+        self.system_prompts.append(system)
         for event in self.responses.pop(0):
             yield event
 
@@ -202,3 +204,26 @@ async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> Non
 
     assert health["ok"] is True
     assert started["run"]["state"] == "queued"
+
+
+async def test_daemon_injects_project_skills(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    skill_path = tmp_path / ".libre-claw" / "skills" / "pytest-debug.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("# Pytest Debug\n\nUse for pytest failures.", encoding="utf-8")
+    provider = ScriptedProvider([[TextDelta("ok"), Done()]])
+    config = load_config()
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: provider,
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+
+    started = await server.start_run(RequestStub(body={"message": "debug pytest"}))  # type: ignore[arg-type]
+    await _wait_for_state(server, _response_payload(started)["run"]["run_id"], "done")
+
+    assert provider.system_prompts
+    assert provider.system_prompts[0] is not None
+    assert "Skill: Pytest Debug" in provider.system_prompts[0]

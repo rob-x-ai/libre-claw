@@ -20,6 +20,8 @@ from libre_claw.telegram.bridge import (
 
 
 class FakeProvider(LLMProvider):
+    system_prompts: list[str | None] = []
+
     async def complete(
         self,
         messages: Sequence[ChatMessage],
@@ -29,7 +31,8 @@ class FakeProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        del messages, tools, system, stream, temperature, max_tokens
+        del messages, tools, stream, temperature, max_tokens
+        self.system_prompts.append(system)
         yield TextDelta("hi")
         yield Done()
 
@@ -72,6 +75,27 @@ async def test_telegram_bridge_streams_text(monkeypatch, tmp_path: Path) -> None
     events = [event async for event in bridge.stream_message(1, "hello")]
 
     assert events == [TelegramText("hi"), TelegramDone(None)]
+
+
+async def test_telegram_bridge_injects_skills(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    skill_path = tmp_path / ".libre-claw" / "skills" / "pytest-debug.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("# Pytest Debug\n\nUse for pytest failures.", encoding="utf-8")
+    config = load_config()
+    bridge = TelegramBridge(config)
+    await bridge.initialize()
+    provider = FakeProvider()
+    provider.system_prompts.clear()
+    monkeypatch.setattr("libre_claw.telegram.bridge.create_provider", lambda config: provider)
+
+    events = [event async for event in bridge.stream_message(1, "debug pytest")]
+
+    assert events == [TelegramText("hi"), TelegramDone(None)]
+    assert provider.system_prompts
+    assert provider.system_prompts[0] is not None
+    assert "Skill: Pytest Debug" in provider.system_prompts[0]
 
 
 async def test_telegram_bridge_prompts_and_resolves_permission(monkeypatch, tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import difflib
 import json
+import shlex
 import time
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
@@ -58,6 +59,7 @@ from libre_claw.core.memory import MemoryStore
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
 from libre_claw.core.session import ChatMessage, estimate_context_tokens
+from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore
 from libre_claw.core.tools import ToolCall, ToolResult
 from libre_claw.providers import LLMProvider, ProviderConfigurationError, Usage, combine_usage, create_provider
 from libre_claw.release import latest_release_notes
@@ -164,6 +166,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/runs", "/runs [N]", "List durable agent runs"),
     SlashCommand("/run", "/run <id>", "Inspect a durable run"),
     SlashCommand("/resume", "/resume <id>", "Load a durable run transcript"),
+    SlashCommand("/skills", "/skills list|add|edit|delete", "Manage Libre Claw skills"),
     SlashCommand("/memory", "/memory list|add <fact>|forget <id>", "Manage persistent memory facts"),
     SlashCommand("/telegram", "/telegram", "Show Telegram bridge status"),
     SlashCommand("/tools", "/tools expand|collapse|toggle <index>", "Control tool call details"),
@@ -533,6 +536,7 @@ class LibreClawApp(App[None]):
         self.config = config or load_config()
         self.session = Session()
         self.memory_store = MemoryStore()
+        self.skill_store = SkillStore(self.config.general.working_directory)
         self.run_store = RunStore()
         self.memory_facts: list[str] = []
         self.agent: Agent | None = None
@@ -761,6 +765,9 @@ class LibreClawApp(App[None]):
             return
         if command == "/resume":
             await self._handle_resume_command(argument)
+            return
+        if command == "/skills":
+            await self._handle_skills_command(argument)
             return
         if command == "/memory":
             await self._handle_memory_command(argument)
@@ -1359,6 +1366,80 @@ class LibreClawApp(App[None]):
 
         self._append_system("Usage: /memory list|add <fact>|forget <id>")
 
+    async def _handle_skills_command(self, argument: str) -> None:
+        try:
+            parsed = _parse_skills_command(argument)
+        except SkillError as exc:
+            self._append_system(str(exc))
+            return
+
+        action = parsed["action"]
+        if action == "list":
+            skills = await self.skill_store.list_skills()
+            self._append_system(_skills_list_text(skills))
+            return
+
+        if action == "show":
+            skills = await self.skill_store.list_skills()
+            name = str(parsed.get("name", ""))
+            scope = parsed.get("scope")
+            matches = [
+                skill
+                for skill in skills
+                if skill.name == name and (scope is None or skill.scope == scope)
+            ]
+            if not matches:
+                self._append_system(f"No skill named {name}.")
+                return
+            if len(matches) > 1:
+                self._append_system(
+                    f"Skill name exists in multiple scopes; use `/skills show --user {name}` "
+                    f"or `/skills show --project {name}`."
+                )
+                return
+            self._append_system(matches[0].prompt_text)
+            return
+
+        if action == "add":
+            try:
+                skill = await self.skill_store.add_skill(
+                    str(parsed["name"]),
+                    str(parsed.get("content", "")),
+                    scope=cast(SkillScope, parsed["scope"]),
+                )
+            except SkillError as exc:
+                self._append_system(str(exc))
+                return
+            self._append_system(f"Added {skill.scope} skill {skill.name}: {skill.path}")
+            return
+
+        if action == "edit":
+            try:
+                skill = await self.skill_store.edit_skill(
+                    str(parsed["name"]),
+                    str(parsed.get("content", "")),
+                    scope=cast(SkillScope | None, parsed.get("scope")),
+                )
+            except SkillError as exc:
+                self._append_system(str(exc))
+                return
+            self._append_system(f"Updated {skill.scope} skill {skill.name}: {skill.path}")
+            return
+
+        if action == "delete":
+            try:
+                removed = await self.skill_store.delete_skill(
+                    str(parsed["name"]),
+                    scope=cast(SkillScope | None, parsed.get("scope")),
+                )
+            except SkillError as exc:
+                self._append_system(str(exc))
+                return
+            self._append_system("Skill deleted." if removed else f"No skill named {parsed['name']}.")
+            return
+
+        self._append_system(_skills_help_text())
+
     def _compact_context(self, argument: str = "") -> None:
         options = _parse_compact_options(argument)
         if options.error is not None:
@@ -1647,6 +1728,7 @@ class LibreClawApp(App[None]):
             return
 
         self.config = _replace_general(self.config, working_directory=parent)
+        self.skill_store = SkillStore(self.config.general.working_directory)
         self.query_one("#file-tree", DirectoryTree).path = parent
         self.query_one("#sidebar-root", Static).update(self._sidebar_root_text())
         self._rebuild_agent()
@@ -1820,6 +1902,7 @@ class LibreClawApp(App[None]):
             context_window_tokens=self.config.agent.context_window_tokens,
             memory_facts=self.memory_facts,
             system_prompt_extra=self.config.agent.system_prompt_extra,
+            skill_provider=self.skill_store.relevant_skill_texts,
         )
 
     async def _initialize_memory(self) -> None:
@@ -1974,6 +2057,22 @@ class LibreClawApp(App[None]):
                 SlashCommand("/goal status", "/goal status", "Show active goal progress"),
                 SlashCommand("/goal stop", "/goal stop", "Cancel active goal mode"),
                 SlashCommand("/goal max 20", "/goal max 20", "Set max turns for this session"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
+
+        if lowered.startswith("/skills "):
+            query = lowered.removeprefix("/skills ").strip()
+            suggestions = [
+                SlashCommand("/skills list", "/skills list", "List user and project skills"),
+                SlashCommand("/skills show ", "/skills show <name>", "Show one skill"),
+                SlashCommand("/skills add --user ", "/skills add --user <name> <markdown>", "Add a global user skill"),
+                SlashCommand("/skills add --project ", "/skills add --project <name> <markdown>", "Add a project skill"),
+                SlashCommand("/skills edit ", "/skills edit <name> <markdown>", "Replace a skill body"),
+                SlashCommand("/skills delete ", "/skills delete <name>", "Delete a skill"),
             ]
             return [
                 suggestion
@@ -2235,6 +2334,60 @@ def _goal_judge_text(turn: int, decision: JudgeDecision) -> str:
     if not decision.done and decision.next_prompt:
         lines.append(f"Next: {decision.next_prompt}")
     return "\n".join(lines)
+
+
+def _parse_skills_command(argument: str) -> dict[str, object]:
+    tokens = shlex.split(argument)
+    if not tokens:
+        return {"action": "list"}
+    action = tokens.pop(0).lower()
+    scope: SkillScope | None = None
+    if tokens and tokens[0] in {"--user", "--project"}:
+        scope = "project" if tokens.pop(0) == "--project" else "user"
+
+    if action in {"list", "ls"}:
+        return {"action": "list"}
+    if action == "show":
+        if not tokens:
+            raise SkillError("Usage: /skills show [--user|--project] <name>")
+        return {"action": "show", "scope": scope, "name": tokens[0]}
+    if action == "add":
+        if not tokens:
+            raise SkillError("Usage: /skills add [--user|--project] <name> [markdown]")
+        name = tokens.pop(0)
+        return {"action": "add", "scope": scope or "user", "name": name, "content": " ".join(tokens)}
+    if action == "edit":
+        if len(tokens) < 2:
+            raise SkillError("Usage: /skills edit [--user|--project] <name> <markdown>")
+        name = tokens.pop(0)
+        return {"action": "edit", "scope": scope, "name": name, "content": " ".join(tokens)}
+    if action in {"delete", "del", "rm"}:
+        if not tokens:
+            raise SkillError("Usage: /skills delete [--user|--project] <name>")
+        return {"action": "delete", "scope": scope, "name": tokens[0]}
+    raise SkillError(_skills_help_text())
+
+
+def _skills_help_text() -> str:
+    return "\n".join(
+        [
+            "Usage:",
+            "/skills list",
+            "/skills show [--user|--project] <name>",
+            "/skills add [--user|--project] <name> [markdown]",
+            "/skills edit [--user|--project] <name> <markdown>",
+            "/skills delete [--user|--project] <name>",
+        ]
+    )
+
+
+def _skills_list_text(skills: list[Skill]) -> str:
+    if not skills:
+        return "No skills found. Add one with `/skills add <name> <markdown>`."
+    return "\n".join(
+        f"{skill.scope}:{skill.name} - {skill.title} ({skill.path})"
+        for skill in skills
+    )
 
 
 def _usage_payload(usage: Usage) -> dict[str, Any]:

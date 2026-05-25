@@ -25,6 +25,8 @@ and run the Telegram daemon.
   `/runs`, `/run <id>`, `/resume <id>`, and `/cancel <id>` controls.
 - Background daemon API for daemon-owned runs, event polling, cancel, and
   permission approval.
+- User and project skills loaded from `~/.libre-claw/skills/` and
+  `.libre-claw/skills/`, with AgentSkills-style `SKILL.md` discovery.
 - Interactive permission prompts for write/edit/shell actions.
 - File explorer, hidden on startup, whose root can move up and down with the user.
 - SQLite-backed memory, saved sessions, and context compaction.
@@ -284,6 +286,7 @@ Legacy configs that still say `default_provider = "local"` or
 - `/run <id>`
 - `/resume <id>`
 - `/tools expand|collapse|toggle <index>`
+- `/skills list|show|add|edit|delete`
 - `/memory list|add <fact>|forget <id>`
 - `/telegram`
 - `/exit`
@@ -416,6 +419,34 @@ The daemon owns active run tasks, writes to the same durable run store, and can
 block a run on tool approval without losing its event history. This is the
 backend connection point for TUI and Telegram surfaces to share the same active
 run process.
+
+## Skills
+
+P3 adds lightweight, file-based skills. Skills are Markdown procedures the
+agent can pull into its system prompt when the current request matches the
+skill title, description, or body.
+
+Libre Claw loads skills from:
+
+- `~/.libre-claw/skills/*.md` for global user skills.
+- `<project>/.libre-claw/skills/*.md` for project skills.
+- `<project>/.libre-claw/skills/<name>/SKILL.md` and the same layout under the
+  user skills directory for AgentSkills-style packages.
+
+Manage them from the TUI:
+
+```text
+/skills list
+/skills show --project pytest-debug
+/skills add --user pytest-debug # Pytest Debug
+/skills add --project release-flow # Release Flow
+/skills edit --project release-flow # Release Flow Updated
+/skills delete --project release-flow
+```
+
+The TUI, Telegram bridge, and background daemon all use the same skill loader.
+When the agent sees a repeatable workflow that is not covered, the system prompt
+asks it to suggest a `/skills add <name> ...` command at the end of the task.
 
 ## File Explorer
 
