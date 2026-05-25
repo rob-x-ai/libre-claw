@@ -159,7 +159,8 @@ class TelegramHandlers:
         if self.auth.is_allowed(user_id):
             return True
         if update.effective_message is not None:
-            await update.effective_message.reply_text("You are not authorized to use this Libre Claw bot.")
+            username = update.effective_user.username if update.effective_user else None
+            await update.effective_message.reply_text(_unauthorized_text(user_id, username))
         return False
 
 
@@ -167,6 +168,24 @@ def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 20)] + "\n...[truncated]"
+
+
+def _unauthorized_text(user_id: int | None, username: str | None) -> str:
+    lines = ["You are not authorized to use this Libre Claw bot."]
+    if username:
+        lines.append(f"Telegram username: @{username}")
+    if user_id is None:
+        lines.append("Telegram did not provide a numeric user ID for this update.")
+        return "\n".join(lines)
+    lines.extend(
+        [
+            f"Telegram user ID: {user_id}",
+            "Allow this user on the machine running Libre Claw:",
+            f"libre-claw telegram allow {user_id}",
+            "Then restart `libre-claw telegram up`.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _replace_general(config, **changes):

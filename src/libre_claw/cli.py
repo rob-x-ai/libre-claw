@@ -152,6 +152,33 @@ def telegram_setup_command(
     click.echo("Next: run `libre-claw telegram up` and message your bot /start.")
 
 
+@telegram_command.command("allow")
+@click.argument("user_id", type=int)
+@click.pass_context
+def telegram_allow_command(ctx: click.Context, user_id: int) -> None:
+    """Allow one Telegram numeric user ID without changing the bot token."""
+    config = _load_context_config(ctx)
+    allowed = set(config.telegram.allowed_user_ids)
+    config_path = global_config_path(config)
+    if allowed == {123456789} and not config_path.exists():
+        allowed.clear()
+    was_allowed = user_id in allowed
+    allowed.add(user_id)
+    path = configure_telegram(
+        tuple(sorted(allowed)),
+        enabled=True,
+        use_daemon=config.telegram.use_daemon,
+        bot_token_env=config.telegram.bot_token_env,
+        config_path=config_path,
+    )
+    if was_allowed:
+        click.echo(f"Telegram user ID {user_id} was already allowed.")
+    else:
+        click.echo(f"Allowed Telegram user ID {user_id}.")
+    click.echo(f"Updated Telegram config at {path}.")
+    click.echo("Restart `libre-claw telegram up` so the running bot reloads the allowlist.")
+
+
 @telegram_command.command("status")
 @click.pass_context
 def telegram_status_command(ctx: click.Context) -> None:

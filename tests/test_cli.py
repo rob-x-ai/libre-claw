@@ -62,6 +62,7 @@ def test_cli_telegram_help_exposes_setup_and_up() -> None:
     result = runner.invoke(main, ["telegram", "--help"])
 
     assert result.exit_code == 0
+    assert "allow" in result.output
     assert "setup" in result.output
     assert "up" in result.output
     assert "status" in result.output
@@ -98,6 +99,34 @@ def test_cli_telegram_setup_stores_token_and_config(monkeypatch, tmp_path) -> No
     assert "use_daemon = true" in config_text
     assert "allowed_user_ids = [123]" in config_text
     assert 'default_provider = "openrouter"' in config_text
+
+
+def test_cli_telegram_allow_appends_user_id(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / ".libre-claw" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "\n".join(
+            [
+                "[telegram]",
+                "enabled = true",
+                "use_daemon = true",
+                'bot_token_env = "TELEGRAM_BOT_TOKEN"',
+                "allowed_user_ids = [123]",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(main, ["telegram", "allow", "456"])
+
+    assert result.exit_code == 0
+    config_text = config_path.read_text(encoding="utf-8")
+    assert "allowed_user_ids = [123, 456]" in config_text
+    assert "Restart `libre-claw telegram up`" in result.output
 
 
 def test_cli_config_defaults_outputs_toml() -> None:

@@ -744,9 +744,14 @@ Useful Telegram CLI commands:
 
 ```bash
 libre-claw telegram status
+libre-claw telegram allow 123456789  # add another numeric Telegram user ID
 libre-claw telegram run   # bot only
 libre-claw telegram up    # daemon + bot together
 ```
+
+Telegram authorization uses the numeric user ID, not the `@username`. If a user
+messages the bot while blocked, Libre Claw replies with the numeric ID and the
+exact `libre-claw telegram allow ...` command to run.
 
 Manual config still works in `~/.libre-claw/config.toml`:
 
