@@ -21,6 +21,8 @@ and run the Telegram daemon.
   `browser_navigate`, `browser_read`, `browser_screenshot`, and `bash`.
 - `/goal` supervised mode that keeps the agent working for up to a bounded
   number of turns until a separate judge model marks the objective complete.
+- Durable local runs with IDs, append-only event logs, run artifacts, and
+  `/runs`, `/run <id>`, `/resume <id>`, and `/cancel <id>` controls.
 - Interactive permission prompts for write/edit/shell actions.
 - File explorer, hidden on startup, whose root can move up and down with the user.
 - SQLite-backed memory, saved sessions, and context compaction.
@@ -276,6 +278,9 @@ Legacy configs that still say `default_provider = "local"` or
 - `/load <name>`
 - `/compact [status|--force] [--keep N]`
 - `/goal <objective>|status|stop|max N`
+- `/runs [N]`
+- `/run <id>`
+- `/resume <id>`
 - `/tools expand|collapse|toggle <index>`
 - `/memory list|add <fact>|forget <id>`
 - `/telegram`
@@ -355,6 +360,26 @@ Permission prompts render as an interactive panel with:
 
 They also accept `y`, `n`, `a`, and `!` shortcuts. Dangerous sandbox-blocked
 bash commands show a warning and only allow one-time approval or denial.
+
+## Durable Runs
+
+Every chat turn and `/goal` objective creates a durable run under:
+
+```bash
+~/.libre-claw/runs/<run-id>/
+```
+
+Each run stores:
+
+- `meta.json`
+- `events.jsonl`
+- `summary.md`
+- `verification.md`
+- `diff.patch`
+
+Use `/runs` to list recent runs, `/run <id>` to inspect metadata and event
+counts, `/resume <id>` to reload a run transcript into the TUI, and
+`/cancel <id>` to mark a run cancelled.
 
 ## File Explorer
 

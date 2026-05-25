@@ -7,10 +7,11 @@ import asyncio
 import difflib
 import json
 import time
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from rich.console import Group, RenderableType
 from rich.markdown import Markdown
@@ -47,6 +48,10 @@ from libre_claw.core import (
     GoalStopped,
     GoalTurnStarted,
     JudgeDecision,
+    RunEvent,
+    RunRecord,
+    RunState,
+    RunStore,
     Session,
 )
 from libre_claw.core.memory import MemoryStore
@@ -147,6 +152,9 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/load", "/load <name>", "Load a saved session"),
     SlashCommand("/compact", "/compact [status|--force] [--keep N]", "Show or compact context"),
     SlashCommand("/goal", "/goal <objective>|status|stop|max N", "Run a judged multi-turn goal loop"),
+    SlashCommand("/runs", "/runs [N]", "List durable agent runs"),
+    SlashCommand("/run", "/run <id>", "Inspect a durable run"),
+    SlashCommand("/resume", "/resume <id>", "Load a durable run transcript"),
     SlashCommand("/memory", "/memory list|add <fact>|forget <id>", "Manage persistent memory facts"),
     SlashCommand("/telegram", "/telegram", "Show Telegram bridge status"),
     SlashCommand("/tools", "/tools expand|collapse|toggle <index>", "Control tool call details"),
@@ -512,6 +520,7 @@ class LibreClawApp(App[None]):
         self.config = config or load_config()
         self.session = Session()
         self.memory_store = MemoryStore()
+        self.run_store = RunStore()
         self.memory_facts: list[str] = []
         self.agent: Agent | None = None
         self.provider_error: str | None = None
@@ -531,6 +540,9 @@ class LibreClawApp(App[None]):
         self._goal_turn = 0
         self._goal_max_turns = self.config.goal.max_turns
         self._last_goal_decision: JudgeDecision | None = None
+        self._active_run_id: str | None = None
+        self._active_run_summary = ""
+        self._run_background_tasks: set[asyncio.Task[Any]] = set()
 
         self._rebuild_agent()
 
@@ -671,11 +683,16 @@ class LibreClawApp(App[None]):
             return
 
         self._append_user(text)
+        run = await self._start_run("chat", text)
+        await self._record_run_event("user_message", {"content": text})
         if self.agent is None:
             self._append_system(self.provider_error or "No provider is available.")
+            await self._record_run_event("error", {"message": self.provider_error or "No provider is available."})
+            await self._finish_active_run("failed", summary=self.provider_error or "No provider is available.")
             return
 
         assistant_index = self._append_assistant("")
+        self._append_system(f"Run {run.run_id} started.")
         self._active_task = asyncio.create_task(self._stream_agent_response(text, assistant_index))
 
     async def _handle_command(self, text: str) -> None:
@@ -691,7 +708,10 @@ class LibreClawApp(App[None]):
             self._clear_transcript()
             return
         if command == "/cancel":
-            self._cancel_active_generation()
+            if argument:
+                await self._cancel_run_command(argument)
+            else:
+                self._cancel_active_generation()
             return
         if command == "/help":
             self._append_system(self._help_text())
@@ -719,6 +739,15 @@ class LibreClawApp(App[None]):
             return
         if command == "/goal":
             await self._handle_goal_command(argument)
+            return
+        if command == "/runs":
+            await self._handle_runs_command(argument)
+            return
+        if command == "/run":
+            await self._handle_run_command(argument)
+            return
+        if command == "/resume":
+            await self._handle_resume_command(argument)
             return
         if command == "/memory":
             await self._handle_memory_command(argument)
@@ -790,6 +819,8 @@ class LibreClawApp(App[None]):
             interval=STREAM_RENDER_INTERVAL,
             max_buffered_chars=STREAM_RENDER_MAX_BUFFERED_CHARS,
         )
+        run_state = "done"
+        run_summary = ""
 
         try:
             async for event in self.agent.run(user_message):
@@ -800,15 +831,21 @@ class LibreClawApp(App[None]):
                     stop_on_error=True,
                 )
                 if handled and should_stop:
+                    run_state = "failed"
                     break
         except asyncio.CancelledError:
             self._flush_stream_buffer(assistant_index, stream_buffer)
             self._append_system("Generation cancelled.")
+            self._record_run_event_later("cancelled", {"reason": "Generation cancelled."})
+            run_state = "cancelled"
         finally:
             self._flush_stream_buffer(assistant_index, stream_buffer)
+            if assistant_index < len(self.transcript):
+                run_summary = self.transcript[assistant_index].content
             self._pending_permission = None
             self._hide_permission_prompt()
             self._active_task = None
+            await self._finish_active_run(run_state, summary=run_summary)
             self.query_one("#input", Input).focus()
 
     async def _stream_goal_response(self, goal: str, assistant_index: int, judge_provider: LLMProvider) -> None:
@@ -829,6 +866,8 @@ class LibreClawApp(App[None]):
             judge_temperature=self.config.goal.judge_temperature,
             judge_max_tokens=self.config.goal.judge_max_tokens,
         )
+        run_state = "done"
+        run_summary = ""
 
         try:
             async for event in runner.run():
@@ -838,6 +877,10 @@ class LibreClawApp(App[None]):
                     if event.turn > 1:
                         current_assistant_index = self._append_assistant("")
                     self._append_system(f"Goal turn {event.turn}/{event.max_turns} started.")
+                    self._record_run_event_later(
+                        "goal_turn_started",
+                        {"turn": event.turn, "max_turns": event.max_turns, "prompt": event.prompt},
+                    )
                     self._update_status()
                     continue
 
@@ -856,6 +899,16 @@ class LibreClawApp(App[None]):
                     if event.usage is not None:
                         self.usage = combine_usage(self.usage, event.usage) or self.usage
                     self._append_system(_goal_judge_text(event.turn, event.decision))
+                    self._record_run_event_later(
+                        "goal_judge",
+                        {
+                            "turn": event.turn,
+                            "done": event.decision.done,
+                            "confidence": event.decision.confidence,
+                            "reason": event.decision.reason,
+                            "next_prompt": event.decision.next_prompt,
+                        },
+                    )
                     self._update_status()
                     continue
 
@@ -864,23 +917,38 @@ class LibreClawApp(App[None]):
                     self._append_system(
                         f"Goal complete after {event.turns} turn(s). Judge: {event.decision.reason}"
                     )
+                    self._record_run_event_later(
+                        "goal_complete",
+                        {"turns": event.turns, "reason": event.decision.reason},
+                    )
+                    run_state = "done"
                     continue
 
                 if isinstance(event, GoalStopped):
                     self._flush_stream_buffer(current_assistant_index, stream_buffer)
                     self._append_system(f"Goal stopped after {event.turns} turn(s): {event.reason}")
+                    self._record_run_event_later(
+                        "goal_stopped",
+                        {"turns": event.turns, "reason": event.reason},
+                    )
+                    run_state = "failed"
                     continue
         except asyncio.CancelledError:
             self._flush_stream_buffer(current_assistant_index, stream_buffer)
             self._append_system("Goal cancelled.")
+            self._record_run_event_later("cancelled", {"reason": "Goal cancelled."})
+            run_state = "cancelled"
         finally:
             self._flush_stream_buffer(current_assistant_index, stream_buffer)
+            if current_assistant_index < len(self.transcript):
+                run_summary = self.transcript[current_assistant_index].content
             self._pending_permission = None
             self._hide_permission_prompt()
             self._active_task = None
             self._goal_description = None
             self._goal_turn = 0
             self._update_status()
+            await self._finish_active_run(run_state, summary=run_summary)
             self.query_one("#input", Input).focus()
 
     def _handle_agent_stream_event(
@@ -900,23 +968,43 @@ class LibreClawApp(App[None]):
         if isinstance(event, AgentToolCall):
             self._flush_stream_buffer(assistant_index, stream_buffer)
             self._append_tool_call(event.call)
+            self._record_run_event_later(
+                "tool_call",
+                {"id": event.call.id, "name": event.call.name, "arguments": dict(event.call.arguments)},
+            )
             return True, False
 
         if isinstance(event, AgentPermissionRequest):
             self._flush_stream_buffer(assistant_index, stream_buffer)
             self._pending_permission = event
             self._show_permission_prompt(event)
+            self._record_run_event_later(
+                "permission_request",
+                {"tool_call_id": event.call.id, "name": event.call.name, "arguments": dict(event.call.arguments)},
+            )
+            self._set_run_state_later("blocked")
             return True, False
 
         if isinstance(event, AgentToolResult):
             self._flush_stream_buffer(assistant_index, stream_buffer)
             self._append_tool_result(event.call, event.result)
+            self._record_run_event_later(
+                "tool_result",
+                {
+                    "tool_call_id": event.call.id,
+                    "name": event.call.name,
+                    "is_error": event.result.is_error,
+                    "content": event.result.as_text(),
+                    "metadata": dict(event.result.metadata),
+                },
+            )
             return True, False
 
         if isinstance(event, AgentDone):
             self._flush_stream_buffer(assistant_index, stream_buffer)
             if event.usage is not None:
                 self.usage = combine_usage(self.usage, event.usage) or self.usage
+                self._record_run_event_later("usage", _usage_payload(event.usage))
                 self._update_status()
             return True, False
 
@@ -926,6 +1014,7 @@ class LibreClawApp(App[None]):
                 self.transcript.pop(assistant_index)
                 self._render_transcript()
             self._append_system(event.message)
+            self._record_run_event_later("error", {"message": event.message})
             return True, stop_on_error
 
         return False, False
@@ -936,6 +1025,62 @@ class LibreClawApp(App[None]):
             return
         self._append_to_entry(assistant_index, text)
         self._last_assistant_response = self.transcript[assistant_index].content
+        self._active_run_summary = self.transcript[assistant_index].content
+        self._record_run_event_later("assistant_delta", {"text": text})
+
+    async def _start_run(self, kind: str, title: str) -> RunRecord:
+        run = await self.run_store.create_run(
+            title,
+            kind=kind,
+            provider=_canonical_tui_provider(self.config.general.default_provider),
+            model=_effective_model(self.config),
+        )
+        self._active_run_id = run.run_id
+        self._active_run_summary = ""
+        return run
+
+    async def _record_run_event(self, event_type: str, data: dict[str, Any]) -> None:
+        if self._active_run_id is None:
+            return
+        await self.run_store.append_event(self._active_run_id, event_type, data)
+
+    def _record_run_event_later(self, event_type: str, data: dict[str, Any]) -> None:
+        if self._active_run_id is None:
+            return
+        self._track_run_background_task(self.run_store.append_event(self._active_run_id, event_type, data))
+
+    def _set_run_state_later(self, state: str) -> None:
+        if self._active_run_id is None:
+            return
+        if state in {"queued", "running", "blocked", "done", "failed", "cancelled"}:
+            self._track_run_background_task(
+                self.run_store.update_state(self._active_run_id, cast(RunState, state))
+            )
+
+    def _track_run_background_task(self, awaitable: Coroutine[Any, Any, Any]) -> None:
+        task = asyncio.create_task(awaitable)
+        self._run_background_tasks.add(task)
+        task.add_done_callback(self._run_background_tasks.discard)
+
+    async def _finish_active_run(self, state: str, *, summary: str = "") -> None:
+        run_id = self._active_run_id
+        if run_id is None:
+            return
+        if state not in {"queued", "running", "blocked", "done", "failed", "cancelled"}:
+            state = "failed"
+        if self._run_background_tasks:
+            await asyncio.gather(*self._run_background_tasks, return_exceptions=True)
+        summary_text = summary or self._active_run_summary
+        await self.run_store.finish_run(
+            run_id,
+            cast(RunState, state),
+            summary=summary_text,
+            verification=f"Run finished with state: {state}\n",
+            diff="",
+        )
+        await self.run_store.append_event(run_id, "run_finished", {"state": state})
+        self._active_run_id = None
+        self._active_run_summary = ""
 
     def _cancel_active_generation(self, quiet: bool = False) -> None:
         if self._pending_permission is not None and not self._pending_permission.future.done():
@@ -1012,6 +1157,11 @@ class LibreClawApp(App[None]):
             request.future.set_result(resolution)
         self._pending_permission = None
         self._hide_permission_prompt()
+        self._record_run_event_later(
+            "permission_response",
+            {"tool_call_id": request.call.id, "name": request.call.name, "resolution": resolution},
+        )
+        self._set_run_state_later("running")
         self._append_system(f"Permission response recorded for {request.call.name}: {_permission_label(resolution)}")
 
     def _dangerous_permission_warning(self, call: ToolCall) -> str | None:
@@ -1234,15 +1384,21 @@ class LibreClawApp(App[None]):
         if self._active_task is not None and not self._active_task.done():
             self._append_system("A response is already streaming. Use /cancel or /goal stop to stop it.")
             return
+        goal = argument.strip()
+        run = await self._start_run("goal", goal)
+        await self._record_run_event("user_goal", {"goal": goal, "max_turns": self._goal_max_turns})
         if self.agent is None:
             self._append_system(self.provider_error or "No provider is available.")
+            await self._record_run_event("error", {"message": self.provider_error or "No provider is available."})
+            await self._finish_active_run("failed", summary=self.provider_error or "No provider is available.")
             return
 
-        goal = argument.strip()
         try:
             judge_provider, judge_label = self._create_goal_judge_provider()
         except ProviderConfigurationError as exc:
             self._append_system(f"Goal judge provider is not available: {exc}")
+            await self._record_run_event("error", {"message": str(exc)})
+            await self._finish_active_run("failed", summary=str(exc))
             return
 
         self._goal_description = goal
@@ -1250,7 +1406,7 @@ class LibreClawApp(App[None]):
         self._last_goal_decision = None
         self._append_user(f"Goal: {goal}")
         self._append_system(
-            f"Goal started with max {self._goal_max_turns} turn(s). Judge: {judge_label}. "
+            f"Run {run.run_id} started. Goal max {self._goal_max_turns} turn(s). Judge: {judge_label}. "
             "Use /goal stop to cancel."
         )
         assistant_index = self._append_assistant("")
@@ -1284,6 +1440,86 @@ class LibreClawApp(App[None]):
         if self._last_goal_decision is not None:
             lines.append(f"Last judge: {_goal_judge_text(self._goal_turn, self._last_goal_decision)}")
         return "\n".join(lines)
+
+    async def _handle_runs_command(self, argument: str) -> None:
+        limit = 20
+        if argument:
+            if not argument.isdigit() or int(argument) < 1:
+                self._append_system("Usage: /runs [N]")
+                return
+            limit = int(argument)
+        runs = await self.run_store.list_runs(limit=limit)
+        if not runs:
+            self._append_system("No durable runs yet.")
+            return
+        self._append_system("\n".join(_run_list_line(run) for run in runs))
+
+    async def _handle_run_command(self, argument: str) -> None:
+        run_id = await self._resolve_run_id(argument)
+        if run_id is None:
+            self._append_system("Usage: /run <id>")
+            return
+        run = await self.run_store.load_run(run_id)
+        if run is None:
+            self._append_system(f"No durable run found for: {argument}")
+            return
+        events = await self.run_store.load_events(run.run_id)
+        self._append_system(_run_detail_text(run, events))
+
+    async def _handle_resume_command(self, argument: str) -> None:
+        if self._active_task is not None and not self._active_task.done():
+            self._append_system("A response is already streaming. Use /cancel before resuming a run.")
+            return
+        run_id = await self._resolve_run_id(argument)
+        if run_id is None:
+            self._append_system("Usage: /resume <id>")
+            return
+        run = await self.run_store.load_run(run_id)
+        if run is None:
+            self._append_system(f"No durable run found for: {argument}")
+            return
+        events = await self.run_store.load_events(run.run_id)
+        self.transcript = _transcript_from_run_events(events)
+        self._tool_entry_by_call_id.clear()
+        self._active_run_id = run.run_id if run.state in {"running", "blocked"} else None
+        self._render_transcript()
+        self._append_system(f"Loaded run {run.run_id} ({run.state}) from {run.path}.")
+
+    async def _cancel_run_command(self, argument: str) -> None:
+        run_id = await self._resolve_run_id(argument)
+        if run_id is None:
+            self._append_system("Usage: /cancel [run-id]")
+            return
+        if self._active_run_id == run_id and self._active_task is not None and not self._active_task.done():
+            self._cancel_active_generation()
+            return
+        run = await self.run_store.load_run(run_id)
+        if run is None:
+            self._append_system(f"No durable run found for: {argument}")
+            return
+        summary_path = run.path / "summary.md"
+        diff_path = run.path / "diff.patch"
+        summary = await asyncio.to_thread(summary_path.read_text, encoding="utf-8") if summary_path.exists() else ""
+        diff = await asyncio.to_thread(diff_path.read_text, encoding="utf-8") if diff_path.exists() else ""
+        await self.run_store.append_event(run.run_id, "cancelled", {"reason": "Cancelled by user command."})
+        await self.run_store.finish_run(
+            run.run_id,
+            "cancelled",
+            summary=summary,
+            verification="Run cancelled by user command.\n",
+            diff=diff,
+        )
+        self._append_system(f"Run {run.run_id} marked cancelled.")
+
+    async def _resolve_run_id(self, value: str) -> str | None:
+        query = value.strip()
+        if not query:
+            return None
+        exact = await self.run_store.load_run(query)
+        if exact is not None:
+            return exact.run_id
+        matches = [run.run_id for run in await self.run_store.list_runs(limit=100) if run.run_id.startswith(query)]
+        return matches[0] if len(matches) == 1 else None
 
     def _handle_tools_command(self, argument: str) -> None:
         parts = argument.split()
@@ -1965,6 +2201,113 @@ def _goal_judge_text(turn: int, decision: JudgeDecision) -> str:
     if not decision.done and decision.next_prompt:
         lines.append(f"Next: {decision.next_prompt}")
     return "\n".join(lines)
+
+
+def _usage_payload(usage: Usage) -> dict[str, Any]:
+    return {
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "cached_tokens": usage.cached_tokens,
+        "reasoning_tokens": usage.reasoning_tokens,
+        "cost": usage.cost,
+    }
+
+
+def _run_list_line(run: RunRecord) -> str:
+    title = run.title.replace("\n", " ")
+    return f"{run.run_id} [{run.state}] {run.kind} {run.provider}:{run.model} - {title}"
+
+
+def _run_detail_text(run: RunRecord, events: list[RunEvent]) -> str:
+    event_counts: dict[str, int] = {}
+    for event in events:
+        event_counts[event.type] = event_counts.get(event.type, 0) + 1
+    counts = ", ".join(f"{key}={value}" for key, value in sorted(event_counts.items())) or "no events"
+    return "\n".join(
+        [
+            f"Run {run.run_id}",
+            f"State: {run.state}",
+            f"Kind: {run.kind}",
+            f"Model: {run.provider}:{run.model}",
+            f"Created: {run.created_at}",
+            f"Updated: {run.updated_at}",
+            f"Path: {run.path}",
+            f"Title: {run.title}",
+            f"Events: {len(events)} ({counts})",
+            "Artifacts: events.jsonl, summary.md, verification.md, diff.patch",
+        ]
+    )
+
+
+def _transcript_from_run_events(events: list[RunEvent]) -> list[TranscriptEntry]:
+    entries: list[TranscriptEntry] = []
+    assistant_index: int | None = None
+    tool_index_by_call_id: dict[str, int] = {}
+
+    for event in events:
+        if event.type == "user_message":
+            entries.append(TranscriptEntry(role="user", content=str(event.data.get("content", ""))))
+            assistant_index = None
+            continue
+        if event.type == "user_goal":
+            entries.append(TranscriptEntry(role="user", content="Goal: " + str(event.data.get("goal", ""))))
+            assistant_index = None
+            continue
+        if event.type == "assistant_delta":
+            if assistant_index is None or assistant_index >= len(entries) or entries[assistant_index].role != "assistant":
+                entries.append(TranscriptEntry(role="assistant", content=""))
+                assistant_index = len(entries) - 1
+            entries[assistant_index].content += str(event.data.get("text", ""))
+            continue
+        if event.type == "tool_call":
+            call_id = str(event.data.get("id", ""))
+            entries.append(
+                TranscriptEntry(
+                    role="tool",
+                    content=json.dumps(event.data.get("arguments", {}), sort_keys=True, default=str),
+                    title=f"{event.data.get('name', 'tool')} pending",
+                    collapsed=True,
+                    metadata={"status": "pending", "tool": event.data.get("name", "tool")},
+                )
+            )
+            if call_id:
+                tool_index_by_call_id[call_id] = len(entries) - 1
+            continue
+        if event.type == "tool_result":
+            call_id = str(event.data.get("tool_call_id", ""))
+            index = tool_index_by_call_id.get(call_id)
+            title = f"{event.data.get('name', 'tool')} {'error' if event.data.get('is_error') else 'result'}"
+            entry = TranscriptEntry(
+                role="tool",
+                content=str(event.data.get("content", "")),
+                title=title,
+                collapsed=True,
+                metadata={"status": "error" if event.data.get("is_error") else "result", "tool": event.data.get("name", "tool")},
+            )
+            if index is None or index >= len(entries):
+                entries.append(entry)
+            else:
+                entries[index] = entry
+            continue
+        if event.type in {"error", "cancelled", "goal_judge", "goal_complete", "goal_stopped"}:
+            entries.append(TranscriptEntry(role="system", content=_run_event_summary(event)))
+
+    return entries
+
+
+def _run_event_summary(event: RunEvent) -> str:
+    if event.type == "error":
+        return str(event.data.get("message", "Run error"))
+    if event.type == "cancelled":
+        return "Run cancelled: " + str(event.data.get("reason", "cancelled"))
+    if event.type == "goal_judge":
+        state = "done" if event.data.get("done") else "continue"
+        return f"Judge: {state} - {event.data.get('reason', '')}"
+    if event.type == "goal_complete":
+        return "Goal complete: " + str(event.data.get("reason", "done"))
+    if event.type == "goal_stopped":
+        return "Goal stopped: " + str(event.data.get("reason", "stopped"))
+    return f"{event.type}: {event.data}"
 
 
 def _model_suggestion_commands(config: LibreClawConfig) -> list[SlashCommand]:

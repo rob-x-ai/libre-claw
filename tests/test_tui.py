@@ -18,6 +18,7 @@ from libre_claw.core.agent import (
     AgentToolResult,
 )
 from libre_claw.core.tools import ToolCall, ToolResult
+from libre_claw.core.runs import RunStore
 from libre_claw.providers import Usage
 from libre_claw.tui.app import (
     ASSISTANT_ACCENT,
@@ -38,6 +39,7 @@ from libre_claw.tui.app import (
     _startup_message,
     _startup_renderable,
     _tool_preview,
+    _transcript_from_run_events,
 )
 
 
@@ -226,6 +228,50 @@ async def test_goal_commands_update_session_limit_and_report_status(monkeypatch,
     assert app._goal_max_turns == 5
     assert any("Goal max turns set to 5" in entry.content for entry in app.transcript)
     assert any("No active goal. Max turns: 5." in entry.content for entry in app.transcript)
+
+
+async def test_run_commands_list_inspect_resume_and_cancel(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+    app.run_store = RunStore(tmp_path / "runs")
+    run = await app.run_store.create_run("test run", kind="chat", provider="openrouter", model="openrouter/auto")
+    await app.run_store.append_event(run.run_id, "user_message", {"content": "hello"})
+    await app.run_store.append_event(run.run_id, "assistant_delta", {"text": "hi"})
+
+    async with app.run_test():
+        await app._handle_command("/runs")
+        await app._handle_command(f"/run {run.run_id}")
+        await app._handle_command(f"/resume {run.run_id}")
+        await app._handle_command(f"/cancel {run.run_id}")
+
+    loaded = await app.run_store.load_run(run.run_id)
+
+    assert loaded is not None
+    assert loaded.state == "cancelled"
+    assert any(run.run_id in entry.content for entry in app.transcript if entry.role == "system")
+    assert any(entry.role == "user" and entry.content == "hello" for entry in app.transcript)
+    assert any(entry.role == "assistant" and entry.content == "hi" for entry in app.transcript)
+
+
+async def test_transcript_from_run_events_reconstructs_tool_entries(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run = await store.create_run("tools", kind="chat", provider="openai", model="gpt-5.5")
+    await store.append_event(run.run_id, "user_message", {"content": "whoami"})
+    await store.append_event(run.run_id, "tool_call", {"id": "toolu_1", "name": "bash", "arguments": {"command": "whoami"}})
+    await store.append_event(
+        run.run_id,
+        "tool_result",
+        {"tool_call_id": "toolu_1", "name": "bash", "is_error": False, "content": "rob"},
+    )
+
+    entries = _transcript_from_run_events(await store.load_events(run.run_id))
+
+    assert entries[0].role == "user"
+    assert entries[1].role == "tool"
+    assert entries[1].title == "bash result"
+    assert entries[1].content == "rob"
 
 
 def test_assistant_label_uses_purple_accent(monkeypatch, tmp_path: Path) -> None:

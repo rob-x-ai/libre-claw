@@ -17,6 +17,7 @@ def test_phase_one_modules_import() -> None:
         "libre_claw.core.agent",
         "libre_claw.core.memory",
         "libre_claw.core.permissions",
+        "libre_claw.core.runs",
         "libre_claw.core.sandbox",
         "libre_claw.core.tools",
         "libre_claw.providers.anthropic",
