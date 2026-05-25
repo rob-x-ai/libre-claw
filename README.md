@@ -178,7 +178,7 @@ Useful OpenRouter commands:
 /usage openrouter presets
 ```
 
-### Ollama Cloud With Kimi K2.6
+### Ollama Cloud Models
 
 ```bash
 libre-claw auth set-key ollama
@@ -192,7 +192,9 @@ Inside the TUI:
 ```
 
 For direct Ollama Cloud API use, your config should point at Ollama's cloud
-host:
+host. Ollama's own REST docs use `https://ollama.com/api/chat` with
+`Authorization: Bearer $OLLAMA_API_KEY`; model names should match the exact
+names returned by `https://ollama.com/api/tags`.
 
 ```toml
 [general]
@@ -205,6 +207,32 @@ default_model = "kimi-k2.6:cloud"
 api_format = "ollama"
 api_key_env = "OLLAMA_API_KEY"
 ```
+
+Useful current Ollama Cloud names from the official model library:
+
+| Model | Use |
+| --- | --- |
+| `kimi-k2.6:cloud` | Kimi K2.6, 256K context, vision/tool/thinking model |
+| `deepseek-v4-flash:cloud` | DeepSeek V4 Flash, 1M context |
+| `deepseek-v4-pro:cloud` | DeepSeek V4 Pro, 1M context |
+| `glm-5.1:cloud` | GLM 5.1 coding/agentic model |
+| `minimax-m2.7:cloud` | MiniMax M2.7 coding/productivity model |
+| `qwen3.5:cloud` | Qwen3.5 Cloud |
+| `gemma4:31b-cloud` | Gemma 4 31B Cloud |
+| `nemotron-3-super:cloud` | NVIDIA Nemotron 3 Super Cloud |
+| `gpt-oss:120b` | Direct Ollama Cloud API example from Ollama docs |
+| `gpt-oss:20b` | Smaller GPT OSS API model |
+
+To get the authoritative list for your account:
+
+```bash
+curl https://ollama.com/api/tags \
+  -H "Authorization: Bearer $OLLAMA_API_KEY"
+```
+
+One naming wrinkle: Ollama's local daemon cloud route often uses a `:cloud` or
+`-cloud` tag, while direct `https://ollama.com` examples for GPT OSS use
+`gpt-oss:120b` without `-cloud`.
 
 If you want the local Ollama daemon to handle cloud auth instead:
 
@@ -291,6 +319,8 @@ Use `/model` from inside the TUI:
 /model list
 /model kimi-k2.6:cloud
 /model ollama:kimi-k2.6:cloud
+/model ollama:deepseek-v4-flash:cloud
+/model ollama:gpt-oss:120b
 /model openrouter:qwen/qwen3.7-max --global
 /model openrouter:openrouter/auto
 ```

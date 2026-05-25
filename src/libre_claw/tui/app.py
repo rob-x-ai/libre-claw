@@ -77,6 +77,7 @@ from libre_claw.core.usage import (
 )
 from libre_claw.daemon import DaemonClient, daemon_base_url
 from libre_claw.providers import LLMProvider, ProviderConfigurationError, Usage, combine_usage, create_provider
+from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
 from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry
 
@@ -231,10 +232,7 @@ MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
         ("moonshotai/kimi-k2", "Kimi K2 through OpenRouter"),
     ),
     "ollama": (
-        ("kimi-k2.6:cloud", "Kimi K2.6 on Ollama Cloud"),
-        ("qwen3.6:27b", "Qwen3.6 local daemon"),
-        ("gpt-oss:120b", "GPT OSS 120B on Ollama"),
-        ("qwen3:32b", "Qwen3 local daemon"),
+        *((preset.model, preset.label) for preset in OLLAMA_MODEL_PRESETS),
     ),
 }
 
@@ -1670,7 +1668,11 @@ class LibreClawApp(App[None]):
 
         if action == "ollama-cloud":
             self._set_model("ollama:kimi-k2.6:cloud --global")
-            self._append_system("Next: run `/setup key ollama` and configure [providers.ollama].base_url for Ollama Cloud.")
+            self._append_system(
+                "Next: run `/setup key ollama` and configure [providers.ollama].base_url = "
+                '"https://ollama.com". Exact Cloud API names can be checked with '
+                "`curl https://ollama.com/api/tags -H 'Authorization: Bearer $OLLAMA_API_KEY'`."
+            )
             return
 
         self._append_system(_setup_help_text())
@@ -3080,6 +3082,10 @@ def _model_help_text(config: LibreClawConfig) -> str:
     lines.extend(f"- libre-claw auth set-key {name}" for name in SUPPORTED_PROVIDERS if name not in {"ollama", "codex"})
     lines.append("- libre-claw auth set-key ollama  # required for Ollama Cloud")
     lines.append("- /codex login  # ChatGPT/Codex auth, no OpenAI API key")
+    if provider == "ollama":
+        lines.append(
+            "- curl https://ollama.com/api/tags -H 'Authorization: Bearer $OLLAMA_API_KEY'  # live Cloud names"
+        )
     lines.append("")
     lines.append("Suggested models:")
     for suggestion in _model_suggestion_commands(config):

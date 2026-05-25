@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
 from libre_claw.telegram.auth import TelegramAuth
 from libre_claw.telegram.bridge import (
     TelegramBridge,
@@ -40,12 +41,7 @@ TELEGRAM_PROVIDER_LABELS: dict[str, str] = {
 }
 
 TELEGRAM_MODEL_PRESETS: dict[str, tuple[TelegramModelPreset, ...]] = {
-    "ollama": (
-        TelegramModelPreset("ollama", "kimi-k2.6:cloud", "Kimi K2.6 Cloud"),
-        TelegramModelPreset("ollama", "qwen3.6:27b", "Qwen3.6 27B"),
-        TelegramModelPreset("ollama", "gpt-oss:120b", "GPT OSS 120B"),
-        TelegramModelPreset("ollama", "qwen3:32b", "Qwen3 32B"),
-    ),
+    "ollama": tuple(TelegramModelPreset("ollama", preset.model, preset.label) for preset in OLLAMA_MODEL_PRESETS),
     "openrouter": (
         TelegramModelPreset("openrouter", "qwen/qwen3.7-max", "Qwen3.7 Max"),
         TelegramModelPreset("openrouter", "openrouter/auto", "Auto Router"),

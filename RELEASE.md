@@ -63,7 +63,8 @@ First shippable Libre Claw release from Kroonen AI Inc.
   for restoring the sidebar, and `Ctrl+B` toggling.
 - Provider support for Anthropic, OpenAI, OpenRouter, Ollama, and Codex CLI
   auth. Default model selections are `claude-opus-4-6`, `gpt-5.5`, and
-  `qwen3.6:27b`, with Ollama Cloud examples centered on `kimi-k2.6:cloud`.
+  `qwen3.6:27b`, with Ollama Cloud presets updated to current API/library names
+  such as `kimi-k2.6:cloud`, `deepseek-v4-flash:cloud`, and `gpt-oss:120b`.
 - Codex/ChatGPT login can be started from inside the TUI with `/codex login`,
   then used through `/provider codex` or `/model codex:gpt-5.5`.
 - OpenRouter support with fixed Libre Claw app attribution headers:
