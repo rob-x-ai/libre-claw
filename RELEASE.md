@@ -19,6 +19,9 @@ First shippable Libre Claw release from Kroonen AI Inc.
 - Durable local runs with unique run IDs, run states, append-only `events.jsonl`
   logs, `summary.md`, `verification.md`, `diff.patch` artifacts, and `/runs`,
   `/run <id>`, `/resume <id>`, and `/cancel <id>` controls.
+- Run artifacts capture the launch working directory, final tool-result
+  verification notes, artifact sizes in `/run`, and tracked-file git diffs when
+  a run finishes inside a git repository.
 - File explorer hidden by default, with parent-directory navigation, agent
   working-directory sync, a visible `Hide` control, a left-side `Files` rail
   for restoring the sidebar, and `Ctrl+B` toggling.

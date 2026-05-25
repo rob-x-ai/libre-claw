@@ -373,13 +373,17 @@ Each run stores:
 
 - `meta.json`
 - `events.jsonl`
-- `summary.md`
-- `verification.md`
-- `diff.patch`
+- `summary.md` with the final assistant output or failure summary.
+- `verification.md` with final state, recent tool outcomes, git status, and
+  artifact notes.
+- `diff.patch` with the tracked-file git diff at finish when Libre Claw is
+  running inside a git repository.
 
 Use `/runs` to list recent runs, `/run <id>` to inspect metadata and event
 counts, `/resume <id>` to reload a run transcript into the TUI, and
-`/cancel <id>` to mark a run cancelled.
+`/cancel <id>` to mark a run cancelled. The diff artifact intentionally does
+not embed untracked files; they are listed in `verification.md` through git
+status so the user can decide how to handle them.
 
 ## File Explorer
 

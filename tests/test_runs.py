@@ -11,7 +11,13 @@ from libre_claw.core.runs import RunStore
 async def test_run_store_creates_events_and_artifacts(tmp_path: Path) -> None:
     store = RunStore(tmp_path / "runs")
 
-    run = await store.create_run("Fix auth bug", kind="chat", provider="openrouter", model="qwen/qwen3.7-max")
+    run = await store.create_run(
+        "Fix auth bug",
+        kind="chat",
+        provider="openrouter",
+        model="qwen/qwen3.7-max",
+        working_directory=tmp_path,
+    )
     event = await store.append_event(run.run_id, "user_message", {"content": "hello"})
     finished = await store.finish_run(
         run.run_id,
@@ -28,6 +34,7 @@ async def test_run_store_creates_events_and_artifacts(tmp_path: Path) -> None:
     assert event.event_id == 1
     assert loaded == finished
     assert finished.state == "done"
+    assert finished.working_directory == str(tmp_path)
     assert runs == [finished]
     assert events[0].type == "user_message"
     assert events[0].data == {"content": "hello"}

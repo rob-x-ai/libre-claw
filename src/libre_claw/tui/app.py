@@ -140,6 +140,15 @@ class StreamRenderBuffer:
         return text
 
 
+@dataclass(frozen=True)
+class ProcessCapture:
+    exit_code: int
+    stdout: str
+    stderr: str
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+
+
 SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/help", "/help", "Show available commands"),
     SlashCommand("/clear", "/clear", "Clear transcript and session history"),
@@ -211,6 +220,10 @@ ASSISTANT_ACCENT = "#8B5CF6"
 PROJECT_NOTICE = "Apache-2.0 | Kroonen AI Inc. | hello@kroonen.ai"
 STREAM_RENDER_INTERVAL = 0.05
 STREAM_RENDER_MAX_BUFFERED_CHARS = 240
+RUN_ARTIFACT_TIMEOUT = 10.0
+RUN_DIFF_MAX_CHARS = 750_000
+RUN_STATUS_MAX_CHARS = 50_000
+RUN_ARTIFACT_STDERR_MAX_CHARS = 20_000
 STARTUP_ASCII = r"""
  █████        ███  █████                             █████████  ████
 ░░███        ░░░  ░░███                             ███░░░░░███░░███
@@ -993,6 +1006,7 @@ class LibreClawApp(App[None]):
                 {
                     "tool_call_id": event.call.id,
                     "name": event.call.name,
+                    "arguments": dict(event.call.arguments),
                     "is_error": event.result.is_error,
                     "content": event.result.as_text(),
                     "metadata": dict(event.result.metadata),
@@ -1034,9 +1048,20 @@ class LibreClawApp(App[None]):
             kind=kind,
             provider=_canonical_tui_provider(self.config.general.default_provider),
             model=_effective_model(self.config),
+            working_directory=self.config.general.working_directory,
         )
         self._active_run_id = run.run_id
         self._active_run_summary = ""
+        await self.run_store.append_event(
+            run.run_id,
+            "run_started",
+            {
+                "kind": kind,
+                "provider": run.provider,
+                "model": run.model,
+                "working_directory": run.working_directory,
+            },
+        )
         return run
 
     async def _record_run_event(self, event_type: str, data: dict[str, Any]) -> None:
@@ -1070,13 +1095,21 @@ class LibreClawApp(App[None]):
             state = "failed"
         if self._run_background_tasks:
             await asyncio.gather(*self._run_background_tasks, return_exceptions=True)
+        run = await self.run_store.load_run(run_id)
+        events = await self.run_store.load_events(run_id)
+        working_directory = (
+            Path(run.working_directory).expanduser()
+            if run is not None and run.working_directory
+            else self.config.general.working_directory
+        )
+        verification, diff = await _collect_run_artifacts(working_directory, state, events)
         summary_text = summary or self._active_run_summary
         await self.run_store.finish_run(
             run_id,
             cast(RunState, state),
             summary=summary_text,
-            verification=f"Run finished with state: {state}\n",
-            diff="",
+            verification=verification,
+            diff=diff,
         )
         await self.run_store.append_event(run_id, "run_finished", {"state": state})
         self._active_run_id = None
@@ -2213,6 +2246,221 @@ def _usage_payload(usage: Usage) -> dict[str, Any]:
     }
 
 
+async def _collect_run_artifacts(
+    working_directory: Path,
+    state: str,
+    events: list[RunEvent],
+) -> tuple[str, str]:
+    status_capture = await _run_git_command(
+        working_directory,
+        ("status", "--short"),
+        max_stdout_chars=RUN_STATUS_MAX_CHARS,
+    )
+    if status_capture.exit_code != 0:
+        verification = _run_verification_text(
+            state,
+            events,
+            working_directory,
+            git_status="",
+            git_error=status_capture.stderr.strip() or "git status failed",
+            diff_truncated=False,
+        )
+        return verification, ""
+
+    diff_capture = await _run_git_command(
+        working_directory,
+        ("diff", "--no-ext-diff", "--binary", "HEAD", "--"),
+        max_stdout_chars=RUN_DIFF_MAX_CHARS,
+    )
+    if diff_capture.exit_code != 0:
+        diff_capture = await _run_git_command(
+            working_directory,
+            ("diff", "--no-ext-diff", "--binary", "--"),
+            max_stdout_chars=RUN_DIFF_MAX_CHARS,
+        )
+
+    diff = diff_capture.stdout if diff_capture.exit_code == 0 else ""
+    diff_error = "" if diff_capture.exit_code == 0 else diff_capture.stderr.strip()
+    if diff_capture.stdout_truncated:
+        diff += "\n\n# Libre Claw: diff.patch was truncated at the run artifact size limit.\n"
+
+    verification = _run_verification_text(
+        state,
+        events,
+        working_directory,
+        git_status=status_capture.stdout,
+        git_error=diff_error,
+        diff_truncated=diff_capture.stdout_truncated,
+    )
+    return verification, diff
+
+
+def _run_verification_text(
+    state: str,
+    events: list[RunEvent],
+    working_directory: Path,
+    *,
+    git_status: str,
+    git_error: str = "",
+    diff_truncated: bool = False,
+) -> str:
+    tool_results = [event for event in events if event.type == "tool_result"]
+    errors = [event for event in events if event.type == "error"]
+    lines = [
+        f"Run finished with state: {state}",
+        f"Working directory: {working_directory}",
+        "",
+        "Tool results:",
+    ]
+
+    if not tool_results:
+        lines.append("- No tool results were recorded.")
+    else:
+        for event in tool_results[-12:]:
+            lines.append("- " + _tool_result_verification_line(event))
+        omitted = len(tool_results) - 12
+        if omitted > 0:
+            lines.append(f"- ... {omitted} earlier tool result(s) omitted from this summary.")
+
+    if errors:
+        lines.extend(["", "Errors:"])
+        for event in errors[-5:]:
+            lines.append("- " + str(event.data.get("message", "Unknown error")))
+
+    lines.extend(["", "Git status at finish:"])
+    if git_error:
+        lines.append(f"Git artifacts unavailable or partial: {git_error}")
+    elif git_status.strip():
+        lines.append(git_status.rstrip())
+    else:
+        lines.append("Clean working tree for tracked files.")
+
+    lines.extend(
+        [
+            "",
+            "Diff artifact:",
+            "Captured with `git diff --no-ext-diff --binary HEAD --` for tracked files when available.",
+            "Untracked files are listed in status but are not embedded in diff.patch.",
+        ]
+    )
+    if diff_truncated:
+        lines.append("diff.patch was truncated at the configured artifact size limit.")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _tool_result_verification_line(event: RunEvent) -> str:
+    name = str(event.data.get("name", "tool"))
+    result = "error" if event.data.get("is_error") else "ok"
+    metadata = event.data.get("metadata", {})
+    arguments = event.data.get("arguments", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    if not isinstance(arguments, dict):
+        arguments = {}
+    exit_code = metadata.get("exit_code")
+    duration_ms = metadata.get("duration_ms")
+    suffixes: list[str] = []
+    if exit_code is not None:
+        suffixes.append(f"exit_code={exit_code}")
+    if duration_ms is not None:
+        suffixes.append(f"duration_ms={duration_ms}")
+    command = arguments.get("command")
+    if isinstance(command, str) and command:
+        suffixes.append(f"command={command!r}")
+    suffix = f" ({', '.join(suffixes)})" if suffixes else ""
+    return f"{name}: {result}{suffix}"
+
+
+async def _run_git_command(
+    working_directory: Path,
+    args: tuple[str, ...],
+    *,
+    max_stdout_chars: int,
+) -> ProcessCapture:
+    return await _run_process(
+        ("git", "-C", str(working_directory), *args),
+        timeout=RUN_ARTIFACT_TIMEOUT,
+        max_stdout_chars=max_stdout_chars,
+        max_stderr_chars=RUN_ARTIFACT_STDERR_MAX_CHARS,
+    )
+
+
+async def _run_process(
+    args: tuple[str, ...],
+    *,
+    timeout: float,
+    max_stdout_chars: int,
+    max_stderr_chars: int,
+) -> ProcessCapture:
+    process: asyncio.subprocess.Process | None = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_task = asyncio.create_task(_read_capped_text(process.stdout, max_stdout_chars))
+        stderr_task = asyncio.create_task(_read_capped_text(process.stderr, max_stderr_chars))
+        try:
+            await asyncio.wait_for(process.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            await _cancel_capture_tasks(stdout_task, stderr_task)
+            return ProcessCapture(
+                exit_code=124,
+                stdout="",
+                stderr=f"command timed out after {timeout:.0f}s",
+            )
+        stdout, stdout_truncated = await stdout_task
+        stderr, stderr_truncated = await stderr_task
+        return ProcessCapture(
+            exit_code=process.returncode or 0,
+            stdout=stdout,
+            stderr=stderr,
+            stdout_truncated=stdout_truncated,
+            stderr_truncated=stderr_truncated,
+        )
+    except OSError as exc:
+        return ProcessCapture(exit_code=127, stdout="", stderr=str(exc))
+    except asyncio.CancelledError:
+        if process is not None and process.returncode is None:
+            process.kill()
+            await process.wait()
+        if "stdout_task" in locals() and "stderr_task" in locals():
+            await _cancel_capture_tasks(stdout_task, stderr_task)
+        raise
+
+
+async def _read_capped_text(
+    stream: asyncio.StreamReader | None,
+    max_chars: int,
+) -> tuple[str, bool]:
+    if stream is None:
+        return "", False
+    parts: list[str] = []
+    stored = 0
+    total = 0
+    while True:
+        chunk = await stream.read(8192)
+        if not chunk:
+            break
+        text = chunk.decode("utf-8", errors="replace")
+        total += len(text)
+        if stored < max_chars:
+            piece = text[: max_chars - stored]
+            parts.append(piece)
+            stored += len(piece)
+    return "".join(parts), total > stored
+
+
+async def _cancel_capture_tasks(*tasks: asyncio.Task[tuple[str, bool]]) -> None:
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def _run_list_line(run: RunRecord) -> str:
     title = run.title.replace("\n", " ")
     return f"{run.run_id} [{run.state}] {run.kind} {run.provider}:{run.model} - {title}"
@@ -2229,14 +2477,28 @@ def _run_detail_text(run: RunRecord, events: list[RunEvent]) -> str:
             f"State: {run.state}",
             f"Kind: {run.kind}",
             f"Model: {run.provider}:{run.model}",
+            f"Working directory: {run.working_directory or 'unknown'}",
             f"Created: {run.created_at}",
             f"Updated: {run.updated_at}",
             f"Path: {run.path}",
             f"Title: {run.title}",
             f"Events: {len(events)} ({counts})",
-            "Artifacts: events.jsonl, summary.md, verification.md, diff.patch",
+            "Artifacts: " + _run_artifact_summary(run),
         ]
     )
+
+
+def _run_artifact_summary(run: RunRecord) -> str:
+    parts: list[str] = []
+    for name in ("events.jsonl", "summary.md", "verification.md", "diff.patch"):
+        path = run.path / name
+        try:
+            size = path.stat().st_size
+        except OSError:
+            parts.append(f"{name}=missing")
+        else:
+            parts.append(f"{name}={size}B")
+    return ", ".join(parts)
 
 
 def _transcript_from_run_events(events: list[RunEvent]) -> list[TranscriptEntry]:

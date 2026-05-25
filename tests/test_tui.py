@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from pathlib import Path
 
 from rich.console import Console
@@ -17,8 +18,8 @@ from libre_claw.core.agent import (
     AgentToolCall,
     AgentToolResult,
 )
+from libre_claw.core.runs import RunEvent, RunStore
 from libre_claw.core.tools import ToolCall, ToolResult
-from libre_claw.core.runs import RunStore
 from libre_claw.providers import Usage
 from libre_claw.tui.app import (
     ASSISTANT_ACCENT,
@@ -32,10 +33,12 @@ from libre_claw.tui.app import (
     _effective_model,
     _context_bar,
     _format_token_count,
+    _collect_run_artifacts,
     _model_help_text,
     _parse_compact_options,
     _parse_model_argument,
     _replace_general,
+    _run_verification_text,
     _startup_message,
     _startup_renderable,
     _tool_preview,
@@ -272,6 +275,49 @@ async def test_transcript_from_run_events_reconstructs_tool_entries(tmp_path: Pa
     assert entries[1].role == "tool"
     assert entries[1].title == "bash result"
     assert entries[1].content == "rob"
+
+
+def test_run_verification_text_summarizes_tool_results(tmp_path: Path) -> None:
+    tool_event = RunEvent(
+        event_id=1,
+        timestamp="2026-05-25T00:00:00",
+        type="tool_result",
+        data={
+            "name": "bash",
+            "arguments": {"command": "pytest"},
+            "is_error": False,
+            "metadata": {"exit_code": 0, "duration_ms": 123},
+        },
+    )
+
+    text = _run_verification_text(
+        "done",
+        [tool_event],
+        tmp_path,
+        git_status=" M src/file.py\n",
+    )
+
+    assert "Run finished with state: done" in text
+    assert "bash: ok (exit_code=0, duration_ms=123, command='pytest')" in text
+    assert " M src/file.py" in text
+
+
+async def test_collect_run_artifacts_captures_git_diff(tmp_path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True)
+    tracked = tmp_path / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, check=True, capture_output=True)
+    tracked.write_text("after\n", encoding="utf-8")
+
+    verification, diff = await _collect_run_artifacts(tmp_path, "done", [])
+
+    assert "Git status at finish:" in verification
+    assert " M tracked.txt" in verification
+    assert "diff --git" in diff
+    assert "+after" in diff
 
 
 def test_assistant_label_uses_purple_accent(monkeypatch, tmp_path: Path) -> None:

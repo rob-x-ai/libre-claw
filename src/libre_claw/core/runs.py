@@ -23,6 +23,7 @@ class RunRecord:
     kind: str
     provider: str
     model: str
+    working_directory: str
     created_at: str
     updated_at: str
     path: Path
@@ -50,9 +51,10 @@ class RunStore:
         kind: str,
         provider: str,
         model: str,
+        working_directory: str | Path | None = None,
     ) -> RunRecord:
         async with self._lock:
-            return await asyncio.to_thread(self._create_run_sync, title, kind, provider, model)
+            return await asyncio.to_thread(self._create_run_sync, title, kind, provider, model, working_directory)
 
     async def append_event(self, run_id: str, event_type: str, data: dict[str, Any] | None = None) -> RunEvent:
         async with self._lock:
@@ -83,7 +85,14 @@ class RunStore:
     async def load_events(self, run_id: str) -> list[RunEvent]:
         return await asyncio.to_thread(self._load_events_sync, run_id)
 
-    def _create_run_sync(self, title: str, kind: str, provider: str, model: str) -> RunRecord:
+    def _create_run_sync(
+        self,
+        title: str,
+        kind: str,
+        provider: str,
+        model: str,
+        working_directory: str | Path | None,
+    ) -> RunRecord:
         self.root.mkdir(parents=True, exist_ok=True)
         now = _now()
         run_id = _new_run_id()
@@ -96,6 +105,7 @@ class RunStore:
             kind=kind,
             provider=provider,
             model=model,
+            working_directory=str(Path(working_directory).expanduser()) if working_directory is not None else "",
             created_at=now,
             updated_at=now,
             path=path,
@@ -126,6 +136,7 @@ class RunStore:
             kind=record.kind,
             provider=record.provider,
             model=record.model,
+            working_directory=record.working_directory,
             created_at=record.created_at,
             updated_at=_now(),
             path=record.path,
@@ -231,6 +242,7 @@ def _record_to_json(record: RunRecord) -> dict[str, Any]:
         "kind": record.kind,
         "provider": record.provider,
         "model": record.model,
+        "working_directory": record.working_directory,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
         "path": str(record.path),
@@ -255,6 +267,7 @@ def _load_record(path: Path) -> RunRecord | None:
         kind=str(payload.get("kind", "chat")),
         provider=str(payload.get("provider", "")),
         model=str(payload.get("model", "")),
+        working_directory=str(payload.get("working_directory", "")),
         created_at=str(payload.get("created_at", "")),
         updated_at=str(payload.get("updated_at", "")),
         path=path,
