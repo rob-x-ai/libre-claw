@@ -3,10 +3,6 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import json
 import os
 import secrets
 import time
@@ -14,7 +10,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from joserfc import jwt
+from joserfc.errors import JoseError
+from joserfc.jwk import OctKey
+
 from libre_claw.config import AuthConfig
+
+
+JWT_ALGORITHM = "HS256"
+JWT_ALGORITHMS = (JWT_ALGORITHM,)
 
 
 class TokenError(RuntimeError):
@@ -80,38 +84,27 @@ class TokenManager:
 
 
 def _encode_jwt(payload: dict[str, Any], secret: bytes) -> str:
-    header = {"alg": "HS256", "typ": "JWT"}
-    signing_input = ".".join(
-        [
-            _b64_json(header),
-            _b64_json(payload),
-        ]
-    )
-    signature = hmac.new(secret, signing_input.encode("ascii"), hashlib.sha256).digest()
-    return signing_input + "." + _b64_bytes(signature)
+    try:
+        return jwt.encode(
+            {"alg": JWT_ALGORITHM, "typ": "JWT"},
+            payload,
+            _jwt_key(secret),
+            algorithms=JWT_ALGORITHMS,
+        )
+    except (JoseError, ValueError) as exc:
+        raise TokenError("Could not issue JWT.") from exc
 
 
 def _decode_jwt(token: str, secret: bytes) -> dict[str, Any]:
-    parts = token.split(".")
-    if len(parts) != 3:
-        raise TokenError("Token is not a compact JWT.")
-
-    signing_input = ".".join(parts[:2])
-    expected = hmac.new(secret, signing_input.encode("ascii"), hashlib.sha256).digest()
-    supplied = _b64_decode(parts[2])
-    if not hmac.compare_digest(expected, supplied):
-        raise TokenError("Token signature is invalid.")
-
     try:
-        header = json.loads(_b64_decode(parts[0]).decode("utf-8"))
-        payload = json.loads(_b64_decode(parts[1]).decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        token_data = jwt.decode(token, _jwt_key(secret), algorithms=JWT_ALGORITHMS)
+    except JoseError as exc:
         raise TokenError("Token payload is invalid.") from exc
 
+    header = token_data.header
+    payload = dict(token_data.claims)
     if not isinstance(header, dict) or header.get("alg") != "HS256":
         raise TokenError("Token algorithm is unsupported.")
-    if not isinstance(payload, dict):
-        raise TokenError("Token claims are invalid.")
     return payload
 
 
@@ -127,22 +120,6 @@ def _claim_int(payload: dict[str, Any], key: str) -> int:
     if not isinstance(value, int):
         raise TokenError(f"Token claim {key} is missing.")
     return value
-
-
-def _b64_json(value: dict[str, Any]) -> str:
-    return _b64_bytes(json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-
-
-def _b64_bytes(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
-
-
-def _b64_decode(value: str) -> bytes:
-    padded = value + "=" * (-len(value) % 4)
-    try:
-        return base64.urlsafe_b64decode(padded.encode("ascii"))
-    except ValueError as exc:
-        raise TokenError("Token base64 segment is invalid.") from exc
 
 
 def _load_or_create_local_secret(config: AuthConfig) -> str:
@@ -180,3 +157,7 @@ def _harden_local_secret(secret_path: Path) -> None:
         secret_path.chmod(0o600)
     except OSError as exc:
         raise TokenError(f"Could not lock down local JWT secret at {secret_path}: {exc}") from exc
+
+
+def _jwt_key(secret: bytes) -> OctKey:
+    return OctKey.import_key(secret)

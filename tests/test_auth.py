@@ -117,7 +117,7 @@ def test_api_key_store_falls_back_when_keyring_write_cannot_be_verified(tmp_path
 
 
 def test_token_manager_issues_and_verifies_jwt() -> None:
-    manager = TokenManager(secret="test-secret", issuer="libre-claw", token_ttl_seconds=60)
+    manager = TokenManager(secret="test-secret-for-libre-claw-jwt", issuer="libre-claw", token_ttl_seconds=60)
 
     token = manager.issue(subject="local-user", scopes=("dashboard",))
     claims = manager.verify(token)
