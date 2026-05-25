@@ -10,6 +10,7 @@ import pytest
 from libre_claw.auth.api_keys import ApiKeyLookup
 from libre_claw.config import load_config
 from libre_claw.providers import ProviderConfigurationError, create_provider
+from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.codex import CodexProvider
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
 from libre_claw.providers.ollama import OllamaProvider
@@ -37,6 +38,18 @@ def test_ollama_cloud_presets_include_current_library_names() -> None:
     assert "glm-5.1:cloud" in preset_names
     assert "minimax-m2.7:cloud" in preset_names
     assert "gpt-oss:120b" in preset_names
+
+
+def test_codex_oauth_presets_include_current_cli_model_names() -> None:
+    preset_names = {preset.model for preset in CODEX_MODEL_PRESETS}
+
+    assert "gpt-5.5" in preset_names
+    assert "gpt-5.4" in preset_names
+    assert "gpt-5.4-mini" in preset_names
+    assert "gpt-5.3-codex" in preset_names
+    assert "gpt-5.3-codex-spark" in preset_names
+    assert "gpt-5.2" in preset_names
+    assert "codex-auto-review" not in preset_names
 
 
 def test_create_provider_requires_anthropic_api_key(monkeypatch, tmp_path: Path) -> None:

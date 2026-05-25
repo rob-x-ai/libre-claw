@@ -300,6 +300,23 @@ Inside the TUI:
 /model codex:gpt-5.5 --global
 ```
 
+Current Codex OAuth model presets:
+
+| Model | Use |
+| --- | --- |
+| `gpt-5.5` | Frontier Codex model for complex coding, research, and real-world work |
+| `gpt-5.4` | Strong everyday coding and professional-work model |
+| `gpt-5.4-mini` | Fast, smaller model for cheaper throughput and simpler tasks |
+| `gpt-5.3-codex` | Coding-optimized Codex model |
+| `gpt-5.3-codex-spark` | Ultra-fast research preview |
+| `gpt-5.2` | Legacy long-running agent model |
+
+To verify what your installed Codex CLI and account can actually select:
+
+```bash
+codex debug models
+```
+
 Equivalent terminal commands:
 
 ```bash
@@ -321,6 +338,8 @@ Use `/model` from inside the TUI:
 /model ollama:kimi-k2.6:cloud
 /model ollama:deepseek-v4-flash:cloud
 /model ollama:gpt-oss:120b
+/model codex:gpt-5.4-mini
+/model codex:gpt-5.3-codex
 /model openrouter:qwen/qwen3.7-max --global
 /model openrouter:openrouter/auto
 ```

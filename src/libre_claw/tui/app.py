@@ -77,6 +77,7 @@ from libre_claw.core.usage import (
 )
 from libre_claw.daemon import DaemonClient, daemon_base_url
 from libre_claw.providers import LLMProvider, ProviderConfigurationError, Usage, combine_usage, create_provider
+from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
 from libre_claw.release import latest_release_notes
 from libre_claw.tools_builtin import create_builtin_registry
@@ -219,9 +220,7 @@ MODEL_PRESETS: dict[str, tuple[tuple[str, str], ...]] = {
         ("codex-mini", "Codex Mini"),
     ),
     "codex": (
-        ("gpt-5.5", "GPT-5.5 through Codex CLI auth"),
-        ("gpt-5", "GPT-5 through Codex CLI auth"),
-        ("codex-mini", "Codex Mini through Codex CLI auth"),
+        *((preset.model, f"{preset.label} through Codex CLI auth") for preset in CODEX_MODEL_PRESETS),
     ),
     "openrouter": (
         ("qwen/qwen3.7-max", "Qwen3.7 Max through OpenRouter"),
@@ -3086,6 +3085,8 @@ def _model_help_text(config: LibreClawConfig) -> str:
         lines.append(
             "- curl https://ollama.com/api/tags -H 'Authorization: Bearer $OLLAMA_API_KEY'  # live Cloud names"
         )
+    if provider == "codex":
+        lines.append("- codex debug models  # live Codex CLI model catalog")
     lines.append("")
     lines.append("Suggested models:")
     for suggestion in _model_suggestion_commands(config):

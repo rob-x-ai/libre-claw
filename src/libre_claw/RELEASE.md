@@ -66,7 +66,9 @@ First shippable Libre Claw release from Kroonen AI Inc.
   `qwen3.6:27b`, with Ollama Cloud presets updated to current API/library names
   such as `kimi-k2.6:cloud`, `deepseek-v4-flash:cloud`, and `gpt-oss:120b`.
 - Codex/ChatGPT login can be started from inside the TUI with `/codex login`,
-  then used through `/provider codex` or `/model codex:gpt-5.5`.
+  then used through `/provider codex` or `/model codex:gpt-5.5`, with Codex
+  OAuth picker presets for `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
+  `gpt-5.3-codex`, `gpt-5.3-codex-spark`, and `gpt-5.2`.
 - OpenRouter support with fixed Libre Claw app attribution headers:
   `https://kroonen.ai`, `Libre Claw`, and the `cli-agent` category.
 - OpenRouter growth analytics through `/usage openrouter`, attribution

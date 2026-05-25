@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
 from libre_claw.telegram.auth import TelegramAuth
 from libre_claw.telegram.bridge import (
@@ -58,11 +59,7 @@ TELEGRAM_MODEL_PRESETS: dict[str, tuple[TelegramModelPreset, ...]] = {
         TelegramModelPreset("openai", "o4-mini", "o4-mini"),
         TelegramModelPreset("openai", "codex-mini", "Codex Mini"),
     ),
-    "codex": (
-        TelegramModelPreset("codex", "gpt-5.5", "GPT-5.5"),
-        TelegramModelPreset("codex", "gpt-5", "GPT-5"),
-        TelegramModelPreset("codex", "codex-mini", "Codex Mini"),
-    ),
+    "codex": tuple(TelegramModelPreset("codex", preset.model, preset.label) for preset in CODEX_MODEL_PRESETS),
     "anthropic": (
         TelegramModelPreset("anthropic", "claude-opus-4-6", "Claude Opus 4.6"),
         TelegramModelPreset("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6"),
