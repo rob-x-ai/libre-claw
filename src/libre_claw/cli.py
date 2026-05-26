@@ -24,6 +24,12 @@ from libre_claw.config import (
     set_global_default_model,
     user_config_path,
 )
+from libre_claw.core.workspace import (
+    default_claw_workspace_path,
+    initialize_claw_workspace,
+    workspace_result_text,
+    workspace_status_text,
+)
 from libre_claw.daemon import DaemonServer
 from libre_claw.telegram.bot import TelegramBot
 from libre_claw.tui.app import LibreClawApp
@@ -254,6 +260,64 @@ def daemon_command(ctx: click.Context, host: str | None, port: int | None) -> No
         asyncio.run(server.run(host=host, port=port))
     except RuntimeError as exc:
         _raise_click_error(str(exc))
+
+
+@main.group("workspace", invoke_without_command=True)
+@click.pass_context
+def workspace_command(ctx: click.Context) -> None:
+    """Manage Libre Claw's dedicated runtime workspace."""
+    if ctx.invoked_subcommand is not None:
+        return
+    config = _load_context_config(ctx)
+    click.echo(workspace_status_text(config.general.working_directory))
+
+
+@workspace_command.command("status")
+@click.pass_context
+def workspace_status_command(ctx: click.Context) -> None:
+    """Show the current and default Libre Claw workspace paths."""
+    config = _load_context_config(ctx)
+    click.echo(workspace_status_text(config.general.working_directory))
+
+
+@workspace_command.command("init")
+@click.option(
+    "--path",
+    "target",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Workspace directory to create. Defaults to ~/Documents/.workspace/libre-claw.",
+)
+@click.option(
+    "--source",
+    "source_root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Source directory to copy soul/skill Markdown from. Defaults to the current configured working directory.",
+)
+@click.option("--set-default/--no-set-default", default=True, help="Persist this workspace as the default working directory.")
+@click.option("--overwrite", is_flag=True, help="Overwrite existing workspace Markdown files.")
+@click.pass_context
+def workspace_init_command(
+    ctx: click.Context,
+    target: Path | None,
+    source_root: Path | None,
+    set_default: bool,
+    overwrite: bool,
+) -> None:
+    """Create Libre Claw's runtime workspace and copy Markdown context files."""
+    config = _load_context_config(ctx)
+    try:
+        result = initialize_claw_workspace(
+            source_root=source_root or config.general.working_directory,
+            target=target or default_claw_workspace_path(),
+            set_default=set_default,
+            config_path=global_config_path(config),
+            overwrite=overwrite,
+        )
+    except ConfigError as exc:
+        _raise_click_error(str(exc))
+    click.echo(workspace_result_text(result))
 
 
 @main.group("config")

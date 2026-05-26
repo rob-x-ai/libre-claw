@@ -48,6 +48,8 @@ and run the Telegram daemon.
   tools, surfaced through the normal tool registry and permission system.
 - User and project skills loaded from `~/.libre-claw/skills/` and
   `.libre-claw/skills/`, with AgentSkills-style `SKILL.md` discovery.
+- Dedicated runtime workspace initialization with `libre-claw workspace init`
+  and `/workspace init`, defaulting to `~/Documents/.workspace/libre-claw`.
 - Interactive permission prompts for write/edit/shell actions.
 - File explorer, hidden on startup, whose root can move up and down with the user.
 - Automatic persistent memory with local JSONL archives, searchable SQLite
@@ -425,6 +427,7 @@ Legacy configs that still say `default_provider = "local"` or
 - `/soul status|show|init|reload`
 - `/heartbeat status|once|start|stop`
 - `/memory status|on|off|list|search <query>|add <text>|forget <id>|summarize|import-runs`
+- `/workspace status|init|use <path>`
 - `/telegram`
 - `/exit`
 
@@ -1043,6 +1046,32 @@ Basic settings can be overridden with:
 The runtime agent system prompt lives in the `[agent]` config section as
 `system_prompt`, with `system_prompt_extra` available for local additions. The
 default prompt identifies Libre Claw as a Kroonen AI Inc. agent harness.
+
+## Runtime Workspace
+
+Libre Claw can keep its own stable home separate from the product source repo
+and the projects it edits:
+
+```bash
+libre-claw workspace init
+```
+
+By default this creates `~/Documents/.workspace/libre-claw`, copies the current
+project `soul.md` and `.libre-claw/skills/*.md` into it, creates starter
+`README.md`, `goals.md`, and `memory.md` files, and updates
+`~/.libre-claw/config.toml` so future launches use that workspace as
+`[general].working_directory`.
+
+Useful variants:
+
+```bash
+libre-claw workspace status
+libre-claw workspace init --path ~/Documents/.workspace/libre-claw --overwrite
+libre-claw --working-directory /path/to/source workspace init
+```
+
+Inside the TUI, use `/workspace status`, `/workspace init`, or
+`/workspace use <path>`.
 
 Persona customization lives in `soul.md`. Libre Claw loads these files at the
 start of each agent turn, in order:

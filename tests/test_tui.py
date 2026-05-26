@@ -146,6 +146,8 @@ def test_tui_phase_four_helper_state(monkeypatch, tmp_path: Path) -> None:
     assert [command.name for command in app._slash_suggestion_matches("/m")] == ["/model", "/memory"]
     assert app._slash_suggestion_matches("/g")[0].name == "/goal"
     assert app._slash_suggestion_matches("/memory ")[0].name == "/memory status"
+    assert app._slash_suggestion_matches("/w")[0].name == "/workspace"
+    assert app._slash_suggestion_matches("/workspace ")[0].name == "/workspace status"
 
 
 def test_tui_diff_text(monkeypatch, tmp_path: Path) -> None:

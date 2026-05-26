@@ -150,7 +150,7 @@ class TelegramBridge:
                 continue
             if isinstance(event, AgentToolCall):
                 await self._archive_event(chat_id, "tool_call", {"name": event.call.name, "arguments": dict(event.call.arguments)})
-                yield TelegramToolNotice(_tool_call_notice(event.call.name, _object_payload(event.call.arguments)))
+                yield TelegramToolNotice(_tool_call_notice(event.call.name, dict(event.call.arguments)))
                 continue
             if isinstance(event, AgentPermissionRequest):
                 prompt_id = f"{chat_id}:{event.call.id}"
@@ -159,7 +159,7 @@ class TelegramBridge:
                 yield TelegramPermissionPrompt(
                     prompt_id=prompt_id,
                     call=event.call,
-                    text=_permission_notice(event.call.name, _object_payload(event.call.arguments)),
+                    text=_permission_notice(event.call.name, dict(event.call.arguments)),
                 )
                 continue
             if isinstance(event, AgentToolResult):

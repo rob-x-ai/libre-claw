@@ -54,6 +54,7 @@ def test_cli_exposes_telegram_command() -> None:
     assert "tui" in result.output
     assert "chat" in result.output
     assert "telegram" in result.output
+    assert "workspace" in result.output
     assert "auth" in result.output
     assert "config" in result.output
 
@@ -129,6 +130,35 @@ def test_cli_telegram_allow_appends_user_id(monkeypatch, tmp_path) -> None:
     config_text = config_path.read_text(encoding="utf-8")
     assert "allowed_user_ids = [123, 456]" in config_text
     assert "Restart `libre-claw telegram up`" in result.output
+
+
+def test_cli_workspace_init_creates_workspace_and_updates_config(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "project"
+    source.mkdir()
+    (source / "soul.md").write_text("# Project Soul\n\nKnow the project.", encoding="utf-8")
+    target = tmp_path / "Documents" / ".workspace" / "libre-claw"
+
+    result = runner.invoke(main, ["--working-directory", str(source), "workspace", "init", "--path", str(target)])
+
+    assert result.exit_code == 0
+    assert "Libre Claw workspace initialized" in result.output
+    assert (target / "soul.md").exists()
+    config_text = (tmp_path / ".libre-claw" / "config.toml").read_text(encoding="utf-8")
+    assert f'working_directory = "{target}"' in config_text
+
+
+def test_cli_workspace_status(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(main, ["workspace", "status"])
+
+    assert result.exit_code == 0
+    assert "Libre Claw workspace:" in result.output
 
 
 def test_cli_config_defaults_outputs_toml() -> None:

@@ -58,6 +58,10 @@ First shippable Libre Claw release from Kroonen AI Inc.
 - Soul/persona system with `~/.libre-claw/soul.md`, project
   `.libre-claw/soul.md`, and project-root `soul.md` injection across TUI,
   Telegram, and daemon agent runs, plus `/soul status|show|init|reload`.
+- Dedicated runtime workspace support with `libre-claw workspace init`,
+  `/workspace status|init|use`, starter `README.md`/`goals.md`/`memory.md`,
+  copied `soul.md` and skills Markdown, and persisted
+  `[general].working_directory` updates.
 - File explorer hidden by default, with parent-directory navigation, agent
   working-directory sync, a visible `Hide` control, a left-side `Files` rail
   for restoring the sidebar, and `Ctrl+B` toggling.

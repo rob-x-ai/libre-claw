@@ -282,6 +282,34 @@ def set_global_default_model(
     return path
 
 
+def set_global_working_directory(
+    working_directory: Path | str,
+    config_path: Path | str | None = None,
+) -> Path:
+    """Persist the default working directory in the user-level config file."""
+    directory = Path(working_directory).expanduser().resolve()
+    path = Path(config_path).expanduser() if config_path is not None else user_config_path()
+    updates = {
+        "general": {
+            "working_directory": str(directory),
+        },
+    }
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        updated = _update_toml_sections(existing, updates)
+        tomllib.loads(updated)
+        path.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        msg = f"Could not write config file {path}: {exc}"
+        raise ConfigError(msg) from exc
+    except tomllib.TOMLDecodeError as exc:
+        msg = f"Could not update config file {path}: {exc}"
+        raise ConfigError(msg) from exc
+    return path
+
+
 def configure_telegram(
     allowed_user_ids: tuple[int, ...],
     *,

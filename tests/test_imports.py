@@ -28,6 +28,7 @@ def test_phase_one_modules_import() -> None:
         "libre_claw.core.soul",
         "libre_claw.core.tools",
         "libre_claw.core.usage",
+        "libre_claw.core.workspace",
         "libre_claw.providers.anthropic",
         "libre_claw.providers.codex",
         "libre_claw.providers.factory",

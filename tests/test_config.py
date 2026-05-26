@@ -12,6 +12,7 @@ from libre_claw.config import (
     load_config,
     packaged_default_config_text,
     set_global_default_model,
+    set_global_working_directory,
     user_config_path,
 )
 from libre_claw.core.heartbeat import heartbeat_prompt, parse_heartbeat_interval
@@ -253,6 +254,20 @@ def test_set_global_default_model_updates_user_config(monkeypatch, tmp_path: Pat
     assert config.general.default_model == "qwen/qwen3.7-max"
     assert config.providers["openrouter"]["default_model"] == "qwen/qwen3.7-max"
     assert config.tui.show_file_tree is False
+
+
+def test_set_global_working_directory_updates_user_config(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    workspace = tmp_path / "Documents" / ".workspace" / "libre-claw"
+    workspace.mkdir(parents=True)
+
+    written = set_global_working_directory(workspace)
+
+    assert written == user_config_path()
+    text = written.read_text(encoding="utf-8")
+    assert f'working_directory = "{workspace}"' in text
+    assert load_config().general.working_directory == workspace
 
 
 def test_configure_telegram_updates_user_config_without_token(monkeypatch, tmp_path: Path) -> None:

@@ -35,6 +35,7 @@ from libre_claw.config import (
     global_config_path,
     load_config,
     set_global_default_model,
+    set_global_working_directory,
 )
 from libre_claw.core import (
     Agent,
@@ -85,6 +86,12 @@ from libre_claw.core.usage import (
     openrouter_attribution_text,
     openrouter_model_presets_text,
     usage_report_text,
+)
+from libre_claw.core.workspace import (
+    default_claw_workspace_path,
+    initialize_claw_workspace,
+    workspace_result_text,
+    workspace_status_text,
 )
 from libre_claw.daemon import DaemonClient, daemon_base_url
 from libre_claw.providers import (
@@ -219,6 +226,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/schedule", "/schedule list|add|pause|resume|delete|examples", "Manage recurring local runs"),
     SlashCommand("/heartbeat", "/heartbeat status|once|start [every 30 minutes]|stop", "Run recurring check-ins"),
     SlashCommand("/memory", "/memory status|list|search|add|forget|summarize", "Manage persistent memory"),
+    SlashCommand("/workspace", "/workspace status|init|use <path>", "Manage the Libre Claw runtime workspace"),
     SlashCommand("/telegram", "/telegram", "Show Telegram bridge status"),
     SlashCommand("/tools", "/tools list|expand|collapse|toggle <index>", "Inspect and control tool details"),
     SlashCommand("/exit", "/exit", "Exit Libre Claw"),
@@ -923,6 +931,9 @@ class LibreClawApp(App[None]):
             return
         if command == "/memory":
             await self._handle_memory_command(argument)
+            return
+        if command == "/workspace":
+            await self._handle_workspace_command(argument)
             return
         if command == "/telegram":
             self._append_system(self._telegram_status())
@@ -1990,6 +2001,45 @@ class LibreClawApp(App[None]):
 
         self._append_system("Usage: /memory status|on|off|list|search <query>|add <text>|forget <id>|summarize|import-runs")
 
+    async def _handle_workspace_command(self, argument: str) -> None:
+        parts = shlex.split(argument) if argument.strip() else []
+        action = parts[0].lower() if parts else "status"
+        if action == "status":
+            self._append_system(workspace_status_text(self.config.general.working_directory))
+            return
+        if action == "init":
+            overwrite = "--overwrite" in parts
+            target_text = next((part for part in parts[1:] if not part.startswith("-")), "")
+            target = Path(target_text).expanduser() if target_text else default_claw_workspace_path()
+            try:
+                result = initialize_claw_workspace(
+                    source_root=self.config.general.working_directory,
+                    target=target,
+                    set_default=True,
+                    config_path=global_config_path(self.config),
+                    overwrite=overwrite,
+                )
+            except ConfigError as exc:
+                self._append_system(str(exc))
+                return
+            self._set_working_directory(result.path)
+            self._append_system(workspace_result_text(result))
+            return
+        if action == "use" and len(parts) >= 2:
+            path = Path(parts[1]).expanduser().resolve()
+            if not path.is_dir():
+                self._append_system(f"Workspace path does not exist: {path}")
+                return
+            try:
+                config_path = set_global_working_directory(path, config_path=global_config_path(self.config))
+            except ConfigError as exc:
+                self._append_system(str(exc))
+                return
+            self._set_working_directory(path)
+            self._append_system(f"Libre Claw workspace set to {path}.\nSaved in {config_path}.")
+            return
+        self._append_system("Usage: /workspace status|init [path] [--overwrite]|use <path>")
+
     async def _import_run_memories(self) -> int:
         count = 0
         runs = await self.run_store.list_runs(limit=200)
@@ -2703,14 +2753,17 @@ class LibreClawApp(App[None]):
             self._append_system("Already at the filesystem root.")
             return
 
-        self.config = _replace_general(self.config, working_directory=parent)
+        self._set_working_directory(parent)
+        self._append_system(f"Explorer root and agent working directory set to {parent}.")
+
+    def _set_working_directory(self, path: Path) -> None:
+        self.config = _replace_general(self.config, working_directory=path)
         self.skill_store = SkillStore(self.config.general.working_directory)
         self.soul_store = SoulStore(self.config.general.working_directory)
-        self.query_one("#file-tree", DirectoryTree).path = parent
+        self.query_one("#file-tree", DirectoryTree).path = self.config.general.working_directory
         self.query_one("#sidebar-root", Static).update(self._sidebar_root_text())
         self._rebuild_agent()
         self._update_status()
-        self._append_system(f"Explorer root and agent working directory set to {parent}.")
 
     def _append_user(self, text: str) -> int:
         return self._append_entry("user", text)
@@ -3181,6 +3234,23 @@ class LibreClawApp(App[None]):
                 SlashCommand("/memory import-runs", "/memory import-runs", "Import run summaries"),
                 SlashCommand("/memory on", "/memory on", "Enable memory for this session"),
                 SlashCommand("/memory off", "/memory off", "Disable memory for this session"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
+        if lowered.startswith("/workspace "):
+            query = lowered.removeprefix("/workspace ").strip()
+            suggestions = [
+                SlashCommand("/workspace status", "/workspace status", "Show workspace paths"),
+                SlashCommand("/workspace init", "/workspace init [path]", "Create and use the dedicated workspace"),
+                SlashCommand(
+                    "/workspace init --overwrite",
+                    "/workspace init [path] --overwrite",
+                    "Refresh workspace Markdown templates",
+                ),
+                SlashCommand("/workspace use ", "/workspace use <path>", "Use an existing workspace directory"),
             ]
             return [
                 suggestion
