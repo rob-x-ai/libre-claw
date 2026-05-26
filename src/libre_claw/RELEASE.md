@@ -77,10 +77,10 @@ First shippable Libre Claw release from Kroonen AI Inc.
   OAuth picker presets for `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
   `gpt-5.3-codex`, `gpt-5.3-codex-spark`, and `gpt-5.2`.
 - OpenRouter support with fixed Libre Claw app attribution headers:
-  `https://kroonen.ai`, `Libre Claw`, and the `cli-agent` category.
+  `https://libreclaw.dev`, `Libre Claw`, and the `cli-agent` category.
 - OpenRouter growth analytics through `/usage openrouter`, attribution
   verification, an analytics link to
-  `https://openrouter.ai/apps?url=https://kroonen.ai`, and a shared
+  `https://openrouter.ai/apps?url=https://libreclaw.dev`, and a shared
   recommended model preset catalog for TUI, Telegram, and usage reports,
   including `deepseek/deepseek-v4-flash`, `qwen/qwen3.7-max`,
   `moonshotai/kimi-k2.6`, `anthropic/claude-opus-4.7`, and

@@ -212,7 +212,7 @@ def test_create_provider_supports_openrouter(monkeypatch, tmp_path: Path) -> Non
     assert provider.model == "openrouter/auto"
     assert provider.base_url == "https://openrouter.ai/api/v1"
     assert provider.default_headers == {
-        "HTTP-Referer": "https://kroonen.ai",
+        "HTTP-Referer": "https://libreclaw.dev",
         "X-OpenRouter-Title": "Libre Claw",
         "X-OpenRouter-Categories": "cli-agent",
     }

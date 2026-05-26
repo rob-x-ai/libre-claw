@@ -7,7 +7,7 @@ from typing import Any
 
 from libre_claw.providers.openai import OpenAIProvider
 
-OPENROUTER_HTTP_REFERER = "https://kroonen.ai"
+OPENROUTER_HTTP_REFERER = "https://libreclaw.dev"
 OPENROUTER_APP_TITLE = "Libre Claw"
 OPENROUTER_CATEGORIES = "cli-agent"
 

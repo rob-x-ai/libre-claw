@@ -406,5 +406,5 @@ async def test_daemon_usage_endpoint_reports_provider_rollups(monkeypatch, tmp_p
 
     assert payload["summary"]["total_tokens"] == 15
     assert payload["summary"]["by_surface"][0]["name"] == "daemon"
-    assert payload["attribution"]["analytics_url"] == "https://openrouter.ai/apps?url=https://kroonen.ai"
+    assert payload["attribution"]["analytics_url"] == "https://openrouter.ai/apps?url=https://libreclaw.dev"
     assert "OpenRouter usage" in payload["text"]
