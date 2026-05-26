@@ -29,6 +29,8 @@ TELEGRAM_HARD_MESSAGE_LIMIT = 4096
 TELEGRAM_SAFE_MESSAGE_LIMIT = 3900
 TELEGRAM_CONTINUED_SUFFIX = "\n\n...[continued]"
 TELEGRAM_TYPING_INTERVAL_SECONDS = 4.0
+TELEGRAM_TOOL_LOG_UPDATE_INTERVAL_SECONDS = 8.0
+TELEGRAM_TOOL_LOG_UPDATE_EVENT_INTERVAL = 12
 
 
 @dataclass(frozen=True)
@@ -226,10 +228,12 @@ class TelegramHandlers:
         saw_tool_notice = False
         tool_log_message: Any | None = None
         tool_notices: list[str] = []
+        tool_log_dirty = False
+        tool_log_last_update = 0.0
         typing_task = self._start_typing_indicator(context.bot, chat_id)
 
         async def runner() -> None:
-            nonlocal accumulated, last_update, saw_tool_notice, tool_log_message
+            nonlocal accumulated, last_update, saw_tool_notice, tool_log_dirty, tool_log_last_update, tool_log_message
             try:
                 async for event in self.bridge.stream_message(chat_id, text):
                     if isinstance(event, TelegramText):
@@ -244,21 +248,43 @@ class TelegramHandlers:
                     if isinstance(event, TelegramToolNotice):
                         saw_tool_notice = True
                         tool_notices.append(event.text)
-                        preview = _tool_log_preview(tool_notices, self.bridge.config.telegram.max_message_length)
                         if tool_log_message is None:
                             await _edit_text_preview(
                                 placeholder,
                                 "🧰 Working through tools. Final answer will arrive below.",
                                 self.bridge.config.telegram.max_message_length,
                             )
-                            tool_log_message = await update.effective_message.reply_text(preview)
+                            tool_log_message = await update.effective_message.reply_text(
+                                _tool_log_preview(tool_notices, self.bridge.config.telegram.max_message_length)
+                            )
+                            tool_log_last_update = time.monotonic()
                         else:
-                            await _edit_text_preview(tool_log_message, preview, self.bridge.config.telegram.max_message_length)
+                            tool_log_dirty = True
+                            now = time.monotonic()
+                            should_update_tool_log = (
+                                now - tool_log_last_update >= TELEGRAM_TOOL_LOG_UPDATE_INTERVAL_SECONDS
+                                or len(tool_notices) % TELEGRAM_TOOL_LOG_UPDATE_EVENT_INTERVAL == 0
+                            )
+                            if should_update_tool_log:
+                                await _safe_edit_text_preview(
+                                    tool_log_message,
+                                    _tool_log_preview(tool_notices, self.bridge.config.telegram.max_message_length),
+                                    self.bridge.config.telegram.max_message_length,
+                                )
+                                tool_log_last_update = now
+                                tool_log_dirty = False
                         continue
                     if isinstance(event, TelegramPermissionPrompt):
                         await self._reply_permission_prompt(update.effective_message, event)
                         continue
                     if isinstance(event, TelegramDone):
+                        if tool_log_message is not None and tool_log_dirty:
+                            await _safe_edit_text_preview(
+                                tool_log_message,
+                                _tool_log_preview(tool_notices, self.bridge.config.telegram.max_message_length),
+                                self.bridge.config.telegram.max_message_length,
+                            )
+                            tool_log_dirty = False
                         if accumulated:
                             if saw_tool_notice:
                                 await _edit_text_preview(
@@ -282,6 +308,13 @@ class TelegramHandlers:
                             await _edit_text_preview(placeholder, "Done.", self.bridge.config.telegram.max_message_length)
                         continue
                     if isinstance(event, TelegramError):
+                        if tool_log_message is not None and tool_log_dirty:
+                            await _safe_edit_text_preview(
+                                tool_log_message,
+                                _tool_log_preview(tool_notices, self.bridge.config.telegram.max_message_length),
+                                self.bridge.config.telegram.max_message_length,
+                            )
+                            tool_log_dirty = False
                         if saw_tool_notice:
                             await _edit_text_preview(
                                 placeholder,
@@ -604,6 +637,16 @@ async def _edit_text_preview(message: Any, text: str, configured_limit: int) -> 
         raise
 
 
+async def _safe_edit_text_preview(message: Any, text: str, configured_limit: int) -> bool:
+    try:
+        await _edit_text_preview(message, text, configured_limit)
+        return True
+    except Exception as exc:
+        if _is_telegram_retry_after(exc):
+            return False
+        raise
+
+
 async def _finish_text_response(message: Any, reply_to: Any, text: str, configured_limit: int) -> None:
     chunks = _message_chunks(text, configured_limit)
     first = chunks[0] if chunks else " "
@@ -664,6 +707,13 @@ def _is_telegram_error(exc: Exception, message: str) -> bool:
     if BadRequest is not None and isinstance(exc, BadRequest):
         return message in str(exc).lower()
     return exc.__class__.__name__ == "BadRequest" and message in str(exc).lower()
+
+
+def _is_telegram_retry_after(exc: Exception) -> bool:
+    if hasattr(exc, "retry_after"):
+        return True
+    text = str(exc).lower()
+    return "flood control exceeded" in text or "retry after" in text
 
 
 def _unauthorized_text(user_id: int | None, username: str | None) -> str:

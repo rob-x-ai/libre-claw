@@ -32,6 +32,7 @@ from libre_claw.telegram.handlers import (
     _model_keyboard,
     _provider_keyboard,
     _reply_text_chunks,
+    _safe_edit_text_preview,
     _stream_preview,
     _telegram_help_text,
     _tool_log_preview,
@@ -196,6 +197,20 @@ async def test_telegram_finish_text_response_sends_all_final_chunks() -> None:
     assert len(placeholder.edits[0]) < 4096
     assert reply_to.replies
     assert placeholder.edits[0] + "".join(reply_to.replies) == text
+
+
+async def test_telegram_safe_edit_ignores_retry_after() -> None:
+    class RetryAfterError(Exception):
+        retry_after = 190
+
+    class Message:
+        async def edit_text(self, text: str) -> None:
+            del text
+            raise RetryAfterError("Flood control exceeded. Retry in 190 seconds")
+
+    edited = await _safe_edit_text_preview(Message(), "hello", configured_limit=3900)
+
+    assert edited is False
 
 
 async def test_telegram_tool_heavy_runs_send_final_answer_last(monkeypatch, tmp_path: Path) -> None:
