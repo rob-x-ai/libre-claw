@@ -84,6 +84,7 @@ class TelegramError:
 TelegramEvent = TelegramText | TelegramToolNotice | TelegramPermissionPrompt | TelegramDone | TelegramError
 TELEGRAM_NOTICE_LIMIT = 1200
 TELEGRAM_ARGUMENT_LIMIT = 700
+TELEGRAM_HTTP_ERROR_LIMIT = 500
 
 
 @dataclass
@@ -167,9 +168,21 @@ class TelegramBridge:
                 await self._archive_event(
                     chat_id,
                     "tool_result",
-                    {"name": event.call.name, "is_error": event.result.is_error, "content": event.result.as_text()},
+                    {
+                        "name": event.call.name,
+                        "is_error": event.result.is_error,
+                        "content": event.result.as_text(),
+                        "metadata": dict(event.result.metadata),
+                    },
                 )
-                yield TelegramToolNotice(_tool_result_notice(event.call.name, is_error=event.result.is_error, content=event.result.as_text()))
+                yield TelegramToolNotice(
+                    _tool_result_notice(
+                        event.call.name,
+                        is_error=event.result.is_error,
+                        content=event.result.as_text(),
+                        metadata=dict(event.result.metadata),
+                    )
+                )
                 continue
             if isinstance(event, AgentDone):
                 if event.usage is not None:
@@ -590,6 +603,8 @@ def _format_usage_cost(usage: Usage) -> str:
 
 
 def _tool_call_notice(name: str, arguments: dict[str, Any]) -> str:
+    if name == "http_request":
+        return _http_request_call_notice(arguments)
     summary = _arguments_summary(arguments, limit=TELEGRAM_ARGUMENT_LIMIT)
     if not summary:
         return f"🔧 {name}"
@@ -606,13 +621,64 @@ def _permission_notice(name: str, arguments: dict[str, Any], *, run_id: str = ""
     return "\n".join(lines)
 
 
-def _tool_result_notice(name: str, *, is_error: bool, content: str) -> str:
+def _tool_result_notice(
+    name: str,
+    *,
+    is_error: bool,
+    content: str,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    if name == "http_request":
+        return _http_request_result_notice(is_error=is_error, content=content, metadata=metadata or {})
     icon = "⚠️" if is_error else "✅"
     status = "failed" if is_error else "done"
     compact = _compact_text(content, TELEGRAM_NOTICE_LIMIT)
     if not compact:
         return f"{icon} {name} {status}"
     return f"{icon} {name} {status}\n{compact}"
+
+
+def _http_request_call_notice(arguments: dict[str, Any]) -> str:
+    method = str(arguments.get("method", "GET") or "GET").upper()
+    url = str(arguments.get("url", "")).strip()
+    if not url:
+        return f"🌐 {method} http_request"
+    return f"🌐 {method} {_compact_text(url, 320)}"
+
+
+def _http_request_result_notice(*, is_error: bool, content: str, metadata: dict[str, Any]) -> str:
+    if is_error:
+        compact = _compact_text(content, TELEGRAM_HTTP_ERROR_LIMIT)
+        return f"⚠️ http_request failed\n{compact}" if compact else "⚠️ http_request failed"
+
+    lines = ["✅ http_request done"]
+    method = str(metadata.get("method", "")).strip()
+    url = str(metadata.get("url", "") or metadata.get("requested_url", "")).strip()
+    if method or url:
+        request_line = " ".join(part for part in (method, url) if part).strip()
+        lines.append(_compact_text(request_line, 360))
+    status_code = metadata.get("status_code")
+    if status_code not in (None, ""):
+        lines.append(f"status: {status_code}")
+    content_type = str(metadata.get("content_type", "")).strip()
+    if content_type:
+        lines.append(f"content_type: {_compact_text(content_type, 160)}")
+    byte_count = metadata.get("bytes")
+    if byte_count not in (None, ""):
+        lines.append(f"bytes: {byte_count}")
+    saved_path = str(metadata.get("saved_path", "")).strip()
+    if saved_path:
+        lines.append(f"saved: {_compact_text(saved_path, 220)}")
+    response_body = content.split("\n\n", 1)[1].strip() if "\n\n" in content else ""
+    if metadata.get("truncated") or response_body:
+        lines.append("body: hidden in Telegram preview, available to the model")
+    if len(lines) > 1:
+        return "\n".join(lines)
+
+    header = content.split("\n\n", 1)[0].strip()
+    if header:
+        return "✅ http_request done\n" + _compact_text(header, TELEGRAM_HTTP_ERROR_LIMIT)
+    return "✅ http_request done"
 
 
 def _arguments_summary(arguments: dict[str, Any], *, limit: int) -> str:
@@ -684,6 +750,7 @@ async def _telegram_events_from_daemon_event(run_id: str, event: dict[str, Any])
                 str(data.get("name", "tool")),
                 is_error=bool(data.get("is_error")),
                 content=str(data.get("content", "")),
+                metadata=_object_payload(data.get("metadata")),
             )
         )
         return

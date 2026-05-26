@@ -223,43 +223,83 @@ class TelegramHandlers:
         placeholder = await update.effective_message.reply_text("Libre Claw is thinking...")
         accumulated = ""
         last_update = time.monotonic()
+        saw_tool_notice = False
+        tool_log_message: Any | None = None
+        tool_notices: list[str] = []
         typing_task = self._start_typing_indicator(context.bot, chat_id)
 
         async def runner() -> None:
-            nonlocal accumulated, last_update
+            nonlocal accumulated, last_update, saw_tool_notice, tool_log_message
             try:
                 async for event in self.bridge.stream_message(chat_id, text):
                     if isinstance(event, TelegramText):
                         accumulated += event.text
+                        if saw_tool_notice:
+                            continue
                         should_update = len(accumulated) % 100 == 0 or time.monotonic() - last_update >= self.bridge.config.telegram.stream_update_interval
                         if should_update:
                             await _edit_text_preview(placeholder, accumulated, self.bridge.config.telegram.max_message_length)
                             last_update = time.monotonic()
                         continue
                     if isinstance(event, TelegramToolNotice):
-                        await _reply_text_chunks(update.effective_message, event.text, self.bridge.config.telegram.max_message_length)
+                        saw_tool_notice = True
+                        tool_notices.append(event.text)
+                        preview = _tool_log_preview(tool_notices, self.bridge.config.telegram.max_message_length)
+                        if tool_log_message is None:
+                            await _edit_text_preview(
+                                placeholder,
+                                "🧰 Working through tools. Final answer will arrive below.",
+                                self.bridge.config.telegram.max_message_length,
+                            )
+                            tool_log_message = await update.effective_message.reply_text(preview)
+                        else:
+                            await _edit_text_preview(tool_log_message, preview, self.bridge.config.telegram.max_message_length)
                         continue
                     if isinstance(event, TelegramPermissionPrompt):
                         await self._reply_permission_prompt(update.effective_message, event)
                         continue
                     if isinstance(event, TelegramDone):
                         if accumulated:
-                            await _finish_text_response(
-                                placeholder,
-                                update.effective_message,
-                                accumulated,
-                                self.bridge.config.telegram.max_message_length,
-                            )
+                            if saw_tool_notice:
+                                await _edit_text_preview(
+                                    placeholder,
+                                    "✅ Run complete. Final answer below.",
+                                    self.bridge.config.telegram.max_message_length,
+                                )
+                                await _reply_text_chunks(
+                                    update.effective_message,
+                                    accumulated,
+                                    self.bridge.config.telegram.max_message_length,
+                                )
+                            else:
+                                await _finish_text_response(
+                                    placeholder,
+                                    update.effective_message,
+                                    accumulated,
+                                    self.bridge.config.telegram.max_message_length,
+                                )
                         else:
                             await _edit_text_preview(placeholder, "Done.", self.bridge.config.telegram.max_message_length)
                         continue
                     if isinstance(event, TelegramError):
-                        await _finish_text_response(
-                            placeholder,
-                            update.effective_message,
-                            event.text,
-                            self.bridge.config.telegram.max_message_length,
-                        )
+                        if saw_tool_notice:
+                            await _edit_text_preview(
+                                placeholder,
+                                "⚠️ Run stopped. Error below.",
+                                self.bridge.config.telegram.max_message_length,
+                            )
+                            await _reply_text_chunks(
+                                update.effective_message,
+                                event.text,
+                                self.bridge.config.telegram.max_message_length,
+                            )
+                        else:
+                            await _finish_text_response(
+                                placeholder,
+                                update.effective_message,
+                                event.text,
+                                self.bridge.config.telegram.max_message_length,
+                            )
                         continue
             except Exception as exc:
                 await _finish_text_response(
@@ -524,6 +564,31 @@ async def _cancel_task(task: asyncio.Task[Any]) -> None:
     task.cancel()
     with suppress(asyncio.CancelledError):
         await task
+
+
+def _tool_log_preview(notices: Sequence[str], configured_limit: int) -> str:
+    limit = _telegram_message_limit(configured_limit)
+    visible = list(notices[-8:])
+    hidden_count = max(0, len(notices) - len(visible))
+    sections = [f"🧰 Tool activity ({len(notices)})"]
+    if hidden_count:
+        sections.append(f"… {hidden_count} earlier events hidden")
+    sections.extend(_truncate_tool_notice(notice) for notice in visible)
+    preview = "\n\n".join(sections)
+    if len(preview) <= limit:
+        return preview
+    return _truncate(preview, configured_limit)
+
+
+def _truncate_tool_notice(notice: str) -> str:
+    lines = [line.rstrip() for line in notice.strip().splitlines() if line.strip()]
+    if not lines:
+        return "Tool event"
+    head = lines[0]
+    body = "\n".join(lines[1:])
+    if not body:
+        return head
+    return f"{head}\n{_truncate(body, 420)}"
 
 
 async def _edit_text_preview(message: Any, text: str, configured_limit: int) -> None:

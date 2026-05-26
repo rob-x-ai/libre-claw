@@ -34,6 +34,7 @@ from libre_claw.telegram.handlers import (
     _reply_text_chunks,
     _stream_preview,
     _telegram_help_text,
+    _tool_log_preview,
     _typing_indicator_loop,
     _unauthorized_text,
     telegram_command_specs,
@@ -195,6 +196,88 @@ async def test_telegram_finish_text_response_sends_all_final_chunks() -> None:
     assert len(placeholder.edits[0]) < 4096
     assert reply_to.replies
     assert placeholder.edits[0] + "".join(reply_to.replies) == text
+
+
+async def test_telegram_tool_heavy_runs_send_final_answer_last(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("libre_claw.telegram.handlers.TELEGRAM_TYPING_INTERVAL_SECONDS", 60)
+
+    class State:
+        task: asyncio.Task[None] | None = None
+
+    class Bridge:
+        config = load_config()
+
+        def __init__(self) -> None:
+            self.state = State()
+
+        def state_for(self, chat_id: int) -> State:
+            assert chat_id == 123
+            return self.state
+
+        async def stream_message(self, chat_id: int, text: str):
+            assert chat_id == 123
+            assert text == "hn"
+            yield TelegramText("Final")
+            yield TelegramToolNotice("🌐 GET https://hacker-news.firebaseio.com/v0/topstories.json")
+            yield TelegramToolNotice("✅ http_request done\nstatus: 200\nbytes: 4501")
+            yield TelegramText(" answer")
+            yield TelegramDone(None)
+
+    class SentMessage:
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.edits: list[str] = []
+
+        async def edit_text(self, text: str) -> None:
+            self.edits.append(text)
+
+    class EffectiveMessage:
+        text = "hn"
+
+        def __init__(self) -> None:
+            self.sent: list[SentMessage] = []
+
+        async def reply_text(self, text: str, reply_markup: object | None = None) -> SentMessage:
+            del reply_markup
+            message = SentMessage(text)
+            self.sent.append(message)
+            return message
+
+    class User:
+        id = 123
+
+    class Chat:
+        id = 123
+
+    class Update:
+        effective_user = User()
+        effective_chat = Chat()
+
+        def __init__(self) -> None:
+            self.effective_message = EffectiveMessage()
+
+    class Bot:
+        async def send_chat_action(self, chat_id: int, action: str) -> None:
+            del chat_id, action
+
+    class Context:
+        bot = Bot()
+
+    bridge = Bridge()
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))  # type: ignore[arg-type]
+    update = Update()
+
+    await handlers.message(update, Context())  # type: ignore[arg-type]
+    assert bridge.state.task is not None
+    await bridge.state.task
+
+    sent_texts = [message.text for message in update.effective_message.sent]
+    assert sent_texts[0] == "Libre Claw is thinking..."
+    assert sent_texts[1].startswith("🧰 Tool activity (1)")
+    assert sent_texts[-1] == "Final answer"
+    assert update.effective_message.sent[0].edits[-1] == "✅ Run complete. Final answer below."
 
 
 async def test_telegram_typing_indicator_repeats_until_cancelled(monkeypatch) -> None:
@@ -712,3 +795,51 @@ def test_telegram_tool_notices_are_compact() -> None:
     assert result.startswith("✅ browser_read done\n")
     assert "… truncated" in result
     assert len(result) < 1300
+
+
+def test_telegram_http_request_notices_hide_response_bodies() -> None:
+    call = _tool_call_notice(
+        "http_request",
+        {
+            "url": "https://hacker-news.firebaseio.com/v0/topstories.json",
+            "max_response_chars": 20000,
+        },
+    )
+    content = (
+        "GET https://hacker-news.firebaseio.com/v0/topstories.json\n"
+        "status: 200 OK\n"
+        "content_type: application/json; charset=utf-8\n"
+        "bytes: 4501\n\n"
+        "[48281226,48281367,48280636]"
+    )
+    result = _tool_result_notice(
+        "http_request",
+        is_error=False,
+        content=content,
+        metadata={
+            "method": "GET",
+            "url": "https://hacker-news.firebaseio.com/v0/topstories.json",
+            "status_code": 200,
+            "content_type": "application/json; charset=utf-8",
+            "bytes": 4501,
+            "truncated": True,
+        },
+    )
+
+    assert call == "🌐 GET https://hacker-news.firebaseio.com/v0/topstories.json"
+    assert "max_response_chars" not in call
+    assert result.startswith("✅ http_request done\nGET https://hacker-news.firebaseio.com/v0/topstories.json")
+    assert "status: 200" in result
+    assert "bytes: 4501" in result
+    assert "[48281226" not in result
+
+
+def test_telegram_tool_log_preview_keeps_latest_activity_in_one_message() -> None:
+    notices = [f"🌐 GET https://example.com/{index}\nurl: https://example.com/{index}" for index in range(12)]
+
+    preview = _tool_log_preview(notices, configured_limit=3900)
+
+    assert preview.startswith("🧰 Tool activity (12)")
+    assert "4 earlier events hidden" in preview
+    assert "https://example.com/11" in preview
+    assert "https://example.com/0" not in preview
