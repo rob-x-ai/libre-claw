@@ -216,6 +216,10 @@ class TelegramHandlers:
             await _reply_text_chunks(update.effective_message, _telegram_help_text(), self.bridge.config.telegram.max_message_length)
             return
         chat_id = update.effective_chat.id
+        state = self.bridge.state_for(chat_id)
+        if state.task is not None and not state.task.done():
+            await self.bridge.cancel_async(chat_id)
+            await update.effective_message.reply_text("↻ Previous run cancelled. Starting the new message.")
         placeholder = await update.effective_message.reply_text("Libre Claw is thinking...")
         accumulated = ""
         last_update = time.monotonic()
@@ -341,11 +345,17 @@ class TelegramHandlers:
             prompt_id = self._permission_callback_ids.pop(data.removeprefix("p:y:"), "")
             resolved = await self.bridge.resolve_permission_async(prompt_id, "allow_once")
             await query.answer("Approved." if resolved else "Prompt expired.")
+            if resolved:
+                with suppress(Exception):
+                    await query.edit_message_text("✅ Approved")
             return
         if data.startswith("p:n:"):
             prompt_id = self._permission_callback_ids.pop(data.removeprefix("p:n:"), "")
             resolved = await self.bridge.resolve_permission_async(prompt_id, "deny")
             await query.answer("Denied." if resolved else "Prompt expired.")
+            if resolved:
+                with suppress(Exception):
+                    await query.edit_message_text("✖️ Denied")
             return
         if data == "cfg:cancel":
             await query.answer("Cancelled.")
@@ -428,8 +438,8 @@ class TelegramHandlers:
         return InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton("Approve", callback_data=f"p:y:{token}"),
-                    InlineKeyboardButton("Deny", callback_data=f"p:n:{token}"),
+                    InlineKeyboardButton("✅ Approve", callback_data=f"p:y:{token}"),
+                    InlineKeyboardButton("✖️ Deny", callback_data=f"p:n:{token}"),
                 ]
             ]
         )

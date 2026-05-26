@@ -124,7 +124,8 @@ First shippable Libre Claw release from Kroonen AI Inc.
 - Existing SQLite facts, sessions, summaries, and file edit logs remain
   compatible; manual facts migrate into first-class memory items.
 - Telegram daemon with allowlist auth, streaming updates, per-chat sessions,
-  model/provider commands, and inline permission prompts.
+  model/provider commands, compact emoji tool notices, per-run daemon event
+  cursors to avoid stale tool replay, and inline permission prompts.
 - User-friendly Telegram setup with `libre-claw telegram setup`, secure token
   storage, `libre-claw telegram status`, and `libre-claw telegram up` to run
   the bot plus local daemon together.

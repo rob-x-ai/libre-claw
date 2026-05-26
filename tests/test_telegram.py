@@ -19,6 +19,8 @@ from libre_claw.telegram.bridge import (
     TelegramPermissionPrompt,
     TelegramText,
     TelegramToolNotice,
+    _tool_call_notice,
+    _tool_result_notice,
 )
 from libre_claw.telegram.handlers import (
     TELEGRAM_MODEL_PRESETS,
@@ -590,9 +592,53 @@ async def test_telegram_bridge_can_use_daemon_runs_for_approvals(monkeypatch, tm
     resolved = await bridge.resolve_permission_async(prompt.prompt_id, "allow_once")
 
     assert any(isinstance(event, TelegramText) and event.text == "hi" for event in events)
+    assert prompt.text.startswith("🔐 Approve bash?")
+    assert "Approve daemon run" not in prompt.text
     assert prompt.prompt_id == "daemon:run-1:toolu_1"
     assert resolved is True
     assert daemon.resolutions == [("run-1", "toolu_1", "allow_once")]
+
+
+async def test_telegram_daemon_event_cursor_is_per_run(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+
+    class ResettingDaemon:
+        def __init__(self) -> None:
+            self.afters: list[int] = []
+            self.lookup_count = 0
+            self.bridge: TelegramBridge | None = None
+
+        async def start_run(self, message: str, **payload: Any) -> dict[str, Any]:
+            del message, payload
+            return {"run": {"run_id": "run-cursor", "state": "queued"}}
+
+        async def get_events(self, run_id: str, after: int = 0) -> dict[str, Any]:
+            assert run_id == "run-cursor"
+            self.afters.append(after)
+            if after == 0:
+                return {"events": [{"event_id": 1, "type": "assistant_delta", "data": {"text": "hi"}}]}
+            return {"events": []}
+
+        async def get_run(self, run_id: str) -> dict[str, Any]:
+            assert run_id == "run-cursor"
+            self.lookup_count += 1
+            if self.lookup_count == 1:
+                assert self.bridge is not None
+                self.bridge.state_for(1).daemon_event_id = 0
+                return {"run": {"run_id": run_id, "state": "running"}}
+            return {"run": {"run_id": run_id, "state": "done"}}
+
+    daemon = ResettingDaemon()
+    bridge = TelegramBridge(config, daemon_client=daemon)  # type: ignore[arg-type]
+    daemon.bridge = bridge
+    await bridge.initialize()
+
+    events = [event async for event in bridge.stream_message(1, "hello")]
+
+    assert daemon.afters == [0, 1]
+    assert [event.text for event in events if isinstance(event, TelegramText)] == ["hi"]
 
 
 async def test_telegram_daemon_bridge_preserves_chat_session_between_messages(monkeypatch, tmp_path: Path) -> None:
@@ -656,3 +702,13 @@ async def test_telegram_memory_command_manages_searchable_items(monkeypatch, tmp
     assert "Robin prefers EST" in searched
     assert "Memory status" in status
     assert off == "Persistent memory disabled for Telegram."
+
+
+def test_telegram_tool_notices_are_compact() -> None:
+    call = _tool_call_notice("browser_navigate", {"url": "https://github.com/kroonen-ai/libre-claw"})
+    result = _tool_result_notice("browser_read", is_error=False, content="x" * 2000)
+
+    assert call == "🔧 browser_navigate\nurl: https://github.com/kroonen-ai/libre-claw"
+    assert result.startswith("✅ browser_read done\n")
+    assert "… truncated" in result
+    assert len(result) < 1300

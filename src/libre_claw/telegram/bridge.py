@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shlex
 from dataclasses import dataclass, field
 from typing import Any
@@ -81,6 +82,8 @@ class TelegramError:
 
 
 TelegramEvent = TelegramText | TelegramToolNotice | TelegramPermissionPrompt | TelegramDone | TelegramError
+TELEGRAM_NOTICE_LIMIT = 1200
+TELEGRAM_ARGUMENT_LIMIT = 700
 
 
 @dataclass
@@ -147,7 +150,7 @@ class TelegramBridge:
                 continue
             if isinstance(event, AgentToolCall):
                 await self._archive_event(chat_id, "tool_call", {"name": event.call.name, "arguments": dict(event.call.arguments)})
-                yield TelegramToolNotice(f"Calling {event.call.name} with {dict(event.call.arguments)}")
+                yield TelegramToolNotice(_tool_call_notice(event.call.name, _object_payload(event.call.arguments)))
                 continue
             if isinstance(event, AgentPermissionRequest):
                 prompt_id = f"{chat_id}:{event.call.id}"
@@ -156,7 +159,7 @@ class TelegramBridge:
                 yield TelegramPermissionPrompt(
                     prompt_id=prompt_id,
                     call=event.call,
-                    text=f"Approve {event.call.name} with {dict(event.call.arguments)}?",
+                    text=_permission_notice(event.call.name, _object_payload(event.call.arguments)),
                 )
                 continue
             if isinstance(event, AgentToolResult):
@@ -166,7 +169,7 @@ class TelegramBridge:
                     "tool_result",
                     {"name": event.call.name, "is_error": event.result.is_error, "content": event.result.as_text()},
                 )
-                yield TelegramToolNotice(f"{event.call.name} {status}: {event.result.as_text()}")
+                yield TelegramToolNotice(_tool_result_notice(event.call.name, is_error=event.result.is_error, content=event.result.as_text()))
                 continue
             if isinstance(event, AgentDone):
                 if event.usage is not None:
@@ -183,7 +186,7 @@ class TelegramBridge:
                 return
             if isinstance(event, AgentFallback):
                 await self._archive_event(chat_id, "provider_fallback", {"provider": event.provider_label, "reason": event.reason})
-                yield TelegramToolNotice(f"Provider fallback engaged: {event.provider_label}\nReason: {event.reason}")
+                yield TelegramToolNotice(f"🔁 Provider fallback: {event.provider_label}\n{_compact_text(event.reason)}")
                 continue
 
     def resolve_permission(self, prompt_id: str, resolution: PermissionResolution) -> bool:
@@ -520,13 +523,16 @@ class TelegramBridge:
             return
         state.daemon_run_id = run_id
         state.daemon_event_id = 0
+        event_cursor = 0
         assistant_chunks: list[str] = []
         yielded_done = False
-        yield TelegramToolNotice(f"Daemon run {run_id} started.")
+        yield TelegramToolNotice(f"🚀 Run {_short_run_id(run_id)} started.")
 
         while True:
+            if state.daemon_run_id != run_id:
+                return
             try:
-                payload = await self.daemon_client.get_events(run_id, after=state.daemon_event_id)
+                payload = await self.daemon_client.get_events(run_id, after=event_cursor)
             except Exception as exc:
                 yield TelegramError(f"Daemon event polling failed: {exc}")
                 return
@@ -537,7 +543,9 @@ class TelegramBridge:
             for event in events:
                 if not isinstance(event, dict):
                     continue
-                state.daemon_event_id = max(state.daemon_event_id, int(event.get("event_id", 0) or 0))
+                event_cursor = max(event_cursor, int(event.get("event_id", 0) or 0))
+                if state.daemon_run_id == run_id:
+                    state.daemon_event_id = event_cursor
                 data = _object_payload(event.get("data"))
                 await self._archive_event(chat_id, f"daemon_{event.get('type', 'event')}", data)
                 if str(event.get("type", "")) == "usage":
@@ -566,6 +574,9 @@ class TelegramBridge:
                         await self._archive_event(chat_id, "assistant_message", {"content": assistant_text, "run_id": run_id})
                 if not yielded_done:
                     yield TelegramDone(None)
+                if state.daemon_run_id == run_id:
+                    state.daemon_run_id = None
+                    state.daemon_event_id = 0
                 return
             await asyncio.sleep(max(0.1, self.config.daemon.poll_interval))
 
@@ -578,6 +589,74 @@ def _format_usage_cost(usage: Usage) -> str:
     return f"${usage.cost:.2f}"
 
 
+def _tool_call_notice(name: str, arguments: dict[str, Any]) -> str:
+    summary = _arguments_summary(arguments, limit=TELEGRAM_ARGUMENT_LIMIT)
+    if not summary:
+        return f"🔧 {name}"
+    return f"🔧 {name}\n{summary}"
+
+
+def _permission_notice(name: str, arguments: dict[str, Any], *, run_id: str = "") -> str:
+    lines = [f"🔐 Approve {name}?"]
+    if run_id:
+        lines.append(f"run: {_short_run_id(run_id)}")
+    summary = _arguments_summary(arguments, limit=TELEGRAM_ARGUMENT_LIMIT)
+    if summary:
+        lines.append(summary)
+    return "\n".join(lines)
+
+
+def _tool_result_notice(name: str, *, is_error: bool, content: str) -> str:
+    icon = "⚠️" if is_error else "✅"
+    status = "failed" if is_error else "done"
+    compact = _compact_text(content, TELEGRAM_NOTICE_LIMIT)
+    if not compact:
+        return f"{icon} {name} {status}"
+    return f"{icon} {name} {status}\n{compact}"
+
+
+def _arguments_summary(arguments: dict[str, Any], *, limit: int) -> str:
+    if not arguments:
+        return ""
+    preferred = ("url", "path", "command", "query", "pattern", "selector", "text")
+    keys = [key for key in preferred if key in arguments]
+    keys.extend(key for key in arguments if key not in keys)
+    lines: list[str] = []
+    remaining = limit
+    for key in keys:
+        if remaining <= 0:
+            break
+        value = _argument_value_text(arguments[key])
+        line = f"{key}: {value}"
+        if len(line) > remaining:
+            line = _compact_text(line, remaining)
+        lines.append(line)
+        remaining -= len(line) + 1
+    return "\n".join(lines)
+
+
+def _argument_value_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        return str(value)
+
+
+def _compact_text(text: str, limit: int = TELEGRAM_NOTICE_LIMIT) -> str:
+    cleaned = "\n".join(line.rstrip() for line in text.strip().splitlines()).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 18)].rstrip() + "\n… truncated"
+
+
+def _short_run_id(run_id: str) -> str:
+    if len(run_id) <= 18:
+        return run_id
+    return f"{run_id[:8]}…{run_id[-8:]}"
+
+
 async def _telegram_events_from_daemon_event(run_id: str, event: dict[str, Any]):
     data = _object_payload(event.get("data"))
     event_type = str(event.get("type", ""))
@@ -585,7 +664,7 @@ async def _telegram_events_from_daemon_event(run_id: str, event: dict[str, Any])
         yield TelegramText(str(data.get("text", "")))
         return
     if event_type == "tool_call":
-        yield TelegramToolNotice(f"Calling {data.get('name', 'tool')} with {_object_payload(data.get('arguments'))}")
+        yield TelegramToolNotice(_tool_call_notice(str(data.get("name", "tool")), _object_payload(data.get("arguments"))))
         return
     if event_type == "permission_request":
         call = ToolCall(
@@ -596,15 +675,20 @@ async def _telegram_events_from_daemon_event(run_id: str, event: dict[str, Any])
         yield TelegramPermissionPrompt(
             prompt_id=f"daemon:{run_id}:{call.id}",
             call=call,
-            text=f"Approve daemon run {run_id} tool {call.name} with {dict(call.arguments)}?",
+            text=_permission_notice(call.name, _object_payload(call.arguments), run_id=run_id),
         )
         return
     if event_type == "tool_result":
-        status = "error" if data.get("is_error") else "result"
-        yield TelegramToolNotice(f"{data.get('name', 'tool')} {status}: {data.get('content', '')}")
+        yield TelegramToolNotice(
+            _tool_result_notice(
+                str(data.get("name", "tool")),
+                is_error=bool(data.get("is_error")),
+                content=str(data.get("content", "")),
+            )
+        )
         return
     if event_type == "error":
-        yield TelegramError(str(data.get("message", "Daemon run failed.")))
+        yield TelegramError("⚠️ " + _compact_text(str(data.get("message", "Daemon run failed."))))
         return
     if event_type == "run_finished":
         yield TelegramDone(None)
