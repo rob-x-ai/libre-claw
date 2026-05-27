@@ -17,7 +17,7 @@ from libre_claw.core.automations import AutomationStore
 from libre_claw.core.runs import RunStore
 from libre_claw.core.session import ChatMessage
 from libre_claw.core.tools import BaseTool, ToolContext, ToolRegistry, ToolResult
-from libre_claw.daemon import DaemonClient, DaemonServer
+from libre_claw.daemon import DaemonClient, DaemonServer, _automation_telegram_message
 from libre_claw.providers.base import Done, LLMProvider, StreamEvent, TextDelta, ToolCallReady, ToolSchema, Usage
 
 
@@ -511,7 +511,49 @@ async def test_daemon_tick_delivers_telegram_automation_report(monkeypatch, tmp_
     assert sent[0][0] == 42
     assert "Scheduled: HN watch" in sent[0][1]
     assert "scheduled done" in sent[0][1]
+    assert provider.system_prompts[0] is not None
+    assert "Scheduled automation output policy" in provider.system_prompts[0]
+    assert "Do not write process narration" in provider.system_prompts[0]
     assert any(event.type == "automation_telegram_delivered" for event in events)
+
+
+async def test_daemon_failed_telegram_automation_hides_partial_scratch_summary(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "runs")
+    run = await store.create_run(
+        "Scheduled: HN watch",
+        kind="chat",
+        provider="openrouter",
+        model="deepseek/deepseek-v4-flash",
+        working_directory=tmp_path,
+        state="queued",
+    )
+    await store.finish_run(
+        run.run_id,
+        "failed",
+        plan="",
+        summary="Top 30 IDs: 1, 2, 3\n\nLet me batch-fetch these items.",
+        verification="Daemon run finished with state: failed\n",
+        diff="",
+        browser="",
+    )
+    failed_run = await store.load_run(run.run_id)
+    assert failed_run is not None
+    automation = await AutomationStore(tmp_path / "automations").create(
+        name="HN watch",
+        prompt="Run scheduled work",
+        schedule="every 1 minutes",
+        route="telegram",
+        provider="openrouter",
+        model="openrouter/auto",
+        telegram_chat_id=42,
+    )
+
+    message = _automation_telegram_message(automation, failed_run, tmp_path / "report.md", "failed")
+
+    assert "finished with state: failed" in message
+    assert "failed before Libre Claw produced a final clean report" in message
+    assert "Top 30 IDs" not in message
+    assert "Let me batch-fetch" not in message
 
 
 async def test_daemon_usage_endpoint_reports_provider_rollups(monkeypatch, tmp_path: Path) -> None:

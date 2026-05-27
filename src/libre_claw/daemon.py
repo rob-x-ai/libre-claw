@@ -70,6 +70,15 @@ TELEGRAM_DAEMON_PROMPT_EXTRA = (
     "tool steps such as 'let me fetch' or 'now I will check'. Use tools silently and "
     "send only the final useful result, unless you need approval or hit an error."
 )
+AUTOMATION_DAEMON_PROMPT_EXTRA = (
+    "Scheduled automation output policy: use tools silently and return only the final "
+    "requested report. Do not write process narration, raw API payloads, raw ID lists, "
+    "candidate scratch lists, or intermediate status updates into assistant text. If "
+    "you need to inspect data, call tools without explaining each step. For news-watch "
+    "tasks, emit only the curated bullets, or exactly 'No high-signal updates.' when "
+    "nothing qualifies. If a required source or provider fails, return one concise "
+    "failure sentence instead of a partial scratch transcript."
+)
 
 
 @dataclass
@@ -892,6 +901,8 @@ def _telegram_token_available(config: LibreClawConfig) -> bool:
 
 def _surface_prompt_extra(existing: str, surface: str) -> str:
     parts = [existing.strip()] if existing.strip() else []
+    if surface.startswith("automation:"):
+        parts.append(AUTOMATION_DAEMON_PROMPT_EXTRA)
     if surface.startswith("telegram") or surface == "automation:telegram":
         parts.append(TELEGRAM_DAEMON_PROMPT_EXTRA)
     return "\n\n".join(parts)
@@ -1084,11 +1095,17 @@ def _automation_telegram_message(
     report_path: Path,
     state: str,
 ) -> str:
-    summary = _read_artifact(run, "summary.md").strip()
-    if not summary:
-        summary = "No assistant summary was produced."
+    if state != "done":
+        summary = (
+            "Run failed before Libre Claw produced a final clean report. "
+            "Partial scratch output and tool events were saved locally for debugging."
+        )
     else:
-        summary = clean_final_answer_for_telegram(summary)
+        summary = _read_artifact(run, "summary.md").strip()
+        if not summary:
+            summary = "No assistant summary was produced."
+        else:
+            summary = clean_final_answer_for_telegram(summary)
     report_line = f"Report saved locally: {report_path}"
     header = f"Scheduled: {automation.name}\nRun {run.run_id} finished with state: {state}"
     return f"{header}\n\n{summary}\n\n{report_line}"
