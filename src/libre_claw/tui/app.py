@@ -3633,6 +3633,8 @@ def _skills_help_text() -> str:
             "/skills add [--user|--project] <name> [markdown]",
             "/skills edit [--user|--project] <name> <markdown>",
             "/skills delete [--user|--project] <name>",
+            "",
+            "Bundled skills are read-only. Add a user or project skill with the same workflow to customize behavior.",
         ]
     )
 

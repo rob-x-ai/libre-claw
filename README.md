@@ -939,6 +939,9 @@ skill title, description, or body.
 
 Libre Claw loads skills from:
 
+- Built-in bundled skills shipped with Libre Claw. The first bundled skill is
+  `hacker-news-brief`, which teaches the agent how to produce compact HN
+  digests without leaking raw API/tool logs into Telegram.
 - `~/.libre-claw/skills/*.md` for global user skills.
 - `<project>/.libre-claw/skills/*.md` for project skills.
 - `<project>/.libre-claw/skills/<name>/SKILL.md` and the same layout under the
@@ -958,6 +961,10 @@ Manage them from the TUI:
 The TUI, Telegram bridge, and background daemon all use the same skill loader.
 When the agent sees a repeatable workflow that is not covered, the system prompt
 asks it to suggest a `/skills add <name> ...` command at the end of the task.
+New skills use an AgentSkills-compatible `SKILL.md` shape with YAML
+frontmatter, `When to Use`, `Prerequisites`, `Procedure`, `Pitfalls`, and
+`Verification` sections. Bundled skills are read-only; customize behavior by
+adding a user or project skill with `/skills add`.
 
 ## File Explorer
 

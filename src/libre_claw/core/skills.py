@@ -11,8 +11,17 @@ from typing import Literal, ParamSpec, TypeVar
 from uuid import uuid4
 
 
-SkillScope = Literal["user", "project"]
+SkillScope = Literal["bundled", "user", "project"]
 MAX_SKILL_CHARS = 6000
+SCOPE_ORDER: dict[SkillScope, int] = {"bundled": 0, "user": 1, "project": 2}
+MUTABLE_SCOPES: set[SkillScope] = {"user", "project"}
+SKILL_AUTHORING_GUIDANCE = (
+    "Skill authoring guidance: when asked to create or improve a skill, use an "
+    "AgentSkills-compatible SKILL.md structure with YAML frontmatter (`name`, "
+    "`description`) and concise sections: When to Use, Prerequisites, Procedure, "
+    "Pitfalls, Verification. Keep secrets out, keep descriptions short, reference "
+    "Libre Claw tool names, and prefer deterministic scripts for fragile repeated work."
+)
 P = ParamSpec("P")
 T = TypeVar("T")
 
@@ -47,17 +56,20 @@ class Skill:
 
 
 class SkillStore:
-    """Loads user and project skills for prompt injection and slash commands."""
+    """Loads bundled, user, and project skills for prompt injection and slash commands."""
 
     def __init__(
         self,
         project_root: Path | str,
         *,
         user_root: Path | str | None = None,
+        include_bundled: bool = True,
     ) -> None:
         self.project_root = Path(project_root).expanduser().resolve()
         self.user_root = Path(user_root).expanduser() if user_root is not None else default_user_skills_path()
         self.project_skills_root = self.project_root / ".libre-claw" / "skills"
+        self.bundled_root = default_bundled_skills_path()
+        self.include_bundled = include_bundled
 
     async def list_skills(self) -> list[Skill]:
         return await _to_thread(self._list_skills_sync)
@@ -78,11 +90,12 @@ class SkillStore:
         return [skill.prompt_text for skill in self._relevant_skills_sync(prompt, limit)]
 
     def _list_skills_sync(self) -> list[Skill]:
-        skills = [
-            *self._load_scope("user", self.user_root),
-            *self._load_scope("project", self.project_skills_root),
-        ]
-        skills.sort(key=lambda skill: (skill.scope, skill.name))
+        skills = []
+        if self.include_bundled:
+            skills.extend(self._load_scope("bundled", self.bundled_root))
+        skills.extend(self._load_scope("user", self.user_root))
+        skills.extend(self._load_scope("project", self.project_skills_root))
+        skills.sort(key=lambda skill: (SCOPE_ORDER[skill.scope], skill.name))
         return skills
 
     def _load_scope(self, scope: SkillScope, root: Path) -> list[Skill]:
@@ -115,6 +128,8 @@ class SkillStore:
         existing = self._find_skill(name, scope=scope)
         if existing is None:
             raise SkillError(f"Skill not found: {name}")
+        if existing.scope not in MUTABLE_SCOPES:
+            raise SkillError(f"Bundled skill {existing.name} cannot be edited directly; add a user or project override.")
         _write_text(existing.path, _skill_content(existing.name, content))
         skill = _load_skill_file(existing.path, existing.scope, existing.name)
         if skill is None:
@@ -125,6 +140,8 @@ class SkillStore:
         existing = self._find_skill(name, scope=scope)
         if existing is None:
             return False
+        if existing.scope not in MUTABLE_SCOPES:
+            raise SkillError(f"Bundled skill {existing.name} cannot be deleted; add a user or project override.")
         existing.path.unlink()
         if existing.path.name == "SKILL.md":
             try:
@@ -144,21 +161,32 @@ class SkillStore:
         tokens = _tokens(prompt)
         if not tokens:
             return []
-        scored: list[tuple[int, Skill]] = []
+        scored: dict[str, tuple[int, Skill]] = {}
         for skill in self._list_skills_sync():
             haystack = _tokens(" ".join([skill.name, skill.title, skill.description, skill.content]))
             score = sum(3 if token in _tokens(skill.title + " " + skill.description) else 1 for token in tokens if token in haystack)
             if score > 0:
-                scored.append((score, skill))
-        scored.sort(key=lambda item: (-item[0], item[1].scope, item[1].name))
-        return [skill for _, skill in scored[: max(1, limit)]]
+                existing = scored.get(skill.name)
+                if existing is None or score > existing[0] or (
+                    score == existing[0] and SCOPE_ORDER[skill.scope] > SCOPE_ORDER[existing[1].scope]
+                ):
+                    scored[skill.name] = (score, skill)
+        ranked = list(scored.values())
+        ranked.sort(key=lambda item: (-item[0], -SCOPE_ORDER[item[1].scope], item[1].name))
+        return [skill for _, skill in ranked[: max(1, limit)]]
 
     def _root_for_scope(self, scope: SkillScope) -> Path:
+        if scope == "bundled":
+            raise SkillError("Bundled skills are read-only.")
         return self.user_root if scope == "user" else self.project_skills_root
 
 
 def default_user_skills_path() -> Path:
     return Path.home() / ".libre-claw" / "skills"
+
+
+def default_bundled_skills_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "skills"
 
 
 def normalize_skill_name(name: str) -> str:
@@ -216,13 +244,37 @@ def _skill_content(name: str, content: str) -> str:
     if not body:
         body = "\n".join(
             [
+                "---",
+                f"name: {name}",
+                f"description: Repeatable {name.replace('-', ' ')} workflow.",
+                "---",
+                "",
                 f"# {name.replace('-', ' ').title()}",
                 "",
                 "Use this skill when this workflow appears again.",
                 "",
-                "## Steps",
+                "## When to Use",
                 "",
-                "- Describe the repeatable procedure here.",
+                "- Describe the user requests or task patterns that should trigger this skill.",
+                "",
+                "## Prerequisites",
+                "",
+                "- List required tools, credentials, files, or APIs. Do not include secrets.",
+                "",
+                "## Procedure",
+                "",
+                "1. Inspect the relevant context first.",
+                "2. Use the smallest reliable set of tools.",
+                "3. Keep intermediate scratch output out of the final answer.",
+                "",
+                "## Pitfalls",
+                "",
+                "- Note common failure modes and what to avoid.",
+                "",
+                "## Verification",
+                "",
+                "- State how the agent should know the task is done.",
+                "",
             ]
         )
     if not body.endswith("\n"):
@@ -231,7 +283,7 @@ def _skill_content(name: str, content: str) -> str:
 
 
 def _tokens(text: str) -> set[str]:
-    return {token for token in re.findall(r"[a-z0-9][a-z0-9._-]{2,}", text.lower()) if token not in _STOPWORDS}
+    return {token for token in re.findall(r"[a-z0-9][a-z0-9._-]{1,}", text.lower()) if token not in _STOPWORDS}
 
 
 def _write_text(path: Path, text: str) -> None:
@@ -249,10 +301,27 @@ async def _to_thread(function: Callable[P, T], *args: P.args, **kwargs: P.kwargs
 
 _STOPWORDS = {
     "and",
+    "an",
+    "as",
+    "at",
+    "be",
+    "by",
+    "do",
     "for",
+    "if",
+    "in",
+    "is",
+    "it",
+    "me",
+    "my",
+    "no",
+    "of",
+    "on",
+    "or",
     "the",
     "this",
     "that",
+    "to",
     "with",
     "from",
     "into",

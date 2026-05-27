@@ -57,7 +57,9 @@ First shippable Libre Claw release from Kroonen AI Inc.
 - Skills system with global `~/.libre-claw/skills/`, project-local
   `.libre-claw/skills/`, AgentSkills-style `SKILL.md` discovery, `/skills`
   management commands, and relevant skill injection across TUI, Telegram, and
-  daemon agent runs.
+  daemon agent runs. Libre Claw now ships a bundled read-only
+  `hacker-news-brief` skill, and generated skills use an AgentSkills-compatible
+  template with prerequisites, procedure, pitfalls, and verification sections.
 - Soul/persona system with `~/.libre-claw/soul.md`, project
   `.libre-claw/soul.md`, and project-root `soul.md` injection across TUI,
   Telegram, and daemon agent runs, plus `/soul status|show|init|reload`.

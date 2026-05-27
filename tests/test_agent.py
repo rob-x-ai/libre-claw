@@ -194,6 +194,7 @@ async def test_agent_loads_relevant_skills_into_system_prompt() -> None:
     assert provider.received_system is not None
     assert "Relevant Libre Claw skills" in provider.received_system
     assert "Skill: Pytest Debug" in provider.received_system
+    assert "AgentSkills-compatible SKILL.md" in provider.received_system
     assert "/skills add <name>" in provider.received_system
 
 

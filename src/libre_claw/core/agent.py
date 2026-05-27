@@ -12,6 +12,7 @@ import structlog
 
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.session import Session, estimate_context_tokens, text_block, tool_result_block, tool_use_block
+from libre_claw.core.skills import SKILL_AUTHORING_GUIDANCE
 from libre_claw.core.tools import ToolCall, ToolRegistry, ToolRegistryError, ToolResult
 from libre_claw.providers.base import (
     Done,
@@ -289,6 +290,8 @@ class Agent:
         if self.session.summary:
             parts.append("Compacted prior conversation summary:\n" + self.session.summary)
         parts.append(
+            SKILL_AUTHORING_GUIDANCE
+            + "\n\n"
             "If this task reveals a repeatable workflow that is not captured by the relevant skills, "
             "briefly suggest a `/skills add <name> ...` command when you finish."
         )
