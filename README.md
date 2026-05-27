@@ -182,6 +182,8 @@ Libre Claw always sends OpenRouter app attribution as `Libre Claw` from
 categories. Users do not configure those product identity headers.
 Those two OpenRouter-recognized category slugs target the visible Productivity,
 Coding Agents, Personal Agents, and CLI Agents ranking areas.
+Use `https://libreclaw.dev/docs/` as the app documentation URL when OpenRouter
+shows a separate Docs field on the app profile.
 
 Useful OpenRouter commands:
 
@@ -553,9 +555,13 @@ OpenRouter-specific helpers:
   `HTTP-Referer: https://libreclaw.dev`, `X-OpenRouter-Title: Libre Claw`, and
   `X-OpenRouter-Categories: cli-agent,personal-agent`, targeting
   Productivity, Coding Agents, Personal Agents, and CLI Agents visibility.
+  OpenRouter's documented request attribution does not currently include a docs
+  URL header, so use https://libreclaw.dev/docs/ for any OpenRouter app-profile
+  Docs field.
 - `/usage openrouter presets` prints recommended `/model openrouter:...`
   commands for higher-value coding, goal, and scheduled-check workflows.
 - Analytics link: https://openrouter.ai/apps?url=https://libreclaw.dev
+- Docs link: https://libreclaw.dev/docs/
 
 Recommended OpenRouter presets in the TUI, Telegram model picker, and
 `/usage openrouter presets`:

@@ -12,6 +12,7 @@ from libre_claw.providers.base import Usage
 from libre_claw.providers.openrouter import (
     OPENROUTER_APP_TITLE,
     OPENROUTER_CATEGORIES,
+    OPENROUTER_DOCS_URL,
     OPENROUTER_HTTP_REFERER,
     OPENROUTER_RANKING_TARGETS,
 )
@@ -166,8 +167,11 @@ def openrouter_attribution_text() -> str:
             f"- X-OpenRouter-Title: {OPENROUTER_APP_TITLE}",
             f"- X-OpenRouter-Categories: {OPENROUTER_CATEGORIES}",
             f"- Ranking targets: {', '.join(OPENROUTER_RANKING_TARGETS)}",
+            f"- Docs: {OPENROUTER_DOCS_URL}",
             f"- Analytics: {OPENROUTER_ANALYTICS_URL}",
             "- Status: configured for Libre Claw app attribution on every OpenRouter request.",
+            "- Note: OpenRouter documents attribution headers for site, title, and categories; "
+            "add the docs URL in the OpenRouter app profile if their UI exposes it.",
         ]
     )
 
@@ -228,6 +232,7 @@ def openrouter_attribution_payload() -> dict[str, str]:
         "title": OPENROUTER_APP_TITLE,
         "categories": OPENROUTER_CATEGORIES,
         "ranking_targets": ", ".join(OPENROUTER_RANKING_TARGETS),
+        "docs_url": OPENROUTER_DOCS_URL,
         "analytics_url": OPENROUTER_ANALYTICS_URL,
     }
 
