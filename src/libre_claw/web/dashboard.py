@@ -973,17 +973,18 @@ _DASHBOARD_HTML = r"""<!doctype html>
         container.append(empty("No events yet."));
         return;
       }
+      const displayEvents = coalescedEvents(state.events);
       const filter = $("eventFilter").value;
-      const visible = state.events.slice().reverse().filter((event) => eventMatchesFilter(event, filter));
+      const visible = displayEvents.slice().reverse().filter((event) => eventMatchesFilter(event, filter));
       $("eventCount").textContent = filter
-        ? `${visible.length} of ${state.events.length} events`
-        : `${state.events.length} ${state.events.length === 1 ? "event" : "events"}`;
+        ? `${visible.length} of ${displayEvents.length} cards`
+        : `${displayEvents.length} ${displayEvents.length === 1 ? "card" : "cards"} from ${state.events.length} events`;
       if (!visible.length) {
-        $("lastEventLabel").textContent = eventTitle(state.events.at(-1));
+        $("lastEventLabel").textContent = eventTitle(displayEvents.at(-1));
         container.append(empty("No matching events."));
         return;
       }
-      $("lastEventLabel").textContent = eventTitle(state.events.at(-1));
+      $("lastEventLabel").textContent = eventTitle(displayEvents.at(-1));
       for (const event of visible) {
         const item = document.createElement("div");
         const data = event.data || {};
@@ -1002,6 +1003,30 @@ _DASHBOARD_HTML = r"""<!doctype html>
         item.append(head, body);
         container.append(item);
       }
+    }
+
+    function coalescedEvents(events) {
+      const output = [];
+      for (const event of events) {
+        const text = event.type === "assistant_delta" ? event.data?.text || "" : "";
+        const previous = output.at(-1);
+        if (text && previous?.type === "assistant_message") {
+          previous.data.text += text;
+          previous.event_id = `${previous.data.start_event_id}-${event.event_id}`;
+          previous.timestamp = event.timestamp;
+          continue;
+        }
+        if (text) {
+          output.push({
+            ...event,
+            type: "assistant_message",
+            data: { text, start_event_id: event.event_id },
+          });
+          continue;
+        }
+        output.push(event);
+      }
+      return output;
     }
 
     function eventMatchesFilter(event, filter) {
@@ -1031,7 +1056,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     function eventText(event) {
       const data = event.data || {};
-      if (event.type === "assistant_delta") return data.text || "";
+      if (event.type === "assistant_delta" || event.type === "assistant_message") return data.text || "";
       if (event.type === "user_message") return data.content || "";
       if (event.type === "tool_call") return `${data.name}\n${JSON.stringify(data.arguments || {}, null, 2)}`;
       if (event.type === "tool_result") return `${data.name} ${data.is_error ? "error" : "result"}\n${truncate(data.content, 2200)}`;
