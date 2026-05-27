@@ -142,6 +142,8 @@ class DaemonServer:
                 web.get("/automations", self.list_automations),
                 web.post("/automations", self.create_automation),
                 web.get("/automations/{automation_id}", self.get_automation),
+                web.patch("/automations/{automation_id}", self.update_automation),
+                web.put("/automations/{automation_id}", self.update_automation),
                 web.delete("/automations/{automation_id}", self.delete_automation),
                 web.post("/automations/{automation_id}/pause", self.pause_automation),
                 web.post("/automations/{automation_id}/resume", self.resume_automation),
@@ -404,6 +406,9 @@ class DaemonServer:
             return _json_error("Request body must be a JSON object.")
         try:
             route = cast(AutomationRoute, str(payload.get("route", "report")).lower())
+            status = str(payload.get("status", "active")).lower()
+            if status not in {"active", "paused"}:
+                return _json_error("Automation status must be active or paused.")
             telegram_chat_id = payload.get("telegram_chat_id")
             automation = await self.automation_store.create(
                 name=str(payload.get("name", "")).strip(),
@@ -413,12 +418,49 @@ class DaemonServer:
                 provider=str(payload.get("provider") or self.config.general.default_provider),
                 model=str(payload.get("model") or self.config.general.default_model),
                 working_directory=self.config.general.working_directory,
-                telegram_chat_id=telegram_chat_id if isinstance(telegram_chat_id, int) else None,
+                status=cast(Any, status),
+                telegram_chat_id=_optional_int(telegram_chat_id),
                 metadata={"created_by": "daemon_api"},
             )
-        except AutomationError as exc:
+        except (AutomationError, ValueError) as exc:
             return _json_error(str(exc))
         return web.json_response({"automation": _automation_payload(automation)}, status=201)
+
+    async def update_automation(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _json_error("Request body must be JSON.")
+        if not isinstance(payload, Mapping):
+            return _json_error("Request body must be a JSON object.")
+        automation_id = request.match_info["automation_id"]
+        try:
+            updates: dict[str, Any] = {}
+            if "name" in payload:
+                updates["name"] = str(payload["name"]).strip()
+            if "prompt" in payload:
+                updates["prompt"] = str(payload["prompt"]).strip()
+            if "schedule" in payload:
+                updates["schedule"] = str(payload["schedule"]).strip()
+            if "route" in payload:
+                updates["route"] = cast(AutomationRoute, str(payload["route"]).lower())
+            status = str(payload["status"]).lower() if "status" in payload else None
+            if status is not None and status not in {"active", "paused"}:
+                return _json_error("Automation status must be active or paused.")
+            if status is not None:
+                updates["status"] = status
+            if "provider" in payload:
+                updates["provider"] = str(payload["provider"]).strip()
+            if "model" in payload:
+                updates["model"] = str(payload["model"]).strip()
+            if "telegram_chat_id" in payload:
+                updates["telegram_chat_id"] = _optional_int(payload.get("telegram_chat_id"))
+            automation = await self.automation_store.update(automation_id, **updates)
+        except (AutomationError, ValueError) as exc:
+            return _json_error(str(exc))
+        if automation is None:
+            return _json_error("Unknown automation.", status=404)
+        return web.json_response({"automation": _automation_payload(automation)})
 
     async def pause_automation(self, request: web.Request) -> web.Response:
         automation = await self.automation_store.update_status(request.match_info["automation_id"], "paused")
@@ -880,6 +922,9 @@ class DaemonClient:
     async def get_automation(self, automation_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/automations/{automation_id}")
 
+    async def update_automation(self, automation_id: str, **payload: Any) -> dict[str, Any]:
+        return await self._request("PATCH", f"/automations/{automation_id}", json=payload)
+
     async def pause_automation(self, automation_id: str) -> dict[str, Any]:
         return await self._request("POST", f"/automations/{automation_id}/pause")
 
@@ -960,6 +1005,24 @@ def _positive_int(value: str | None, *, default: int, maximum: int) -> int:
     except ValueError:
         return default
     return max(1, min(maximum, parsed))
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError("Value must be an integer or empty.")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            return int(cleaned)
+        except ValueError as exc:
+            raise ValueError("Value must be an integer or empty.") from exc
+    raise ValueError("Value must be an integer or empty.")
 
 
 def _run_payload(run: RunRecord) -> dict[str, Any]:

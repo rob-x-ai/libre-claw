@@ -18,6 +18,7 @@ AutomationRoute = Literal["report", "tui", "telegram"]
 
 _ROUTES: set[str] = {"report", "tui", "telegram"}
 _STATUSES: set[str] = {"active", "paused"}
+_UNSET = object()
 _WEEKDAYS = {
     "sun": 0,
     "sunday": 0,
@@ -107,6 +108,33 @@ class AutomationStore:
     async def update_status(self, automation_id: str, status: AutomationStatus) -> AutomationRecord | None:
         async with self._lock:
             return await asyncio.to_thread(self._update_status_sync, automation_id, status)
+
+    async def update(
+        self,
+        automation_id: str,
+        *,
+        name: str | None = None,
+        prompt: str | None = None,
+        schedule: str | None = None,
+        route: AutomationRoute | None = None,
+        status: AutomationStatus | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        telegram_chat_id: int | None | object = _UNSET,
+    ) -> AutomationRecord | None:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._update_sync,
+                automation_id,
+                name,
+                prompt,
+                schedule,
+                route,
+                status,
+                provider,
+                model,
+                telegram_chat_id,
+            )
 
     async def delete(self, automation_id: str) -> bool:
         async with self._lock:
@@ -223,6 +251,65 @@ class AutomationStore:
             status=status,
             updated_at=_iso(now),
             next_run_at=record.next_run_at if status == "paused" else _iso(next_scheduled_at(record.schedule, after=now)),
+        )
+        _write_record(record.path, updated)
+        return updated
+
+    def _update_sync(
+        self,
+        automation_id: str,
+        name: str | None,
+        prompt: str | None,
+        schedule: str | None,
+        route: AutomationRoute | None,
+        status: AutomationStatus | None,
+        provider: str | None,
+        model: str | None,
+        telegram_chat_id: int | None | object,
+    ) -> AutomationRecord | None:
+        record = self._load_sync(automation_id)
+        if record is None:
+            return None
+
+        next_name = " ".join(name.split()) if name is not None else record.name
+        next_prompt = prompt.strip() if prompt is not None else record.prompt
+        next_schedule = " ".join(schedule.split()) if schedule is not None else record.schedule
+        next_route = route or record.route
+        next_status = status or record.status
+        next_provider = provider.strip() if provider is not None else record.provider
+        next_model = model.strip() if model is not None else record.model
+        next_chat_id = record.telegram_chat_id if telegram_chat_id is _UNSET else telegram_chat_id
+
+        if not next_name:
+            raise AutomationError("Automation name is required.")
+        if not next_prompt:
+            raise AutomationError("Automation prompt is required.")
+        if next_route not in _ROUTES:
+            raise AutomationError("Automation route must be report, tui, or telegram.")
+        if next_status not in _STATUSES:
+            raise AutomationError("Automation status must be active or paused.")
+        if next_chat_id is not None and not isinstance(next_chat_id, int):
+            raise AutomationError("Telegram chat id must be an integer or empty.")
+
+        now = _now_dt()
+        schedule_changed = next_schedule != record.schedule
+        status_changed = next_status != record.status
+        next_run_at = record.next_run_at
+        if schedule_changed or next_status == "active" and status_changed:
+            next_run_at = _iso(next_scheduled_at(next_schedule, after=now))
+
+        updated = _replace_record(
+            record,
+            name=next_name[:120],
+            prompt=next_prompt,
+            schedule=next_schedule,
+            route=next_route,
+            status=next_status,
+            provider=next_provider,
+            model=next_model,
+            telegram_chat_id=next_chat_id,
+            updated_at=_iso(now),
+            next_run_at=next_run_at,
         )
         _write_record(record.path, updated)
         return updated

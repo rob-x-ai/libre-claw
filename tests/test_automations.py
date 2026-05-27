@@ -80,6 +80,44 @@ async def test_automation_store_create_list_due_mark_and_delete(tmp_path: Path) 
     assert await store.load(record.automation_id) is None
 
 
+async def test_automation_store_updates_editable_fields(tmp_path: Path) -> None:
+    store = AutomationStore(tmp_path / "automations")
+    record = await store.create(
+        name="HN watch",
+        prompt="Old prompt",
+        schedule="daily 09:00",
+        route="report",
+        provider="openrouter",
+        model="openrouter/auto",
+    )
+
+    updated = await store.update(
+        record.automation_id,
+        name="HN watch updated",
+        prompt="New prompt",
+        schedule="every 45 minutes",
+        route="telegram",
+        status="paused",
+        provider="ollama",
+        model="kimi-k2.6:cloud",
+        telegram_chat_id=123,
+    )
+    loaded = await store.load(record.automation_id)
+
+    assert updated is not None
+    assert loaded is not None
+    assert loaded.name == "HN watch updated"
+    assert loaded.prompt == "New prompt"
+    assert loaded.schedule == "every 45 minutes"
+    assert loaded.route == "telegram"
+    assert loaded.status == "paused"
+    assert loaded.provider == "ollama"
+    assert loaded.model == "kimi-k2.6:cloud"
+    assert loaded.telegram_chat_id == 123
+    assert loaded.created_at == record.created_at
+    assert loaded.next_run_at != record.next_run_at
+
+
 def test_automation_examples_include_required_workflows() -> None:
     examples = {name for name, _schedule, _prompt in automation_examples()}
 

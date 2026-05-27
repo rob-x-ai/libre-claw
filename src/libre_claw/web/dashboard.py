@@ -460,7 +460,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           <div class="body timeline" id="timeline"></div>
         </section>
         <section>
-          <div class="section-head"><h2>Automations</h2></div>
+          <div class="section-head"><h2 id="automationFormTitle">Create Schedule</h2></div>
           <div class="body stack">
             <form id="automationForm" class="stack">
               <div class="grid-2">
@@ -472,7 +472,15 @@ _DASHBOARD_HTML = r"""<!doctype html>
                 <label>Route<select id="automationRoute"><option value="report">report</option><option value="telegram">telegram</option><option value="tui">tui</option></select></label>
                 <label>Telegram chat id<input id="automationChat" inputmode="numeric" placeholder="optional"></label>
               </div>
-              <button type="submit">Create Schedule</button>
+              <div class="grid-2">
+                <label>Status<select id="automationStatus"><option value="active">active</option><option value="paused">paused</option></select></label>
+                <label>Provider<input id="automationProvider" placeholder="default"></label>
+              </div>
+              <label>Model<input id="automationModel" placeholder="default"></label>
+              <div class="row">
+                <button id="automationSubmit" type="submit">Create Schedule</button>
+                <button id="cancelAutomationEdit" class="ghost" type="button" hidden>Cancel Edit</button>
+              </div>
             </form>
             <div id="automations" class="stack"></div>
           </div>
@@ -489,7 +497,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     </footer>
   </div>
   <script>
-    const state = { selectedRunId: "", events: [] };
+    const state = { selectedRunId: "", events: [], editingAutomationId: "" };
     const $ = (id) => document.getElementById(id);
 
     function setNotice(text, error = false) {
@@ -682,9 +690,13 @@ _DASHBOARD_HTML = r"""<!doctype html>
         title.textContent = automation.name;
         const meta = document.createElement("div");
         meta.className = "tiny";
-        meta.textContent = `${automation.schedule} | ${automation.route} | next ${formatTime(automation.next_run_at)}`;
+        const model = [automation.provider, automation.model].filter(Boolean).join(":") || "default model";
+        meta.textContent = `${automation.schedule} | ${automation.route} | ${model} | next ${formatTime(automation.next_run_at)}`;
         const row = document.createElement("div");
         row.className = "row";
+        const edit = document.createElement("button");
+        edit.textContent = "Edit";
+        edit.addEventListener("click", () => editAutomation(automation));
         const toggle = document.createElement("button");
         toggle.textContent = automation.status === "active" ? "Pause" : "Resume";
         toggle.addEventListener("click", () => toggleAutomation(automation));
@@ -692,10 +704,49 @@ _DASHBOARD_HTML = r"""<!doctype html>
         del.textContent = "Delete";
         del.className = "danger";
         del.addEventListener("click", () => deleteAutomation(automation.automation_id));
-        row.append(pill(automation.status), toggle, del);
+        row.append(pill(automation.status), edit, toggle, del);
         box.append(title, meta, row);
         container.append(box);
       }
+    }
+
+    function editAutomation(automation) {
+      state.editingAutomationId = automation.automation_id;
+      $("automationFormTitle").textContent = "Edit Schedule";
+      $("automationSubmit").textContent = "Save Changes";
+      $("cancelAutomationEdit").hidden = false;
+      $("automationName").value = automation.name || "";
+      $("automationSchedule").value = automation.schedule || "";
+      $("automationPrompt").value = automation.prompt || "";
+      $("automationRoute").value = automation.route || "report";
+      $("automationChat").value = automation.telegram_chat_id ?? "";
+      $("automationStatus").value = automation.status || "active";
+      $("automationProvider").value = automation.provider || "";
+      $("automationModel").value = automation.model || "";
+      $("automationName").focus();
+    }
+
+    function resetAutomationForm(form) {
+      state.editingAutomationId = "";
+      $("automationFormTitle").textContent = "Create Schedule";
+      $("automationSubmit").textContent = "Create Schedule";
+      $("cancelAutomationEdit").hidden = true;
+      form.reset();
+      $("automationStatus").value = "active";
+    }
+
+    function automationFormPayload() {
+      const chat = $("automationChat").value.trim();
+      return {
+        name: $("automationName").value,
+        schedule: $("automationSchedule").value,
+        prompt: $("automationPrompt").value,
+        route: $("automationRoute").value,
+        status: $("automationStatus").value,
+        provider: $("automationProvider").value,
+        model: $("automationModel").value,
+        telegram_chat_id: chat || null,
+      };
     }
 
     async function toggleAutomation(automation) {
@@ -733,23 +784,20 @@ _DASHBOARD_HTML = r"""<!doctype html>
 
     $("automationForm").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const chat = $("automationChat").value.trim();
-      const body = {
-        name: $("automationName").value,
-        schedule: $("automationSchedule").value,
-        prompt: $("automationPrompt").value,
-        route: $("automationRoute").value,
-      };
-      if (chat) body.telegram_chat_id = Number(chat);
-      const payload = await request("/automations", { method: "POST", body: JSON.stringify(body) });
-      setNotice(`Schedule ${payload.automation.automation_id} created.`);
-      event.target.reset();
+      const body = automationFormPayload();
+      const editingId = state.editingAutomationId;
+      const path = editingId ? `/automations/${editingId}` : "/automations";
+      const method = editingId ? "PUT" : "POST";
+      const payload = await request(path, { method, body: JSON.stringify(body) });
+      setNotice(`Schedule ${payload.automation.automation_id} ${editingId ? "updated" : "created"}.`);
+      resetAutomationForm(event.target);
       await refreshAutomations();
     });
 
     $("refreshRuns").addEventListener("click", refreshRuns);
     $("refreshAll").addEventListener("click", refreshAll);
     $("focusRunInput").addEventListener("click", () => $("runMessage").focus());
+    $("cancelAutomationEdit").addEventListener("click", () => resetAutomationForm($("automationForm")));
     $("cancelRun").addEventListener("click", async () => {
       if (!state.selectedRunId) return;
       await request(`/runs/${state.selectedRunId}/cancel`, { method: "POST" });

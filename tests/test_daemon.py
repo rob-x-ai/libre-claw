@@ -219,6 +219,8 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     assert "/automations" in response.text
     assert "/usage?limit=250" in response.text
     assert "/assets/favicon.ico" in response.text
+    assert "Edit Schedule" in response.text
+    assert 'method = editingId ? "PUT" : "POST"' in response.text
 
 
 async def test_daemon_serves_packaged_dashboard_logo(monkeypatch, tmp_path: Path) -> None:
@@ -444,6 +446,23 @@ async def test_daemon_automation_api_crud(monkeypatch, tmp_path: Path) -> None:
     paused = _response_payload(
         await server.pause_automation(RequestStub(match_info={"automation_id": automation_id}))  # type: ignore[arg-type]
     )
+    updated = _response_payload(
+        await server.update_automation(  # type: ignore[arg-type]
+            RequestStub(
+                match_info={"automation_id": automation_id},
+                body={
+                    "name": "Daily health edited",
+                    "prompt": "Check repo health and CI",
+                    "schedule": "every 45 minutes",
+                    "route": "telegram",
+                    "status": "paused",
+                    "provider": "ollama",
+                    "model": "kimi-k2.6:cloud",
+                    "telegram_chat_id": "12345",
+                },
+            )
+        )
+    )
     resumed = _response_payload(
         await server.resume_automation(RequestStub(match_info={"automation_id": automation_id}))  # type: ignore[arg-type]
     )
@@ -454,6 +473,13 @@ async def test_daemon_automation_api_crud(monkeypatch, tmp_path: Path) -> None:
     assert created.status == 201
     assert listed["automations"][0]["automation_id"] == automation_id
     assert paused["automation"]["status"] == "paused"
+    assert updated["automation"]["name"] == "Daily health edited"
+    assert updated["automation"]["prompt"] == "Check repo health and CI"
+    assert updated["automation"]["schedule"] == "every 45 minutes"
+    assert updated["automation"]["route"] == "telegram"
+    assert updated["automation"]["provider"] == "ollama"
+    assert updated["automation"]["model"] == "kimi-k2.6:cloud"
+    assert updated["automation"]["telegram_chat_id"] == 12345
     assert resumed["automation"]["status"] == "active"
     assert deleted["deleted"] is True
 
