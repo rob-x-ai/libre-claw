@@ -91,11 +91,12 @@ class ApiKeyStore:
         if not cleaned:
             raise KeyStorageError("API key must not be empty.")
 
-        if self._set_keyring_password(account, cleaned):
-            return "keyring"
-
+        stored_in_keyring = self._set_keyring_password(account, cleaned)
+        # Keep a local encrypted mirror even when Keychain works. GUI, launchd,
+        # screen, and sandboxed shells can disagree about Keychain visibility; a
+        # verified fallback prevents credentials from disappearing across restarts.
         self._encrypted_file.set(account, cleaned)
-        return "encrypted_file"
+        return "keyring" if stored_in_keyring else "encrypted_file"
 
     def delete_api_key(self, provider_name: str) -> bool:
         account = _account_name(provider_name)

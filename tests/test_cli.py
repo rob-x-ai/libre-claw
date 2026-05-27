@@ -12,8 +12,9 @@ from libre_claw.cli import main
 
 
 class FakeLookup:
-    def __init__(self, source: str) -> None:
+    def __init__(self, source: str, value: str | None = None) -> None:
         self.source = source
+        self.value = value
 
 
 class FakeKeyStore:
@@ -25,7 +26,8 @@ class FakeKeyStore:
 
     def get_api_key(self, provider: str, env_var: str | None = None) -> FakeLookup:
         del env_var
-        return FakeLookup("encrypted_file" if provider in FakeKeyStore.stored else "missing")
+        value = FakeKeyStore.stored.get(provider)
+        return FakeLookup("encrypted_file" if value is not None else "missing", value)
 
     def key_status(self, providers: Iterable[tuple[str, str | None]]) -> dict[str, str]:
         return {provider: self.get_api_key(provider, env).source for provider, env in providers}
@@ -102,6 +104,38 @@ def test_cli_telegram_setup_stores_token_and_config(monkeypatch, tmp_path) -> No
     assert "use_daemon = true" in config_text
     assert "allowed_user_ids = [123]" in config_text
     assert 'default_provider = "openrouter"' in config_text
+
+
+def test_cli_telegram_setup_fails_when_key_cannot_be_verified(monkeypatch, tmp_path) -> None:
+    class BrokenKeyStore:
+        def set_api_key(self, provider: str, api_key: str) -> str:
+            del provider, api_key
+            return "keyring"
+
+        def get_api_key(self, provider: str, env_var: str | None = None) -> FakeLookup:
+            del provider, env_var
+            return FakeLookup("missing", None)
+
+    runner = CliRunner()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("libre_claw.cli.ApiKeyStore.from_config", lambda config: BrokenKeyStore())
+
+    result = runner.invoke(
+        main,
+        [
+            "telegram",
+            "setup",
+            "--bot-token",
+            "secret-token",
+            "--user-id",
+            "123",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Could not verify the stored telegram key" in result.output
+    assert "secret-token" not in result.output
 
 
 def test_cli_telegram_allow_appends_user_id(monkeypatch, tmp_path) -> None:

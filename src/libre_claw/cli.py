@@ -154,7 +154,7 @@ def telegram_setup_command(
 
     store = ApiKeyStore.from_config(config.auth)
     try:
-        location = store.set_api_key("telegram", token)
+        location = _set_api_key_verified(store, "telegram", token)
         path = configure_telegram(
             tuple(user_ids),
             enabled=True,
@@ -359,10 +359,23 @@ def auth_set_key(ctx: click.Context, provider: str, api_key: str | None) -> None
     value = api_key or click.prompt(f"{provider} API key", hide_input=True, confirmation_prompt=True)
     store = ApiKeyStore.from_config(config.auth)
     try:
-        location = store.set_api_key(provider, value)
+        location = _set_api_key_verified(store, provider, value)
     except KeyStorageError as exc:
         _raise_click_error(str(exc))
     click.echo(f"Stored {provider} API key in {location.replace('_', ' ')}.")
+
+
+def _set_api_key_verified(store: ApiKeyStore, provider: str, value: str) -> str:
+    """Store a provider key and prove a new process can read it back."""
+    location = store.set_api_key(provider, value)
+    lookup = store.get_api_key(provider)
+    if lookup.value != value.strip():
+        msg = (
+            f"Could not verify the stored {provider} key. Libre Claw did not persist "
+            "the credential, so restarting the app would lose access."
+        )
+        raise KeyStorageError(msg)
+    return location
 
 
 @auth_command.command("delete-key")

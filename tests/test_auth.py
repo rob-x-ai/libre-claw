@@ -66,11 +66,13 @@ def test_api_key_store_prefers_environment(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_api_key_store_uses_keyring_when_available(tmp_path: Path) -> None:
+    path = tmp_path / ".keys"
+    fallback = encrypted_file(path)
     store = ApiKeyStore(
         service_name="libre-claw",
-        fallback_path=tmp_path / ".keys",
+        fallback_path=path,
         keyring_backend=FakeKeyring(),
-        encrypted_file=encrypted_file(tmp_path / ".keys"),
+        encrypted_file=fallback,
     )
 
     location = store.set_api_key("openai", "stored-key")
@@ -79,6 +81,7 @@ def test_api_key_store_uses_keyring_when_available(tmp_path: Path) -> None:
     assert location == "keyring"
     assert lookup.value == "stored-key"
     assert lookup.source == "keyring"
+    assert fallback.get("openai") == "stored-key"
 
 
 def test_api_key_store_falls_back_to_encrypted_file(tmp_path: Path) -> None:
