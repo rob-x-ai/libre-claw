@@ -212,11 +212,13 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     response = await server.dashboard(RequestStub())  # type: ignore[arg-type]
 
     assert response.content_type == "text/html"
+    assert response.headers["Cache-Control"] == "no-store"
     assert "Libre Claw Dashboard" in response.text
     assert "fetch(path" in response.text
     assert "/runs" in response.text
     assert "/automations" in response.text
     assert "/usage?limit=250" in response.text
+    assert "/assets/favicon.ico" in response.text
 
 
 async def test_daemon_serves_packaged_dashboard_logo(monkeypatch, tmp_path: Path) -> None:
@@ -230,10 +232,19 @@ async def test_daemon_serves_packaged_dashboard_logo(monkeypatch, tmp_path: Path
     )
 
     response = await server.dashboard_asset(RequestStub(match_info={"name": "logo-dark.jpg"}))  # type: ignore[arg-type]
+    favicon = await server.dashboard_asset(RequestStub(match_info={"name": "favicon.ico"}))  # type: ignore[arg-type]
+    favicon_png = await server.dashboard_asset(  # type: ignore[arg-type]
+        RequestStub(match_info={"name": "favicon-32x32.png"})
+    )
     missing = await server.dashboard_asset(RequestStub(match_info={"name": "old-logo.svg"}))  # type: ignore[arg-type]
 
     assert response.content_type == "image/jpeg"
+    assert response.headers["Cache-Control"] == "no-store"
     assert response.body.startswith(b"\xff\xd8")
+    assert favicon.content_type == "image/vnd.microsoft.icon"
+    assert favicon.body.startswith(b"\x00\x00\x01\x00")
+    assert favicon_png.content_type == "image/png"
+    assert favicon_png.body.startswith(b"\x89PNG")
     assert missing.status == 404
 
 

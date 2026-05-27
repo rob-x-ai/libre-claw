@@ -80,6 +80,13 @@ AUTOMATION_DAEMON_PROMPT_EXTRA = (
     "nothing qualifies. If a required source or provider fails, return one concise "
     "failure sentence instead of a partial scratch transcript."
 )
+DASHBOARD_ASSET_TYPES = {
+    "favicon.ico": "image/vnd.microsoft.icon",
+    "favicon-32x32.png": "image/png",
+    "favicon.png": "image/png",
+    "logo-dark.jpg": "image/jpeg",
+    "logo-light.jpg": "image/jpeg",
+}
 
 
 @dataclass
@@ -146,14 +153,23 @@ class DaemonServer:
         return app
 
     async def dashboard(self, _request: web.Request) -> web.Response:
-        return web.Response(text=dashboard_html(), content_type="text/html")
+        return web.Response(
+            text=dashboard_html(),
+            content_type="text/html",
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def dashboard_asset(self, request: web.Request) -> web.Response:
         name = request.match_info["name"]
-        if name not in {"logo-dark.jpg", "logo-light.jpg"}:
+        content_type = DASHBOARD_ASSET_TYPES.get(name)
+        if content_type is None:
             return _json_error("Asset not found.", status=404)
         payload = files("libre_claw.web.assets").joinpath(name).read_bytes()
-        return web.Response(body=payload, content_type="image/jpeg")
+        return web.Response(
+            body=payload,
+            content_type=content_type,
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def run(self, host: str | None = None, port: int | None = None) -> None:
         runner = web.AppRunner(self.app())

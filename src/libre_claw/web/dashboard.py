@@ -15,6 +15,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Libre Claw Dashboard</title>
+  <link rel="icon" href="/assets/favicon.ico?v=20260527" sizes="any">
+  <link rel="shortcut icon" href="/assets/favicon.ico?v=20260527">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png?v=20260527">
+  <link rel="icon" type="image/png" sizes="256x256" href="/assets/favicon.png?v=20260527">
   <style>
     :root {
       color-scheme: dark;
@@ -400,7 +404,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
   <div class="app">
     <header class="topbar">
       <div class="brand">
-        <img class="logo" src="/assets/logo-dark.jpg" alt="" width="34" height="34" aria-hidden="true">
+        <img class="logo" src="/assets/logo-dark.jpg?v=20260527" alt="" width="34" height="34" aria-hidden="true">
         <div>
           <div>Libre Claw Dashboard</div>
           <small>Local control plane for daemon runs, approvals, schedules, and usage.</small>
