@@ -178,8 +178,8 @@ Inside the TUI:
 ```
 
 Libre Claw always sends OpenRouter app attribution as `Libre Claw` from
-`https://libreclaw.dev`, including the `cli-agent` category. Users do not configure
-those product identity headers.
+`https://libreclaw.dev`, including the `cli-agent` and `personal-agent`
+categories. Users do not configure those product identity headers.
 
 Useful OpenRouter commands:
 
@@ -549,7 +549,7 @@ OpenRouter-specific helpers:
 
 - `/usage openrouter attribution` verifies Libre Claw is sending
   `HTTP-Referer: https://libreclaw.dev`, `X-OpenRouter-Title: Libre Claw`, and
-  `X-OpenRouter-Categories: cli-agent`.
+  `X-OpenRouter-Categories: cli-agent,personal-agent`.
 - `/usage openrouter presets` prints recommended `/model openrouter:...`
   commands for higher-value coding, goal, and scheduled-check workflows.
 - Analytics link: https://openrouter.ai/apps?url=https://libreclaw.dev

@@ -68,7 +68,7 @@ def test_openrouter_provider_always_uses_libre_claw_attribution() -> None:
 
     assert provider.default_headers["HTTP-Referer"] == "https://libreclaw.dev"
     assert provider.default_headers["X-OpenRouter-Title"] == "Libre Claw"
-    assert provider.default_headers["X-OpenRouter-Categories"] == "cli-agent"
+    assert provider.default_headers["X-OpenRouter-Categories"] == "cli-agent,personal-agent"
 
 
 async def test_openrouter_provider_requests_usage_accounting() -> None:

@@ -214,7 +214,7 @@ def test_create_provider_supports_openrouter(monkeypatch, tmp_path: Path) -> Non
     assert provider.default_headers == {
         "HTTP-Referer": "https://libreclaw.dev",
         "X-OpenRouter-Title": "Libre Claw",
-        "X-OpenRouter-Categories": "cli-agent",
+        "X-OpenRouter-Categories": "cli-agent,personal-agent",
     }
 
 
