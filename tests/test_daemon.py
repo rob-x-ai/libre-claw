@@ -388,6 +388,51 @@ async def test_daemon_tick_runs_due_automation_and_writes_report(monkeypatch, tm
     assert any(event.type == "automation_triggered" for event in events)
 
 
+async def test_daemon_tick_delivers_telegram_automation_report(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    sent: list[tuple[int, str]] = []
+
+    async def fake_telegram_sender(_config: object, chat_id: int, text: str) -> None:
+        sent.append((chat_id, text))
+
+    provider = ScriptedProvider([[TextDelta("scheduled done"), Done(Usage(input_tokens=2, output_tokens=3))]])
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: provider,
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+        telegram_sender=fake_telegram_sender,
+    )
+    server.automation_store = AutomationStore(tmp_path / "automations")
+    automation = await server.automation_store.create(
+        name="HN watch",
+        prompt="Run scheduled work",
+        schedule="every 1 minutes",
+        route="telegram",
+        provider="openrouter",
+        model="openrouter/auto",
+        telegram_chat_id=42,
+    )
+    past_payload = automation.path.read_text(encoding="utf-8").replace(
+        automation.next_run_at,
+        "2000-01-01T00:00:00+00:00",
+    )
+    automation.path.write_text(past_payload, encoding="utf-8")
+
+    await server._tick_automations()
+    runs = await server.run_store.list_runs(limit=1)
+    run = runs[0]
+    await _wait_for_state(server, run.run_id, "done")
+    events = await server.run_store.load_events(run.run_id)
+
+    assert len(sent) == 1
+    assert sent[0][0] == 42
+    assert "Scheduled: HN watch" in sent[0][1]
+    assert "scheduled done" in sent[0][1]
+    assert any(event.type == "automation_telegram_delivered" for event in events)
+
+
 async def test_daemon_usage_endpoint_reports_provider_rollups(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

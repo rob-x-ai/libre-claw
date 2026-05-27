@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -12,6 +12,7 @@ import httpx
 from aiohttp import web
 
 from libre_claw.config import GeneralConfig, LibreClawConfig
+from libre_claw.auth.api_keys import ApiKeyStore
 from libre_claw.core import (
     Agent,
     AgentDone,
@@ -56,6 +57,7 @@ from libre_claw.tools_builtin import create_builtin_registry
 
 ProviderFactory = Callable[[LibreClawConfig], LLMProvider]
 RegistryFactory = Callable[[LibreClawConfig, MemoryStore], ToolRegistry]
+TelegramSender = Callable[[LibreClawConfig, int, str], Awaitable[None]]
 RunKind = Literal["chat", "goal"]
 TELEGRAM_DAEMON_PROMPT_EXTRA = (
     "Telegram output policy: keep mobile replies compact. Do not narrate intermediate "
@@ -81,11 +83,13 @@ class DaemonServer:
         run_store: RunStore | None = None,
         provider_factory: ProviderFactory = create_provider,
         registry_factory: RegistryFactory = create_builtin_registry,
+        telegram_sender: TelegramSender | None = None,
     ) -> None:
         self.config = config
         self.run_store = run_store or RunStore()
         self.provider_factory = provider_factory
         self.registry_factory = registry_factory
+        self.telegram_sender = telegram_sender or _send_telegram_message
         self.memory_store = MemoryStore()
         self.automation_store = AutomationStore(config.automations.root)
         self.active_runs: dict[str, ActiveRun] = {}
@@ -551,6 +555,30 @@ class DaemonServer:
                 "error",
                 {"message": f"Could not write automation report: {exc}"},
             )
+        if automation.route == "telegram" and automation.telegram_chat_id is not None:
+            try:
+                await self.telegram_sender(
+                    config,
+                    automation.telegram_chat_id,
+                    _automation_telegram_message(automation, run, report_path, state),
+                )
+                await self.run_store.append_event(
+                    run.run_id,
+                    "automation_telegram_delivered",
+                    {
+                        "automation_id": automation.automation_id,
+                        "telegram_chat_id": automation.telegram_chat_id,
+                    },
+                )
+            except Exception as exc:
+                await self.run_store.append_event(
+                    run.run_id,
+                    "automation_telegram_error",
+                    {
+                        "automation_id": automation.automation_id,
+                        "message": str(exc),
+                    },
+                )
         await self.run_store.update_state(run.run_id, state)
         await self.run_store.append_event(run.run_id, "run_finished", {"state": state})
 
@@ -966,3 +994,47 @@ def _write_automation_report(automation: AutomationRecord, run: RunRecord, repor
     tmp_path = report_path.with_name(f".{report_path.name}.tmp")
     tmp_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     tmp_path.replace(report_path)
+
+
+def _automation_telegram_message(
+    automation: AutomationRecord,
+    run: RunRecord,
+    report_path: Path,
+    state: str,
+) -> str:
+    summary = _read_artifact(run, "summary.md").strip()
+    if not summary:
+        summary = "No assistant summary was produced."
+    report_line = f"Report saved locally: {report_path}"
+    header = f"Scheduled: {automation.name}\nRun {run.run_id} finished with state: {state}"
+    return f"{header}\n\n{summary}\n\n{report_line}"
+
+
+async def _send_telegram_message(config: LibreClawConfig, chat_id: int, text: str) -> None:
+    token = ApiKeyStore.from_config(config.auth).get_api_key("telegram", config.telegram.bot_token_env).value
+    if not token:
+        raise RuntimeError("Telegram bot token is missing.")
+    try:
+        from telegram import Bot
+    except ImportError as exc:  # pragma: no cover - dependency is present in supported installs.
+        raise RuntimeError("python-telegram-bot is not installed.") from exc
+
+    async with Bot(token=token) as bot:
+        for chunk in _telegram_text_chunks(text, config.telegram.max_message_length):
+            await bot.send_message(chat_id=chat_id, text=chunk, disable_web_page_preview=True)
+
+
+def _telegram_text_chunks(text: str, max_message_length: int) -> list[str]:
+    limit = max(1, min(3900, max_message_length, 4096))
+    remaining = text.strip() or "Done."
+    chunks: list[str] = []
+    while len(remaining) > limit:
+        split_at = remaining.rfind("\n", 0, limit)
+        if split_at < limit // 2:
+            split_at = remaining.rfind(" ", 0, limit)
+        if split_at < limit // 2:
+            split_at = limit
+        chunks.append(remaining[:split_at].rstrip())
+        remaining = remaining[split_at:].lstrip()
+    chunks.append(remaining)
+    return chunks
