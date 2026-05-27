@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Sequence
 from contextlib import suppress
@@ -24,9 +25,15 @@ from libre_claw.telegram.bridge import (
     TelegramText,
     TelegramToolNotice,
 )
+from libre_claw.telegram.formatting import (
+    TELEGRAM_HARD_MESSAGE_LIMIT,
+    TELEGRAM_SAFE_MESSAGE_LIMIT,
+    TelegramFormattedChunk,
+    plain_text_chunks,
+    telegram_html_chunks,
+    telegram_message_limit,
+)
 
-TELEGRAM_HARD_MESSAGE_LIMIT = 4096
-TELEGRAM_SAFE_MESSAGE_LIMIT = 3900
 TELEGRAM_CONTINUED_SUFFIX = "\n\n...[continued]"
 TELEGRAM_TYPING_INTERVAL_SECONDS = 4.0
 TELEGRAM_TOOL_LOG_UPDATE_INTERVAL_SECONDS = 8.0
@@ -319,6 +326,7 @@ class TelegramHandlers:
                                     update.effective_message,
                                     accumulated,
                                     self.bridge.config.telegram.max_message_length,
+                                    clean_final=True,
                                 )
                             else:
                                 await _finish_text_response(
@@ -425,6 +433,7 @@ class TelegramHandlers:
                         chat_id,
                         accumulated or "Heartbeat done.",
                         self.bridge.config.telegram.max_message_length,
+                        clean_final=True,
                     )
                     continue
                 if isinstance(event, TelegramError):
@@ -588,7 +597,7 @@ def _stream_preview(text: str, configured_limit: int) -> str:
 
 
 def _telegram_message_limit(configured_limit: int) -> int:
-    return max(1, min(configured_limit, TELEGRAM_HARD_MESSAGE_LIMIT, TELEGRAM_SAFE_MESSAGE_LIMIT))
+    return telegram_message_limit(configured_limit)
 
 
 def _base36(value: int) -> str:
@@ -678,6 +687,24 @@ async def _edit_text_preview(message: Any, text: str, configured_limit: int) -> 
         raise
 
 
+async def _edit_formatted_text(message: Any, chunk: TelegramFormattedChunk) -> None:
+    try:
+        await message.edit_text(
+            chunk.text,
+            parse_mode=chunk.parse_mode,
+            disable_web_page_preview=True,
+        )
+    except TypeError:
+        await message.edit_text(chunk.text)
+    except Exception as exc:
+        if _is_telegram_error(exc, "message is not modified"):
+            return
+        if chunk.parse_mode is not None and _is_telegram_parse_error(exc):
+            await message.edit_text(_strip_html_tags(chunk.text), disable_web_page_preview=True)
+            return
+        raise
+
+
 async def _safe_edit_text_preview(message: Any, text: str, configured_limit: int) -> bool:
     try:
         await _edit_text_preview(message, text, configured_limit)
@@ -689,11 +716,11 @@ async def _safe_edit_text_preview(message: Any, text: str, configured_limit: int
 
 
 async def _finish_text_response(message: Any, reply_to: Any, text: str, configured_limit: int) -> None:
-    chunks = _message_chunks(text, configured_limit)
-    first = chunks[0] if chunks else " "
-    await _edit_text_preview(message, first, configured_limit)
+    chunks = telegram_html_chunks(text, configured_limit, clean_final=True)
+    first = chunks[0] if chunks else TelegramFormattedChunk(" ")
+    await _edit_formatted_text(message, first)
     for chunk in chunks[1:]:
-        await _reply_text_chunks(reply_to, chunk, configured_limit)
+        await _reply_formatted_chunk(reply_to, chunk)
 
 
 async def _reply_text_chunks(
@@ -702,16 +729,35 @@ async def _reply_text_chunks(
     configured_limit: int,
     *,
     reply_markup: Any | None = None,
+    clean_final: bool = False,
+    render_html: bool = True,
 ) -> None:
-    chunks = _message_chunks(text, configured_limit)
+    chunks = (
+        telegram_html_chunks(text, configured_limit, clean_final=clean_final)
+        if render_html
+        else [TelegramFormattedChunk(chunk, parse_mode=None) for chunk in _message_chunks(text, configured_limit)]
+    )
     for index, chunk in enumerate(chunks):
         markup = reply_markup if index == len(chunks) - 1 else None
-        await _reply_text_chunk(message, chunk, configured_limit, reply_markup=markup)
+        try:
+            await _reply_formatted_chunk(message, chunk, reply_markup=markup)
+        except Exception as exc:
+            if not _is_telegram_error(exc, "message is too long") or len(chunk.text) <= 1:
+                raise
+            smaller_limit = max(1, min(_telegram_message_limit(configured_limit) // 2, len(chunk.text) - 1))
+            await _reply_text_chunks(
+                message,
+                chunk.text,
+                smaller_limit,
+                reply_markup=markup,
+                render_html=chunk.parse_mode is not None,
+            )
 
 
 async def _reply_text_chunk(message: Any, chunk: str, configured_limit: int, *, reply_markup: Any | None = None) -> None:
+    formatted = TelegramFormattedChunk(chunk, parse_mode=None)
     try:
-        await message.reply_text(chunk, reply_markup=reply_markup)
+        await _reply_formatted_chunk(message, formatted, reply_markup=reply_markup)
     except Exception as exc:
         if not _is_telegram_error(exc, "message is too long") or len(chunk) <= 1:
             raise
@@ -722,26 +768,65 @@ async def _reply_text_chunk(message: Any, chunk: str, configured_limit: int, *, 
             await _reply_text_chunk(message, smaller_chunk, smaller_limit, reply_markup=markup)
 
 
-async def _send_text_chunks(bot: Any, chat_id: int, text: str, configured_limit: int) -> None:
-    for chunk in _message_chunks(text, configured_limit):
-        await bot.send_message(chat_id=chat_id, text=chunk)
+async def _reply_formatted_chunk(
+    message: Any,
+    chunk: TelegramFormattedChunk,
+    *,
+    reply_markup: Any | None = None,
+) -> None:
+    try:
+        await message.reply_text(
+            chunk.text,
+            reply_markup=reply_markup,
+            parse_mode=chunk.parse_mode,
+            disable_web_page_preview=True,
+        )
+    except TypeError:
+        await message.reply_text(chunk.text, reply_markup=reply_markup)
+    except Exception as exc:
+        if chunk.parse_mode is not None and _is_telegram_parse_error(exc):
+            await message.reply_text(
+                _strip_html_tags(chunk.text),
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+            return
+        if not _is_telegram_error(exc, "message is too long") or len(chunk.text) <= 1:
+            raise
+        raise
+
+
+async def _send_text_chunks(
+    bot: Any,
+    chat_id: int,
+    text: str,
+    configured_limit: int,
+    *,
+    clean_final: bool = False,
+) -> None:
+    for chunk in telegram_html_chunks(text, configured_limit, clean_final=clean_final):
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=chunk.text,
+                parse_mode=chunk.parse_mode,
+                disable_web_page_preview=True,
+            )
+        except TypeError:
+            await bot.send_message(chat_id=chat_id, text=chunk.text)
+        except Exception as exc:
+            if chunk.parse_mode is not None and _is_telegram_parse_error(exc):
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=_strip_html_tags(chunk.text),
+                    disable_web_page_preview=True,
+                )
+                continue
+            raise
 
 
 def _message_chunks(text: str, configured_limit: int) -> list[str]:
-    limit = _telegram_message_limit(configured_limit)
-    remaining = text or " "
-    chunks: list[str] = []
-    while len(remaining) > limit:
-        chunk = remaining[:limit]
-        cut = max(chunk.rfind("\n"), chunk.rfind(" "))
-        if cut < max(1, limit // 2):
-            split_at = limit
-        else:
-            split_at = cut + 1
-        chunks.append(remaining[:split_at] or remaining[:limit])
-        remaining = remaining[split_at:]
-    chunks.append(remaining or " ")
-    return chunks
+    return plain_text_chunks(text, configured_limit)
 
 
 def _is_telegram_error(exc: Exception, message: str) -> bool:
@@ -755,6 +840,15 @@ def _is_telegram_retry_after(exc: Exception) -> bool:
         return True
     text = str(exc).lower()
     return "flood control exceeded" in text or "retry after" in text
+
+
+def _is_telegram_parse_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return _is_telegram_error(exc, "can't parse entities") or "unsupported start tag" in text
+
+
+def _strip_html_tags(text: str) -> str:
+    return re.sub(r"</?(?:b|i|code|pre|a)(?:\s+[^>]*)?>", "", text)
 
 
 def _unauthorized_text(user_id: int | None, username: str | None) -> str:

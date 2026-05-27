@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
@@ -52,6 +53,7 @@ from libre_claw.core.usage import (
 )
 from libre_claw.core.session import session_from_payload
 from libre_claw.providers import LLMProvider, Usage, create_fallback_providers, create_provider
+from libre_claw.telegram.formatting import clean_final_answer_for_telegram, plain_text_chunks, telegram_html_chunks
 from libre_claw.tools_builtin import create_builtin_registry
 from libre_claw.web import dashboard_html
 
@@ -1011,6 +1013,8 @@ def _automation_telegram_message(
     summary = _read_artifact(run, "summary.md").strip()
     if not summary:
         summary = "No assistant summary was produced."
+    else:
+        summary = clean_final_answer_for_telegram(summary)
     report_line = f"Report saved locally: {report_path}"
     header = f"Scheduled: {automation.name}\nRun {run.run_id} finished with state: {state}"
     return f"{header}\n\n{summary}\n\n{report_line}"
@@ -1026,21 +1030,23 @@ async def _send_telegram_message(config: LibreClawConfig, chat_id: int, text: st
         raise RuntimeError("python-telegram-bot is not installed.") from exc
 
     async with Bot(token=token) as bot:
-        for chunk in _telegram_text_chunks(text, config.telegram.max_message_length):
-            await bot.send_message(chat_id=chat_id, text=chunk, disable_web_page_preview=True)
+        for chunk in telegram_html_chunks(text, config.telegram.max_message_length):
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=chunk.text,
+                    parse_mode=chunk.parse_mode,
+                    disable_web_page_preview=True,
+                )
+            except Exception as exc:
+                if "can't parse entities" not in str(exc).lower() and "unsupported start tag" not in str(exc).lower():
+                    raise
+                await bot.send_message(chat_id=chat_id, text=_strip_telegram_html(chunk.text), disable_web_page_preview=True)
 
 
 def _telegram_text_chunks(text: str, max_message_length: int) -> list[str]:
-    limit = max(1, min(3900, max_message_length, 4096))
-    remaining = text.strip() or "Done."
-    chunks: list[str] = []
-    while len(remaining) > limit:
-        split_at = remaining.rfind("\n", 0, limit)
-        if split_at < limit // 2:
-            split_at = remaining.rfind(" ", 0, limit)
-        if split_at < limit // 2:
-            split_at = limit
-        chunks.append(remaining[:split_at].rstrip())
-        remaining = remaining[split_at:].lstrip()
-    chunks.append(remaining)
-    return chunks
+    return [chunk.strip() for chunk in plain_text_chunks(text.strip() or "Done.", max_message_length)]
+
+
+def _strip_telegram_html(text: str) -> str:
+    return re.sub(r"</?(?:b|i|code|pre|a)(?:\s+[^>]*)?>", "", text)

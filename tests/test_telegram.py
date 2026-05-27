@@ -41,6 +41,11 @@ from libre_claw.telegram.handlers import (
     _visible_tool_notices,
     telegram_command_specs,
 )
+from libre_claw.telegram.formatting import (
+    clean_final_answer_for_telegram,
+    markdown_to_telegram_html,
+    telegram_html_chunks,
+)
 
 
 class FakeProvider(LLMProvider):
@@ -170,6 +175,45 @@ def test_telegram_stream_preview_keeps_live_edits_under_safe_limit() -> None:
 
     assert len(preview) < 4096
     assert preview.endswith("...[continued]")
+
+
+def test_telegram_markdown_renders_to_safe_html() -> None:
+    html = markdown_to_telegram_html(
+        "## HN Brief\n\n"
+        "• **Where does next-token prediction leave us?**\n"
+        "[Read it](https://example.com?a=1&b=2)\n"
+        "`src/app.py`\n\n"
+        "```python\nprint('<safe>')\n```"
+    )
+
+    assert "<b>HN Brief</b>" in html
+    assert "• <b>Where does next-token prediction leave us?</b>" in html
+    assert '<a href="https://example.com?a=1&amp;b=2">Read it</a>' in html
+    assert "<code>src/app.py</code>" in html
+    assert "<pre><code>print('&lt;safe&gt;')</code></pre>" in html
+
+
+def test_telegram_final_answer_cleaner_removes_process_preamble() -> None:
+    cleaned = clean_final_answer_for_telegram(
+        "Let me fetch the stories.No prior HN memory found.\n\n"
+        "- temporary candidate list\n\n"
+        "---\n\n"
+        "**AI / ML**\n\n"
+        "• **A story**\n"
+        "https://example.com"
+    )
+
+    assert cleaned.startswith("**AI / ML**")
+    assert "Let me fetch" not in cleaned
+    assert "temporary candidate" not in cleaned
+
+
+def test_telegram_html_chunks_keep_messages_under_limit() -> None:
+    chunks = telegram_html_chunks("## Title\n\n" + ("**bold** text " * 500), configured_limit=300)
+
+    assert len(chunks) > 1
+    assert all(chunk.parse_mode == "HTML" for chunk in chunks)
+    assert all(len(chunk.text) <= 300 for chunk in chunks)
 
 
 async def test_telegram_finish_text_response_sends_all_final_chunks() -> None:
