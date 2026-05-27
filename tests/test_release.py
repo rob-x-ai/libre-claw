@@ -1,4 +1,4 @@
-# Copyright 2026 Kroonen AI Inc. (https://kroonen.ai)
+# Copyright 2026 Kroonen AI (https://kroonen.ai)
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ def test_project_version_matches_package_version() -> None:
 
     assert data["project"]["version"] == __version__
     assert data["project"]["license"]["text"] == "Apache-2.0"
-    assert data["project"]["authors"][0]["name"] == "Kroonen AI Inc."
+    assert data["project"]["authors"][0]["name"] == "Kroonen AI"
 
 
 def test_release_docs_reference_current_version() -> None:
@@ -59,12 +59,12 @@ def test_license_is_apache_with_kroonen_attribution() -> None:
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
 
     assert "Apache License" in license_text
-    assert "Copyright 2026 Kroonen AI Inc. (https://kroonen.ai)" in license_text
+    assert "Copyright 2026 Kroonen AI (https://kroonen.ai)" in license_text
 
 
 def test_source_files_have_kroonen_license_header() -> None:
     expected = (
-        "# Copyright 2026 Kroonen AI Inc. (https://kroonen.ai)\n"
+        "# Copyright 2026 Kroonen AI (https://kroonen.ai)\n"
         "# SPDX-License-Identifier: Apache-2.0\n"
     )
     paths = [

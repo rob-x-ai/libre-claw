@@ -3,7 +3,7 @@
 Libre Claw is built as a competitive, terminal-native agent harness. The first
 release focuses on durable local autonomy and provider choice.
 
-## Completed In 0.1.0
+## Completed in 0.1.0
 
 - Durable runs with append-only event logs and artifacts.
 - Human review cockpit with timeline replay and artifact panels.
@@ -12,7 +12,7 @@ release focuses on durable local autonomy and provider choice.
 - MCP stdio integration with allowlisted external tools.
 - Recurring automations and saved reports.
 - Browser/computer-use tools with persistent profiles and screenshots.
-- OpenRouter usage analytics and app attribution verification.
+- Provider usage analytics and model presets.
 - First-run setup flow, one-command installer, and security documentation.
 
 ## Next Priorities
@@ -21,7 +21,7 @@ release focuses on durable local autonomy and provider choice.
 - Add packaged releases and signed binaries.
 - Expand MCP interoperability tests with common local servers.
 - Improve browser previews in the TUI artifact panel.
-- Add richer OpenRouter analytics exports.
+- Add richer provider usage exports.
 - Publish polished demo videos and GIFs.
 
 ## Design Principles
@@ -30,4 +30,3 @@ release focuses on durable local autonomy and provider choice.
 - Write, shell, browser, git, and external MCP actions are permissioned.
 - Runs survive UI restarts.
 - Provider credentials never live in project config.
-- OpenRouter app identity is fixed to Libre Claw from Kroonen AI Inc.

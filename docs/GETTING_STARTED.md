@@ -1,6 +1,6 @@
-# Getting Started In 5 Minutes
+# Getting Started in 5 Minutes
 
-Libre Claw is a terminal-native coding agent harness from Kroonen AI Inc.
+Libre Claw is a terminal-native coding agent harness built by Kroonen AI.
 
 ## 1. Install
 
@@ -8,7 +8,7 @@ Libre Claw is a terminal-native coding agent harness from Kroonen AI Inc.
 curl -fsSL https://raw.githubusercontent.com/kroonen-ai/libre-claw/main/scripts/install.sh | sh
 ```
 
-Private-repo or self-hosted installs can point the same installer at another
+Private repository or self-hosted installs can point the same installer at another
 HTTPS remote:
 
 ```bash
@@ -39,7 +39,7 @@ libre-claw daemon    # local API, dashboard, automations, and daemon-owned runs
 When the daemon is running, open the local dashboard at
 `http://127.0.0.1:8766/dashboard`.
 
-## 3. Set Up A Provider
+## 3. Set up a provider
 
 Inside the TUI:
 
@@ -57,16 +57,16 @@ Codex/ChatGPT auth is also available:
 /provider codex
 ```
 
-## 4. Run A Coding Task
+## 4. Run a coding task
 
 ```text
 Fix the failing tests and commit the result.
 ```
 
-Libre Claw will read before editing, ask before write/shell/browser actions,
+Libre Claw reads before editing, asks before write/shell/browser actions,
 and save a durable run under `~/.libre-claw/runs/<run_id>/`.
 
-## 5. Review The Work
+## 5. Review the work
 
 ```text
 /runs

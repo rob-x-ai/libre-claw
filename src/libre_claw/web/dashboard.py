@@ -1,4 +1,4 @@
-# Copyright 2026 Kroonen AI Inc. (https://kroonen.ai)
+# Copyright 2026 Kroonen AI (https://kroonen.ai)
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -492,7 +492,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       <nav aria-label="Dashboard footer links">
         <a href="https://libreclaw.dev" target="_blank" rel="noreferrer">libreclaw.dev</a>
         <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank" rel="noreferrer">Apache-2.0</a>
-        <a href="https://kroonen.ai" target="_blank" rel="noreferrer">Kroonen AI Inc.</a>
+        <a href="https://kroonen.ai" target="_blank" rel="noreferrer">Kroonen AI</a>
       </nav>
     </footer>
   </div>

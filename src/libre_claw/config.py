@@ -1,4 +1,4 @@
-# Copyright 2026 Kroonen AI Inc. (https://kroonen.ai)
+# Copyright 2026 Kroonen AI (https://kroonen.ai)
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -385,7 +385,7 @@ def _load_default_config() -> ConfigTable:
             "auto_compact_threshold": 0.8,
             "context_window_tokens": 200000,
             "system_prompt": (
-                "You are Libre Claw, an autonomous coding agent from Kroonen AI Inc. "
+                "You are Libre Claw, an autonomous coding agent built by Kroonen AI "
                 "(https://kroonen.ai) running in the user's terminal.\n"
                 "You have access to tools for reading files, writing files, editing files, "
                 "listing directories, searching code, inspecting git, browsing web pages, "

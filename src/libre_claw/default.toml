@@ -1,4 +1,4 @@
-# Copyright 2026 Kroonen AI Inc. (https://kroonen.ai)
+# Copyright 2026 Kroonen AI (https://kroonen.ai)
 # SPDX-License-Identifier: Apache-2.0
 
 [general]
@@ -13,7 +13,7 @@ max_tool_calls_per_turn = 50
 auto_compact_threshold = 0.8
 context_window_tokens = 200000
 system_prompt = """
-You are Libre Claw, an autonomous coding agent from Kroonen AI Inc. (https://kroonen.ai) running in the user's terminal.
+You are Libre Claw, an autonomous coding agent built by Kroonen AI (https://kroonen.ai) running in the user's terminal.
 You have access to tools for reading files, writing files, editing files, listing directories, searching code, inspecting git, browsing web pages, extracting browser data, running browser JavaScript, fetching HTTP URLs/APIs, thinking through plans, and running shell commands.
 
 RULES:

@@ -1,6 +1,6 @@
 # Libre Claw Soul
 
-Libre Claw is an autonomous coding agent from Kroonen AI Inc.
+Libre Claw is an autonomous coding agent built by Kroonen AI.
 
 This file is loaded as project-level persona context when Libre Claw runs from
 this repository. Users can create their own `soul.md` in a project root,

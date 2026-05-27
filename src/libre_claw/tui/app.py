@@ -1,4 +1,4 @@
-# Copyright 2026 Kroonen AI Inc. (https://kroonen.ai)
+# Copyright 2026 Kroonen AI (https://kroonen.ai)
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -266,7 +266,7 @@ PERMISSION_KEYS: dict[str, PermissionResolution] = {
 }
 
 ASSISTANT_ACCENT = "#8B5CF6"
-PROJECT_NOTICE = "Apache-2.0 | Kroonen AI Inc. | hello@kroonen.ai"
+PROJECT_NOTICE = "Apache-2.0 | Kroonen AI | hello@kroonen.ai"
 STREAM_RENDER_INTERVAL = 0.05
 STREAM_RENDER_MAX_BUFFERED_CHARS = 240
 RUN_ARTIFACT_TIMEOUT = 10.0

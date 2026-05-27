@@ -41,8 +41,9 @@ Initial shippable Libre Claw release.
   `.libre-claw/skills/`, AgentSkills-style `SKILL.md` discovery, `/skills`
   management commands, and relevant skill injection across TUI, Telegram, and
   daemon agent runs.
-- Anthropic, OpenAI, OpenRouter, and Ollama providers. Defaults are `claude-opus-4-6`, `gpt-5.5`, and `qwen3.6:27b`; Ollama supports local daemon use, Ollama Cloud with `kimi-k2.6:cloud`, and Ollama/OpenAI-compatible endpoints.
-- Fixed OpenRouter app attribution for Libre Claw with `https://libreclaw.dev`, `Libre Claw`, and `cli-agent,personal-agent` headers, targeting Productivity, Coding Agents, Personal Agents, and CLI Agents visibility.
+- Anthropic, OpenAI, OpenRouter, and Ollama providers. Defaults are `claude-opus-4-7`, `gpt-5.5`, and `qwen3.6:27b`; Ollama supports local daemon use, Ollama Cloud with `kimi-k2.6:cloud`, and Ollama/OpenAI-compatible endpoints.
+- Added OpenRouter usage accounting and recommended model presets for TUI,
+  Telegram, and usage reports.
 - Cumulative session token tracking in the status bar, TUI `/cost`, and
   Telegram `/cost`, with OpenRouter usage accounting enabled for
   provider-reported request cost, cached tokens, and reasoning tokens.
@@ -58,6 +59,6 @@ Initial shippable Libre Claw release.
 - Telegram daemon with allowlist auth, streaming updates, and inline permission prompts.
 - Key storage through environment variables, OS keyring, or encrypted local fallback.
 - OAuth 2.0 PKCE and JWT scaffolding for a future dashboard.
-- Apache-2.0 licensing with Kroonen AI Inc. source headers.
+- Apache-2.0 licensing with Kroonen AI source headers.
 - GitHub Actions test/build CI and expanded user-facing README documentation.
 - Test coverage for config, providers, tools, permissions, memory, Telegram, auth, and TUI helpers.

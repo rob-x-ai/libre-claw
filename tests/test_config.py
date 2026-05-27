@@ -1,4 +1,4 @@
-# Copyright 2026 Kroonen AI Inc. (https://kroonen.ai)
+# Copyright 2026 Kroonen AI (https://kroonen.ai)
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.mcp.enabled is False
     assert config.mcp.allowlist == ()
     assert config.mcp.permission_level == "ask"
-    assert "Kroonen AI Inc. (https://kroonen.ai)" in config.agent.system_prompt
+    assert "built by Kroonen AI (https://kroonen.ai)" in config.agent.system_prompt
     assert "search_files" in config.agent.system_prompt
     assert "browser_download" in config.agent.system_prompt
     assert "browser_execute" in config.agent.system_prompt

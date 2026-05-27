@@ -1,7 +1,7 @@
 # Demo Scripts
 
-These scripts are the canonical flows for demo videos and GIFs. They keep the
-product story consistent while the UI continues to evolve.
+These scripts are the canonical flows for demo videos and GIFs. They keep
+demos consistent while the UI evolves.
 
 ## Five-Minute Build
 

@@ -1,4 +1,4 @@
-# Copyright 2026 Kroonen AI Inc. (https://kroonen.ai)
+# Copyright 2026 Kroonen AI (https://kroonen.ai)
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
@@ -13,7 +13,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [
-    { name = "Kroonen AI Inc." },
+    { name = "Kroonen AI" },
 ]
 keywords = ["agent", "terminal", "tui", "textual", "ai"]
 classifiers = [

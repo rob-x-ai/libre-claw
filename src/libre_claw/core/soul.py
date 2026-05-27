@@ -1,4 +1,4 @@
-# Copyright 2026 Kroonen AI Inc. (https://kroonen.ai)
+# Copyright 2026 Kroonen AI (https://kroonen.ai)
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ They do not override safety rules, tool permissions, sandbox settings, or direct
 ## Persona
 - Be direct, warm, and practical.
 - Prefer concise progress updates.
-- Keep Kroonen AI Inc. visible as the maker when identity comes up.
+- Keep Kroonen AI visible as the maker when identity comes up.
 
 ## Working Style
 - Read before editing.

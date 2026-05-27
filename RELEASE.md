@@ -2,7 +2,7 @@
 
 ## 0.1.0 - 2026-05-24
 
-First shippable Libre Claw release from Kroonen AI Inc.
+First shippable Libre Claw release, built by Kroonen AI.
 
 ### Current State
 
@@ -81,15 +81,9 @@ First shippable Libre Claw release from Kroonen AI Inc.
   then used through `/provider codex` or `/model codex:gpt-5.5`, with Codex
   OAuth picker presets for `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
   `gpt-5.3-codex`, `gpt-5.3-codex-spark`, and `gpt-5.2`.
-- OpenRouter support with fixed Libre Claw app attribution headers:
-  `https://libreclaw.dev`, `Libre Claw`, and the `cli-agent,personal-agent`
-  categories, targeting Productivity, Coding Agents, Personal Agents, and CLI
-  Agents visibility.
-- OpenRouter growth analytics through `/usage openrouter`, attribution
-  verification, an analytics link to
-  `https://openrouter.ai/apps?url=https://libreclaw.dev`, and a shared
-  recommended model preset catalog for TUI, Telegram, and usage reports,
-  including `deepseek/deepseek-v4-flash`, `qwen/qwen3.7-max`,
+- OpenRouter support with usage accounting and a shared recommended model preset
+  catalog for TUI, Telegram, and usage reports, including
+  `deepseek/deepseek-v4-flash`, `qwen/qwen3.7-max`,
   `moonshotai/kimi-k2.6`, `anthropic/claude-opus-4.7`, and
   `openai/gpt-5.5`.
 - Provider fallback routes can fail over to backup provider/model/account
@@ -99,7 +93,7 @@ First shippable Libre Claw release from Kroonen AI Inc.
   status|once|start|stop`, backed by a configurable checklist.
 - Explicit `libre-claw tui` and `libre-claw chat` commands open the same TUI as
   the default `libre-claw` launch.
-- Competitive polish pass with a one-command installer, first-run `/setup`
+- Product polish pass with a one-command installer, first-run `/setup`
   wizard, provider/key setup inside the TUI, quickstart docs, demo scripts,
   public roadmap, and security documentation.
 - Cumulative session token tracking in the status bar, TUI `/cost`, and
@@ -146,7 +140,7 @@ First shippable Libre Claw release from Kroonen AI Inc.
 - Secure key storage through environment variables, OS keyring, or encrypted
   local fallback. API keys are not stored in TOML.
 - OAuth 2.0 PKCE and JWT scaffolding for a future dashboard.
-- Apache-2.0 licensing with Kroonen AI Inc. source headers.
+- Apache-2.0 licensing with Kroonen AI source headers.
 - GitHub Actions test/build CI and expanded user-facing README documentation.
 
 ### Known Limits
