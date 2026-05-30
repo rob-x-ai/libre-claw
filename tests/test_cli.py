@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import errno
+
 from collections.abc import Iterable
 
 from click.testing import CliRunner
@@ -76,16 +78,84 @@ def test_cli_start_exposes_daemon_options() -> None:
     assert "--port" in result.output
 
 
+def test_cli_start_reports_already_running_daemon(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("libre_claw.cli._running_daemon_url", lambda config, host, port: "http://127.0.0.1:8766")
+
+    def fail_daemon_server(config):  # type: ignore[no-untyped-def]
+        del config
+        raise AssertionError("start should not create a second daemon")
+
+    monkeypatch.setattr("libre_claw.cli.DaemonServer", fail_daemon_server)
+
+    result = runner.invoke(main, ["start"])
+
+    assert result.exit_code == 0
+    assert "already running at http://127.0.0.1:8766" in result.output
+    assert "Dashboard: http://127.0.0.1:8766/dashboard" in result.output
+
+
+def test_cli_start_reports_port_conflict_without_traceback(monkeypatch, tmp_path) -> None:
+    class PortConflictServer:
+        def __init__(self, config):  # type: ignore[no-untyped-def]
+            del config
+
+        async def run(self, host=None, port=None):  # type: ignore[no-untyped-def]
+            del host, port
+            raise OSError(errno.EADDRINUSE, "address already in use")
+
+    runner = CliRunner()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("libre_claw.cli._running_daemon_url", lambda config, host, port: None)
+    monkeypatch.setattr("libre_claw.cli.DaemonServer", PortConflictServer)
+
+    result = runner.invoke(main, ["start"])
+
+    assert result.exit_code != 0
+    assert "already in use" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_cli_shutdown_reports_no_running_process(monkeypatch, tmp_path) -> None:
     runner = CliRunner()
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("libre_claw.cli._request_daemon_shutdown", lambda base_url: False)
+    monkeypatch.setattr("libre_claw.cli._daemon_health_ok", lambda base_url: False)
 
     result = runner.invoke(main, ["shutdown"])
 
     assert result.exit_code == 0
     assert "No running Libre Claw process found" in result.output
+
+
+def test_cli_shutdown_kills_unregistered_healthy_daemon_listener(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    killed: list[tuple[int, object]] = []
+    running = {"value": True}
+    monkeypatch.setattr("libre_claw.cli._request_daemon_shutdown", lambda base_url: False)
+    monkeypatch.setattr("libre_claw.cli._daemon_health_ok", lambda base_url: True)
+    monkeypatch.setattr("libre_claw.cli._listener_pid_for_base_url", lambda base_url: 4242)
+    monkeypatch.setattr("libre_claw.cli._process_command", lambda pid: "/path/.venv/bin/libre-claw daemon")
+    monkeypatch.setattr("libre_claw.cli._is_pid_running", lambda pid: running["value"])
+
+    def fake_kill(pid: int, sig: object) -> bool:
+        killed.append((pid, sig))
+        running["value"] = False
+        return True
+
+    monkeypatch.setattr("libre_claw.cli._kill_pid", fake_kill)
+
+    result = runner.invoke(main, ["shutdown"])
+
+    assert result.exit_code == 0
+    assert "Stopped Libre Claw daemon on http://127.0.0.1:8766 with pid 4242" in result.output
+    assert killed
 
 
 def test_cli_shutdown_uses_recorded_pid_fallback(monkeypatch, tmp_path) -> None:
@@ -204,6 +274,41 @@ def test_cli_restart_reuses_previous_process_mode(monkeypatch, tmp_path) -> None
     assert result.exit_code == 0
     assert selected_modes == ["telegram-up"]
     assert "Restarted Libre Claw telegram-up with pid 5000" in result.output
+
+
+def test_cli_restart_starts_after_clearing_stale_pid(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    state_path = tmp_path / ".libre-claw" / "process.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        '{"pid": 4242, "mode": "daemon", "base_url": "http://127.0.0.1:8766"}\n',
+        encoding="utf-8",
+    )
+    selected_modes: list[str] = []
+    monkeypatch.setattr("libre_claw.cli._request_daemon_shutdown", lambda base_url: False)
+    monkeypatch.setattr("libre_claw.cli._daemon_health_ok", lambda base_url: False)
+    monkeypatch.setattr("libre_claw.cli._is_pid_running", lambda pid: False)
+
+    def fake_start(ctx, config, mode, host, port):  # type: ignore[no-untyped-def]
+        del ctx, config, host, port
+        selected_modes.append(mode)
+        return type(
+            "Started",
+            (),
+            {"pid": 5000, "base_url": "http://127.0.0.1:8766", "log_path": tmp_path / "daemon.log", "mode": mode},
+        )()
+
+    monkeypatch.setattr("libre_claw.cli._start_background_process", fake_start)
+    monkeypatch.setattr("libre_claw.cli._wait_for_daemon_health", lambda base_url, timeout: True)
+
+    result = runner.invoke(main, ["restart"])
+
+    assert result.exit_code == 0
+    assert selected_modes == ["daemon"]
+    assert "Restarted Libre Claw daemon with pid 5000" in result.output
+    assert not state_path.exists()
 
 
 def test_cli_telegram_help_exposes_setup_and_up() -> None:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
 import signal
@@ -14,6 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterator, NoReturn
+from urllib.parse import urlparse
 
 import click
 import httpx
@@ -299,8 +301,14 @@ def start_command(ctx: click.Context, host: str | None, port: int | None) -> Non
 
 def _run_daemon_process(ctx: click.Context, *, host: str | None, port: int | None) -> None:
     config = _load_context_config(ctx)
-    server = DaemonServer(config)
     base_url = daemon_base_url(config, host=host, port=port)
+    running_url = _running_daemon_url(config, host=host, port=port)
+    if running_url is not None:
+        click.echo(f"Libre Claw daemon is already running at {running_url}")
+        click.echo(f"Dashboard: {running_url}/dashboard")
+        return
+
+    server = DaemonServer(config)
     click.echo(f"Libre Claw daemon listening on {base_url}")
     click.echo(f"Dashboard: {base_url}/dashboard")
     try:
@@ -308,6 +316,18 @@ def _run_daemon_process(ctx: click.Context, *, host: str | None, port: int | Non
             asyncio.run(server.run(host=host, port=port))
     except RuntimeError as exc:
         _raise_click_error(str(exc))
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            running_url = _running_daemon_url(config, host=host, port=port)
+            if running_url is not None:
+                click.echo(f"Libre Claw daemon is already running at {running_url}")
+                click.echo(f"Dashboard: {running_url}/dashboard")
+                return
+            _raise_click_error(
+                f"Could not start Libre Claw daemon because {base_url} is already in use. "
+                "Run `libre-claw shutdown` if this is a stuck Libre Claw process."
+            )
+        raise
     except KeyboardInterrupt:
         click.echo("Stopped Libre Claw daemon.")
 
@@ -485,16 +505,59 @@ def _stop_lifecycle(
             _clear_process_state()
             return ProcessStopResult(True, f"Stopped Libre Claw {mode or 'daemon'} at {base_url}.", pid, mode)
 
+    for base_url in target_urls:
+        if not _daemon_health_ok(base_url):
+            continue
+        listener_pid = _listener_pid_for_base_url(base_url)
+        if listener_pid is None:
+            return ProcessStopResult(
+                False,
+                f"Libre Claw is responding at {base_url}, but no listener pid could be found.",
+                pid,
+                mode,
+            )
+        if not _pid_matches_process_state(listener_pid, {"argv": ["libre-claw"]}):
+            return ProcessStopResult(
+                False,
+                f"Libre Claw is responding at {base_url}, but listener pid {listener_pid} does not look like Libre Claw.",
+                listener_pid,
+                mode,
+            )
+        if not _kill_pid(listener_pid, signal.SIGTERM):
+            return ProcessStopResult(False, f"Could not signal Libre Claw listener pid {listener_pid}.", listener_pid, mode)
+        if _wait_for_pid_exit(listener_pid, timeout):
+            _clear_process_state()
+            return ProcessStopResult(
+                True,
+                f"Stopped Libre Claw daemon on {base_url} with pid {listener_pid}.",
+                listener_pid,
+                mode or "daemon",
+            )
+        if force and _kill_pid(listener_pid, signal.SIGKILL) and _wait_for_pid_exit(listener_pid, timeout=2.0):
+            _clear_process_state()
+            return ProcessStopResult(
+                True,
+                f"Force-stopped Libre Claw daemon on {base_url} with pid {listener_pid}.",
+                listener_pid,
+                mode or "daemon",
+            )
+        return ProcessStopResult(
+            False,
+            f"Sent SIGTERM to Libre Claw listener pid {listener_pid}, but it is still running. Retry with --force.",
+            listener_pid,
+            mode or "daemon",
+        )
+
     if pid is not None:
         if not _is_pid_running(pid):
             _clear_process_state()
-            return ProcessStopResult(False, f"No running Libre Claw process found. Removed stale pid {pid}.", pid, mode)
+            return ProcessStopResult(False, f"No running Libre Claw process found. Removed stale pid {pid}.", None, mode)
         if not _pid_matches_process_state(pid, state):
             _clear_process_state()
             return ProcessStopResult(
                 False,
                 f"No running Libre Claw process found. Removed stale pid {pid} without signaling it.",
-                pid,
+                None,
                 mode,
             )
         if not _kill_pid(pid, signal.SIGTERM):
@@ -537,6 +600,14 @@ def _stop_active_turn(
         if active_id and _cancel_daemon_run(base_url, active_id, timeout=timeout):
             return f"Stopped daemon turn {active_id}."
     return "No active daemon turn found. If you meant to stop Libre Claw itself, use `libre-claw shutdown`."
+
+
+def _running_daemon_url(config: LibreClawConfig, *, host: str | None, port: int | None) -> str | None:
+    for base_url in _lifecycle_target_urls(config, host=host, port=port):
+        payload = _request_daemon_json("GET", base_url, "/health", timeout=0.75)
+        if payload and payload.get("ok") is True:
+            return base_url
+    return None
 
 
 def _first_active_run(runs: list[object]) -> dict[str, Any] | None:
@@ -590,6 +661,46 @@ def _request_daemon_shutdown(base_url: str) -> bool:
         return response.status_code == 200
     except httpx.HTTPError:
         return False
+
+
+def _daemon_health_ok(base_url: str) -> bool:
+    payload = _request_daemon_json("GET", base_url, "/health", timeout=0.75)
+    return bool(payload and payload.get("ok") is True)
+
+
+def _listener_pid_for_base_url(base_url: str) -> int | None:
+    port = _port_from_base_url(base_url)
+    if port is None:
+        return None
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed executable and arguments.
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=1.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in result.stdout.splitlines():
+        try:
+            pid = int(line.strip())
+        except ValueError:
+            continue
+        if pid > 0:
+            return pid
+    return None
+
+
+def _port_from_base_url(base_url: str) -> int | None:
+    parsed = urlparse(base_url if "://" in base_url else f"http://{base_url}")
+    if parsed.port is not None:
+        return parsed.port
+    if parsed.scheme == "https":
+        return 443
+    if parsed.scheme == "http":
+        return 80
+    return None
 
 
 def _client_base_url(base_url: str) -> str:
