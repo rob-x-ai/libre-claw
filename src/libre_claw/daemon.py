@@ -706,12 +706,12 @@ class DaemonServer:
             surface=f"automation:{automation.route}",
             hold_final_state=True,
         )
-        if state != "done":
+        if state != "done" or not _read_artifact(run, "summary.md").strip():
             finalized = await self._finalize_partial_automation(automation, run, config, state)
             if finalized:
                 state = "done"
         try:
-            await asyncio.to_thread(_write_automation_report, automation, run, report_path)
+            await asyncio.to_thread(_write_automation_report, automation, run, report_path, state)
             await self.run_store.append_event(
                 run.run_id,
                 "automation_report_written",
@@ -1081,17 +1081,17 @@ def _automation_finalizer_prompt(
     automation: AutomationRecord,
     run: RunRecord,
     events: list[RunEvent],
-    failed_state: RunState,
+    source_state: RunState,
     *,
     max_context_chars: int,
 ) -> str:
     return (
-        "A scheduled automation stopped before producing a clean final report.\n\n"
+        "A scheduled automation did not produce a clean final report.\n\n"
         f"Automation: {automation.name}\n"
         f"Schedule: {automation.schedule}\n"
         f"Route: {automation.route}\n"
         f"Run: {run.run_id}\n"
-        f"Primary state: {failed_state}\n\n"
+        f"Primary state: {source_state}\n\n"
         "Original scheduled task:\n"
         f"{automation.prompt.strip()}\n\n"
         "Saved run observations, bounded and redacted:\n"
@@ -1196,6 +1196,29 @@ def _automation_failure_summary(run: RunRecord) -> str:
         f"Run failed before Libre Claw produced a final clean report: {errors[-1]}\n\n"
         "Partial scratch output and tool events were saved locally for debugging."
     )
+
+
+def _automation_empty_done_summary(run: RunRecord) -> str:
+    return (
+        "Scheduled run completed, but the model returned no final assistant report after tool use. "
+        f"Saved tool observations and raw events are available locally in `{run.path}`."
+    )
+
+
+def _automation_summary_for_report(run: RunRecord, state: str) -> str:
+    if state != "done":
+        return _automation_failure_summary(run)
+    summary = _read_artifact(run, "summary.md").strip()
+    if summary:
+        return summary
+    return _automation_empty_done_summary(run)
+
+
+def _automation_summary_for_telegram(run: RunRecord, state: str) -> str:
+    summary = _automation_summary_for_report(run, state)
+    if state == "done":
+        return clean_final_answer_for_telegram(summary)
+    return summary
 
 
 def _run_error_messages(run: RunRecord) -> list[str]:
@@ -1394,8 +1417,8 @@ def _memory_summary_text(user_message: str, assistant_text: str) -> str:
     return redact_secrets("\n".join(parts).strip())
 
 
-def _write_automation_report(automation: AutomationRecord, run: RunRecord, report_path: Path) -> None:
-    summary = _read_artifact(run, "summary.md").strip()
+def _write_automation_report(automation: AutomationRecord, run: RunRecord, report_path: Path, state: str) -> None:
+    summary = _automation_summary_for_report(run, state)
     verification = _read_artifact(run, "verification.md").strip()
     browser = _read_artifact(run, "browser.md").strip()
     diff_path = run.path / "diff.patch"
@@ -1415,7 +1438,7 @@ def _write_automation_report(automation: AutomationRecord, run: RunRecord, repor
         "",
         "## Summary",
         "",
-        summary or "No assistant summary was produced.",
+        summary,
         "",
         "## Verification",
         "",
@@ -1444,14 +1467,7 @@ def _automation_telegram_message(
     report_path: Path,
     state: str,
 ) -> str:
-    if state != "done":
-        summary = _automation_failure_summary(run)
-    else:
-        summary = _read_artifact(run, "summary.md").strip()
-        if not summary:
-            summary = "No assistant summary was produced."
-        else:
-            summary = clean_final_answer_for_telegram(summary)
+    summary = _automation_summary_for_telegram(run, state)
     report_line = f"Report saved locally: {report_path}"
     header = f"Scheduled: {automation.name}\nRun {run.run_id} finished with state: {state}"
     return f"{header}\n\n{summary}\n\n{report_line}"

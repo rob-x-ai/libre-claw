@@ -638,6 +638,59 @@ async def test_daemon_automation_finalizer_recovers_partial_failed_run(monkeypat
     assert provider.max_tokens_values[-1] == config.automations.finalizer_max_tokens
 
 
+async def test_daemon_automation_finalizer_recovers_done_run_without_summary(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    sent: list[tuple[int, str]] = []
+
+    async def fake_telegram_sender(_config: object, chat_id: int, text: str) -> None:
+        sent.append((chat_id, text))
+
+    provider = ScriptedProvider(
+        [
+            [Done(Usage(input_tokens=20, output_tokens=4))],
+            [TextDelta("Clean scheduled report from saved observations."), Done()],
+        ]
+    )
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: provider,
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+        telegram_sender=fake_telegram_sender,
+    )
+    server.automation_store = AutomationStore(tmp_path / "automations")
+    automation = await server.automation_store.create(
+        name="HN watch",
+        prompt="Fetch sources and produce a clean final report.",
+        schedule="every 1 minutes",
+        route="telegram",
+        provider=config.general.default_provider,
+        model=config.general.default_model,
+        telegram_chat_id=42,
+    )
+    past_payload = automation.path.read_text(encoding="utf-8").replace(
+        automation.next_run_at,
+        "2000-01-01T00:00:00+00:00",
+    )
+    automation.path.write_text(past_payload, encoding="utf-8")
+
+    await server._tick_automations()
+    run = (await server.run_store.list_runs(limit=1))[0]
+    await _wait_for_state(server, run.run_id, "done")
+    events = await server.run_store.load_events(run.run_id)
+
+    assert (run.path / "summary.md").read_text(encoding="utf-8") == "Clean scheduled report from saved observations."
+    assert len(sent) == 1
+    assert "Clean scheduled report from saved observations." in sent[0][1]
+    assert "No assistant summary was produced" not in sent[0][1]
+    assert any(event.type == "automation_finalized" and event.data["source_state"] == "done" for event in events)
+
+
 async def test_daemon_failed_telegram_automation_hides_partial_scratch_summary(tmp_path: Path) -> None:
     config = load_config()
     tool_limit = config.agent.max_tool_calls_per_turn
