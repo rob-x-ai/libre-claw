@@ -88,6 +88,7 @@ class FakeToolProvider(LLMProvider):
 
 class FakeDaemonClient:
     def __init__(self, *, with_permission: bool = True) -> None:
+        self.base_url = "http://127.0.0.1:8766"
         self.resolutions: list[tuple[str, str, str]] = []
         self.start_payloads: list[dict[str, Any]] = []
         self.with_permission = with_permission
@@ -119,7 +120,39 @@ class FakeDaemonClient:
         return {"events": events}
 
     async def get_run(self, run_id: str) -> dict[str, Any]:
-        return {"run": {"run_id": run_id, "state": "done"}}
+        return {
+            "run": {
+                "run_id": run_id,
+                "state": "done",
+                "title": "Fix the thing",
+                "provider": "openrouter",
+                "model": "deepseek/deepseek-v4-flash",
+                "updated_at": "2026-05-30T10:00:00",
+                "path": "/tmp/run",
+            },
+            "artifacts": {"summary.md": {"exists": True}},
+        }
+
+    async def list_runs(self, limit: int = 20) -> dict[str, Any]:
+        assert limit > 0
+        return {
+            "runs": [
+                {
+                    "run_id": "run-20260530-abc123",
+                    "state": "done",
+                    "title": "Fix the thing",
+                    "provider": "openrouter",
+                    "model": "deepseek/deepseek-v4-flash",
+                }
+            ]
+        }
+
+    async def usage(self, provider: str = "", limit: int = 250) -> dict[str, Any]:
+        del limit
+        return {"text": f"Usage for {provider or 'all'} providers"}
+
+    async def health(self) -> dict[str, Any]:
+        return {"ok": True, "active_runs": 1, "telegram_bridge": "external"}
 
     async def resolve_permission(self, run_id: str, tool_call_id: str, resolution: str) -> dict[str, Any]:
         self.resolutions.append((run_id, tool_call_id, resolution))
@@ -147,9 +180,14 @@ def test_telegram_help_text_lists_slash_commands() -> None:
 
     assert "/help" in text
     assert "/start" in text
+    assert "/restart - Start a fresh chat session" in text
     assert "/model - Open provider/model buttons" in text
     assert "/models - Open provider/model buttons" in text
     assert "/provider - Open provider buttons" in text
+    assert "/usage [provider] - Show provider usage analytics" in text
+    assert "/daemon - Show daemon connection health" in text
+    assert "/runs [N] - List recent daemon runs" in text
+    assert "/run <id> - Inspect a daemon run" in text
     assert "/status - Show token and cost usage" in text
     assert "/stop - Cancel the active generation" in text
     assert "Send a normal message" in text
@@ -501,12 +539,35 @@ def test_telegram_command_specs_drive_bot_menu() -> None:
 
     assert commands["help"] == "Show Telegram slash commands"
     assert "start" in commands
+    assert commands["restart"] == "Start a fresh chat session"
     assert commands["models"] == "Open model configuration"
     assert commands["status"] == "Show session info"
+    assert commands["usage"] == "Show provider usage analytics"
+    assert commands["daemon"] == "Show daemon health"
+    assert commands["runs"] == "List recent daemon runs"
+    assert commands["run"] == "Inspect one daemon run"
     assert commands["stop"] == "Cancel active generation"
     assert "schedule" in commands
     assert commands["heartbeat"] == "Recurring check-ins"
     assert commands["memory"] == "Manage persistent memory"
+
+
+async def test_telegram_daemon_commands_report_remote_state(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    bridge = TelegramBridge(load_config(), daemon_client=FakeDaemonClient())  # type: ignore[arg-type]
+
+    usage = await bridge.usage_command_text(1, "openrouter")
+    daemon = await bridge.daemon_command_text(1)
+    runs = await bridge.runs_command_text("5")
+    run = await bridge.run_command_text("run-20260530-abc123")
+
+    assert "Usage for openrouter providers" in usage
+    assert "Daemon: online" in daemon
+    assert "Active runs: 1" in daemon
+    assert "[done] openrouter:deepseek/deepseek-v4-flash" in runs
+    assert "Fix the thing" in runs
+    assert "Artifacts: summary.md" in run
 
 
 def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monkeypatch) -> None:

@@ -38,7 +38,7 @@ from libre_claw.core.memory import (
     summarize_session_for_memory,
 )
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
-from libre_claw.core.runs import RunStore
+from libre_claw.core.runs import RunRecord, RunStore
 from libre_claw.core.session import session_to_payload
 from libre_claw.core.skills import SkillStore
 from libre_claw.core.soul import SoulStore
@@ -271,6 +271,91 @@ class TelegramBridge:
             f"({state.usage.input_tokens} input, {state.usage.output_tokens} output). "
             f"Cost: {_format_usage_cost(state.usage)}."
         )
+
+    async def usage_command_text(self, chat_id: int, argument: str) -> str:
+        provider = argument.strip().lower()
+        if self.daemon_client is None:
+            base = self.status_text(chat_id)
+            return base + "\n\nDetailed provider usage is available when Telegram is using the daemon."
+        try:
+            payload = await self.daemon_client.usage(provider=provider)
+        except Exception as exc:
+            return f"Could not load usage from daemon: {exc}"
+        text = str(payload.get("text", "")).strip()
+        if text:
+            return text
+        summary = _object_payload(payload.get("summary"))
+        return "Usage:\n" + json.dumps(summary, indent=2, sort_keys=True)
+
+    async def daemon_command_text(self, chat_id: int) -> str:
+        state = self.state_for(chat_id)
+        if self.daemon_client is None:
+            return "Daemon: not connected. Run Telegram with `libre-claw telegram up` for daemon-backed runs."
+        try:
+            payload = await self.daemon_client.health()
+        except Exception as exc:
+            return f"Daemon: unreachable\nEndpoint: {self.daemon_client.base_url}\nError: {exc}"
+        active_run = state.daemon_run_id or "none"
+        return "\n".join(
+            [
+                "Daemon: online" if payload.get("ok") else "Daemon: unhealthy",
+                f"Endpoint: {self.daemon_client.base_url}",
+                f"Active runs: {payload.get('active_runs', 0)}",
+                f"Current chat run: {active_run}",
+                f"Telegram bridge: {payload.get('telegram_bridge', 'unknown')}",
+            ]
+        )
+
+    async def runs_command_text(self, argument: str) -> str:
+        limit = _telegram_list_limit(argument, default=10, maximum=25)
+        try:
+            if self.daemon_client is not None:
+                payload = await self.daemon_client.list_runs(limit=limit)
+                runs = [dict(item) for item in payload.get("runs", []) if isinstance(item, dict)]
+            else:
+                runs = [_run_record_payload(record) for record in await self.run_store.list_runs(limit=limit)]
+        except Exception as exc:
+            return f"Could not list runs: {exc}"
+        if not runs:
+            return "No runs yet."
+        return "Recent runs:\n" + "\n".join(_run_line(run) for run in runs)
+
+    async def run_command_text(self, argument: str) -> str:
+        run_id = argument.strip()
+        if not run_id:
+            return "Usage: /run <run_id>"
+        try:
+            if self.daemon_client is not None:
+                payload = await self.daemon_client.get_run(run_id)
+                run = _object_payload(payload.get("run"))
+                artifacts = _object_payload(payload.get("artifacts"))
+            else:
+                record = await self.run_store.load_run(run_id)
+                if record is None:
+                    return "Unknown run."
+                run = _run_record_payload(record)
+                artifacts = {}
+        except Exception as exc:
+            return f"Could not load run: {exc}"
+        if not run:
+            return "Unknown run."
+        lines = [
+            f"Run {_short_run_id(str(run.get('run_id', run_id)))}",
+            f"State: {run.get('state', 'unknown')}",
+            f"Title: {run.get('title', 'Untitled')}",
+            f"Provider: {run.get('provider', '?')}:{run.get('model', '?')}",
+            f"Updated: {run.get('updated_at', 'unknown')}",
+        ]
+        if run.get("path"):
+            lines.append(f"Path: {run['path']}")
+        available_artifacts = [
+            name
+            for name, meta in artifacts.items()
+            if isinstance(meta, dict) and meta.get("exists")
+        ]
+        if available_artifacts:
+            lines.append("Artifacts: " + ", ".join(sorted(available_artifacts)))
+        return "\n".join(lines)
 
     async def schedule_text(self, chat_id: int, argument: str) -> str:
         try:
@@ -791,6 +876,42 @@ async def _telegram_events_from_daemon_event(run_id: str, event: dict[str, Any])
 
 def _object_payload(value: object) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _telegram_list_limit(argument: str, *, default: int, maximum: int) -> int:
+    cleaned = argument.strip()
+    if not cleaned:
+        return default
+    first = cleaned.split(maxsplit=1)[0]
+    try:
+        value = int(first)
+    except ValueError:
+        return default
+    return max(1, min(maximum, value))
+
+
+def _run_line(run: dict[str, Any]) -> str:
+    run_id = str(run.get("run_id", ""))
+    title = str(run.get("title", "Untitled")).strip() or "Untitled"
+    provider = str(run.get("provider", "?"))
+    model = str(run.get("model", "?"))
+    state = str(run.get("state", "unknown"))
+    return f"{_short_run_id(run_id)} [{state}] {provider}:{model} - {_compact_text(title, 90)}"
+
+
+def _run_record_payload(record: RunRecord) -> dict[str, Any]:
+    return {
+        "run_id": record.run_id,
+        "state": record.state,
+        "title": record.title,
+        "kind": record.kind,
+        "provider": record.provider,
+        "model": record.model,
+        "working_directory": record.working_directory,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "path": str(record.path),
+    }
 
 
 def _usage_from_payload(data: dict[str, Any]) -> Usage:

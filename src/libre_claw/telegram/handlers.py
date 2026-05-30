@@ -113,6 +113,33 @@ class TelegramHandlers:
             return
         await update.effective_message.reply_text(self.bridge.status_text(update.effective_chat.id))
 
+    async def usage(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        text = " ".join(context.args or [])
+        response = await self.bridge.usage_command_text(update.effective_chat.id, text)
+        await _reply_text_chunks(update.effective_message, response, self.bridge.config.telegram.max_message_length)
+
+    async def daemon(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        response = await self.bridge.daemon_command_text(update.effective_chat.id)
+        await _reply_text_chunks(update.effective_message, response, self.bridge.config.telegram.max_message_length)
+
+    async def runs(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        text = " ".join(context.args or [])
+        response = await self.bridge.runs_command_text(text)
+        await _reply_text_chunks(update.effective_message, response, self.bridge.config.telegram.max_message_length)
+
+    async def run(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        text = " ".join(context.args or [])
+        response = await self.bridge.run_command_text(text)
+        await _reply_text_chunks(update.effective_message, response, self.bridge.config.telegram.max_message_length)
+
     async def compact(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
@@ -896,12 +923,17 @@ def _telegram_help_text() -> str:
             "/start - Check that the bot is ready",
             "/help - Show this command list",
             "/new - Start a fresh chat session",
+            "/restart - Start a fresh chat session",
             "/model - Open provider/model buttons",
             "/model <provider>:<name> - Switch model by text",
             "/models - Open provider/model buttons",
             "/provider - Open provider buttons",
             "/cost - Show token and cost usage",
+            "/usage [provider] - Show provider usage analytics",
             "/status - Show token and cost usage",
+            "/daemon - Show daemon connection health",
+            "/runs [N] - List recent daemon runs",
+            "/run <id> - Inspect a daemon run",
             "/compact - Compact the current context",
             "/schedule examples|list|add ... - Manage recurring runs",
             "/heartbeat status|once|start|stop - Recurring check-ins",
@@ -919,11 +951,16 @@ def telegram_command_specs() -> Sequence[tuple[str, str]]:
         ("start", "Check that Libre Claw is ready"),
         ("help", "Show Telegram slash commands"),
         ("new", "Start a fresh chat session"),
+        ("restart", "Start a fresh chat session"),
         ("model", "Open model configuration"),
         ("models", "Open model configuration"),
         ("provider", "Open provider selector"),
         ("cost", "Show token and cost usage"),
+        ("usage", "Show provider usage analytics"),
         ("status", "Show session info"),
+        ("daemon", "Show daemon health"),
+        ("runs", "List recent daemon runs"),
+        ("run", "Inspect one daemon run"),
         ("compact", "Compact the current context"),
         ("schedule", "Manage recurring runs"),
         ("heartbeat", "Recurring check-ins"),

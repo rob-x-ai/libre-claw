@@ -199,14 +199,22 @@ Useful Telegram commands:
 /start
 /help
 /new
+/restart
 /model
 /models
 /provider
 /cost
+/usage
 /status
+/daemon
+/runs
+/run
 /compact
 /schedule
+/heartbeat
+/memory
 /cancel
+/stop
 ```
 
 ![Libre Claw Telegram bot](docs/assets/libre-claw-telegram-screenshot.jpeg)

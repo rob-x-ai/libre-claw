@@ -38,6 +38,8 @@ First shippable Libre Claw release, built by Kroonen AI.
 - Telegram can optionally route chat runs and inline approvals through the
   daemon with `[telegram].use_daemon = true`, so approvals resume the same
   durable daemon run.
+- Telegram slash command menu now exposes daemon-aware remote commands for
+  usage, run history, run inspection, daemon health, and session restart.
 - Daemon run requests reject per-request `working_directory` overrides; the
   daemon uses the trusted configured root only.
 - Recurring local automations with `[automations]` config, `/schedule`
