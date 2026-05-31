@@ -158,6 +158,7 @@ class DaemonServer:
                 web.patch("/automations/{automation_id}", self.update_automation),
                 web.put("/automations/{automation_id}", self.update_automation),
                 web.delete("/automations/{automation_id}", self.delete_automation),
+                web.post("/automations/{automation_id}/run", self.run_automation_now),
                 web.post("/automations/{automation_id}/pause", self.pause_automation),
                 web.post("/automations/{automation_id}/resume", self.resume_automation),
             ]
@@ -497,6 +498,20 @@ class DaemonServer:
         if automation is None:
             return _json_error("Unknown automation.", status=404)
         return web.json_response({"automation": _automation_payload(automation)})
+
+    async def run_automation_now(self, request: web.Request) -> web.Response:
+        automation = await self.automation_store.load(request.match_info["automation_id"])
+        if automation is None:
+            return _json_error("Unknown automation.", status=404)
+        run = await self._start_automation_run(automation)
+        updated = await self.automation_store.load(automation.automation_id)
+        return web.json_response(
+            {
+                "run": _run_payload(run),
+                "automation": _automation_payload(updated or automation),
+            },
+            status=202,
+        )
 
     async def delete_automation(self, request: web.Request) -> web.Response:
         deleted = await self.automation_store.delete(request.match_info["automation_id"])
@@ -1031,6 +1046,9 @@ class DaemonClient:
 
     async def resume_automation(self, automation_id: str) -> dict[str, Any]:
         return await self._request("POST", f"/automations/{automation_id}/resume")
+
+    async def run_automation_now(self, automation_id: str) -> dict[str, Any]:
+        return await self._request("POST", f"/automations/{automation_id}/run")
 
     async def delete_automation(self, automation_id: str) -> dict[str, Any]:
         return await self._request("DELETE", f"/automations/{automation_id}")

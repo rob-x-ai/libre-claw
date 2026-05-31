@@ -220,6 +220,8 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     assert "fetch(path" in response.text
     assert "/runs" in response.text
     assert "/automations" in response.text
+    assert "/automations/${id}/run" in response.text
+    assert "Run now" in response.text
     assert "/usage?limit=250" in response.text
     assert "/assets/favicon.ico" in response.text
     assert "Edit Schedule" in response.text
@@ -503,6 +505,47 @@ async def test_daemon_automation_api_crud(monkeypatch, tmp_path: Path) -> None:
     assert updated["automation"]["telegram_chat_id"] == 12345
     assert resumed["automation"]["status"] == "active"
     assert deleted["deleted"] is True
+
+
+async def test_daemon_can_run_automation_now(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    provider = ScriptedProvider([[TextDelta("manual scheduled done"), Done(Usage(input_tokens=2, output_tokens=3))]])
+    server = DaemonServer(
+        config,
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: provider,
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+    server.automation_store = AutomationStore(tmp_path / "automations")
+    automation = await server.automation_store.create(
+        name="Manual",
+        prompt="Run scheduled work now",
+        schedule="daily 09:00",
+        route="report",
+        provider=config.general.default_provider,
+        model=config.general.default_model,
+        status="paused",
+    )
+
+    response = await server.run_automation_now(  # type: ignore[arg-type]
+        RequestStub(match_info={"automation_id": automation.automation_id})
+    )
+    payload = _response_payload(response)
+    run_id = payload["run"]["run_id"]
+    await _wait_for_state(server, run_id, "done")
+    updated = await server.automation_store.load(automation.automation_id)
+    events = await server.run_store.load_events(run_id)
+
+    assert response.status == 202
+    assert payload["automation"]["last_run_id"] == run_id
+    assert updated is not None
+    assert updated.status == "paused"
+    assert updated.last_run_id == run_id
+    assert updated.report_path is not None
+    assert Path(updated.report_path).exists()
+    assert any(event.type == "automation_triggered" for event in events)
 
 
 async def test_daemon_tick_runs_due_automation_and_writes_report(monkeypatch, tmp_path: Path) -> None:

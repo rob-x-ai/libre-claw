@@ -1138,6 +1138,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
         prompt.textContent = truncate(automation.prompt || "", 180);
         const row = document.createElement("div");
         row.className = "row end";
+        const runNow = document.createElement("button");
+        runNow.textContent = "Run now";
+        runNow.className = "primary";
+        runNow.addEventListener("click", () => runAutomationNow(automation.automation_id, runNow));
         const edit = document.createElement("button");
         edit.textContent = "Edit";
         edit.addEventListener("click", () => editAutomation(automation));
@@ -1148,7 +1152,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         del.textContent = "Delete";
         del.className = "danger";
         del.addEventListener("click", () => deleteAutomation(automation.automation_id));
-        row.append(edit, toggle, del);
+        row.append(runNow, edit, toggle, del);
         box.append(head, meta, prompt, row);
         container.append(box);
       }
@@ -1198,6 +1202,21 @@ _DASHBOARD_HTML = r"""<!doctype html>
       const action = automation.status === "active" ? "pause" : "resume";
       await request(`/automations/${automation.automation_id}/${action}`, { method: "POST" });
       await refreshAutomations();
+    }
+
+    async function runAutomationNow(id, button) {
+      button.disabled = true;
+      const originalLabel = button.textContent;
+      button.textContent = "Starting...";
+      try {
+        const payload = await request(`/automations/${id}/run`, { method: "POST" });
+        setNotice(`Schedule run ${payload.run.run_id} started.`);
+        await Promise.all([refreshAutomations(), refreshRuns()]);
+        await selectRun(payload.run.run_id);
+      } finally {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
     }
 
     async function deleteAutomation(id) {
