@@ -638,7 +638,7 @@ async def test_daemon_automation_finalizer_recovers_partial_failed_run(monkeypat
     assert provider.max_tokens_values[-1] == config.automations.finalizer_max_tokens
 
 
-async def test_daemon_automation_finalizer_recovers_done_run_without_summary(
+async def test_daemon_automation_finalizer_recovers_empty_provider_output(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -688,7 +688,7 @@ async def test_daemon_automation_finalizer_recovers_done_run_without_summary(
     assert len(sent) == 1
     assert "Clean scheduled report from saved observations." in sent[0][1]
     assert "No assistant summary was produced" not in sent[0][1]
-    assert any(event.type == "automation_finalized" and event.data["source_state"] == "done" for event in events)
+    assert any(event.type == "automation_finalized" and event.data["source_state"] == "failed" for event in events)
 
 
 async def test_daemon_failed_telegram_automation_hides_partial_scratch_summary(tmp_path: Path) -> None:

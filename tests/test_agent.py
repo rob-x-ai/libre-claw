@@ -326,6 +326,22 @@ async def test_agent_falls_back_when_primary_provider_fails_before_output() -> N
     assert len(fallback.received_messages) == 1
 
 
+async def test_agent_falls_back_when_primary_provider_returns_empty_output() -> None:
+    primary = ScriptedProvider([[Done(Usage(input_tokens=5, output_tokens=10))]])
+    fallback = ScriptedProvider([[TextDelta("ok"), Done()]])
+    agent = make_agent(primary, fallback_providers=(("openrouter:backup", fallback),))
+
+    events = await collect_events(agent, "Hi")
+
+    assert events == [
+        AgentFallback("openrouter:backup", "Provider returned no assistant text or tool calls."),
+        AgentTextDelta("ok"),
+        AgentDone(Usage(input_tokens=5, output_tokens=10)),
+    ]
+    assert len(primary.received_messages) == 1
+    assert len(fallback.received_messages) == 1
+
+
 async def test_agent_does_not_fallback_after_partial_output() -> None:
     primary = ScriptedProvider([[TextDelta("partial"), ProviderError("down")]])
     fallback = ScriptedProvider([[TextDelta("ok"), Done()]])

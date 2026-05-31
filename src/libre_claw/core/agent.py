@@ -166,6 +166,10 @@ class Agent:
                     provider_error = str(exc)
                     self._logger.warning("agent_stream_failed", error=provider_error)
 
+                if not provider_failed and not assistant_chunks and not tool_calls:
+                    provider_failed = True
+                    provider_error = "Provider returned no assistant text or tool calls."
+
                 if not provider_failed:
                     break
 

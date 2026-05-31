@@ -929,6 +929,11 @@ class DaemonServer:
                     continue
             summary = "".join(chunks).strip()
             if not summary:
+                await self.run_store.append_event(
+                    run.run_id,
+                    "automation_finalizer_error",
+                    {"message": "Finalizer returned no assistant text."},
+                )
                 return False
             await self.run_store.finish_run(
                 run.run_id,
