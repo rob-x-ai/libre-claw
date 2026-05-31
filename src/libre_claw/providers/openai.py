@@ -146,8 +146,9 @@ class OpenAIProvider(LLMProvider):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self._logger.warning("openai_stream_failed", error=str(exc))
-            yield ProviderError(f"{self.display_name} request failed: {exc}")
+            error = str(exc) or repr(exc)
+            self._logger.warning("openai_stream_failed", error=error, error_type=exc.__class__.__name__)
+            yield ProviderError(f"{self.display_name} request failed: {error}")
             return
 
         yield Done(usage=usage, stop_reason=stop_reason)

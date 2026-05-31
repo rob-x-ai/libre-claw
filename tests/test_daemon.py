@@ -184,6 +184,7 @@ async def test_daemon_starts_background_run_and_persists_events(monkeypatch, tmp
     run_id = _response_payload(start)["run"]["run_id"]
 
     detail = await _wait_for_state(server, run_id, "done")
+    await _wait_for_event(server, run_id, "run_finished")
     events = _response_payload(
         await server.get_events(RequestStub(match_info={"run_id": run_id}))  # type: ignore[arg-type]
     )
