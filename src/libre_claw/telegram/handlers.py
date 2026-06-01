@@ -1125,9 +1125,16 @@ def _model_keyboard(config: Any, provider: str) -> Any:
     current_provider = _canonical_telegram_provider(str(config.general.default_provider))
     current_model = str(config.general.default_model)
     presets = TELEGRAM_MODEL_PRESETS.get(provider, ())
+    indexed_presets = list(enumerate(presets))
+    indexed_presets.sort(
+        key=lambda item: (
+            not (provider == current_provider and item[1].model == current_model),
+            item[0],
+        )
+    )
     buttons: list[list[Any]] = []
     row: list[Any] = []
-    for index, preset in enumerate(presets):
+    for index, preset in indexed_presets:
         selected = provider == current_provider and preset.model == current_model
         prefix = "✓ " if selected else ""
         row.append(InlineKeyboardButton(f"{prefix}{preset.label}", callback_data=f"cfg:model:{provider}:{index}"))

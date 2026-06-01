@@ -32,6 +32,7 @@ from libre_claw.telegram.handlers import (
     _model_configuration_text,
     _model_keyboard,
     _provider_keyboard,
+    _replace_general,
     _reply_text_chunks,
     _safe_edit_text_preview,
     _stream_preview,
@@ -614,6 +615,19 @@ def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monk
     assert any("MiniMax M3" in button.text for row in model_keyboard.inline_keyboard for button in row)
     assert any("MiniMax M3" in button.text for row in ollama_keyboard.inline_keyboard for button in row)
     assert any(preset.model == "minimax-m3:cloud" for preset in TELEGRAM_MODEL_PRESETS["ollama"])
+
+
+def test_telegram_openrouter_keyboard_promotes_current_model(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    config = _replace_general(config, default_provider="openrouter", default_model="minimax/minimax-m3")
+
+    model_keyboard = _model_keyboard(config, "openrouter")
+
+    first = model_keyboard.inline_keyboard[0][0]
+    assert first.text == "✓ MiniMax M3"
+    assert first.callback_data == "cfg:model:openrouter:11"
 
 
 async def test_telegram_model_command_strips_global_flag_and_persists(monkeypatch, tmp_path: Path) -> None:
