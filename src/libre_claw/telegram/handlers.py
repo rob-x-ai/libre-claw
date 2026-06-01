@@ -11,6 +11,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
+from libre_claw.config import ConfigError, global_config_path, set_global_default_model
 from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
@@ -188,9 +189,26 @@ class TelegramHandlers:
                 reply_markup=_provider_keyboard(self.bridge.config),
             )
             return
-        provider, selected_model = _parse_telegram_model_argument(model, self.bridge.config.general.default_provider)
+        provider, selected_model, persist_global = _parse_telegram_model_argument(
+            model,
+            self.bridge.config.general.default_provider,
+        )
+        if not selected_model:
+            await update.effective_message.reply_text("Usage: /model <provider>:<name> [--global]")
+            return
         self.bridge.config = _replace_general(self.bridge.config, default_provider=provider, default_model=selected_model)
-        await update.effective_message.reply_text(f"Model set to {provider}:{selected_model}.")
+        response = f"Model set to {provider}:{selected_model}."
+        if persist_global:
+            try:
+                path = set_global_default_model(
+                    provider,
+                    selected_model,
+                    config_path=global_config_path(self.bridge.config),
+                )
+                response += f"\nSaved as global default in {path}."
+            except ConfigError as exc:
+                response += f"\nModel set for this Telegram session, but global config was not updated: {exc}"
+        await update.effective_message.reply_text(response)
 
     async def provider(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
@@ -1015,16 +1033,24 @@ def _canonical_telegram_provider(provider: str) -> str:
     return normalized
 
 
-def _parse_telegram_model_argument(argument: str, current_provider: str) -> tuple[str, str]:
-    cleaned = argument.strip()
+def _parse_telegram_model_argument(argument: str, current_provider: str) -> tuple[str, str, bool]:
+    cleaned, persist_global = _strip_telegram_global_flag(argument)
     provider = _canonical_telegram_provider(current_provider)
     if not cleaned:
-        return provider, ""
+        return provider, "", persist_global
     prefix, separator, rest = cleaned.partition(":")
     canonical_prefix = _canonical_telegram_provider(prefix)
     if separator and canonical_prefix in TELEGRAM_PROVIDER_LABELS and rest.strip():
-        return canonical_prefix, rest.strip()
-    return provider, cleaned
+        return canonical_prefix, rest.strip(), persist_global
+    return provider, cleaned, persist_global
+
+
+def _strip_telegram_global_flag(argument: str) -> tuple[str, bool]:
+    parts = argument.strip().split()
+    if "--global" not in parts:
+        return argument.strip(), False
+    cleaned = " ".join(part for part in parts if part != "--global")
+    return cleaned, True
 
 
 def _provider_usage_text() -> str:

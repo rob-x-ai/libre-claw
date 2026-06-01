@@ -616,6 +616,48 @@ def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monk
     assert any(preset.model == "minimax-m3:cloud" for preset in TELEGRAM_MODEL_PRESETS["ollama"])
 
 
+async def test_telegram_model_command_strips_global_flag_and_persists(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    bridge = TelegramBridge(config)
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))
+
+    class User:
+        id = 123
+
+    class Message:
+        def __init__(self) -> None:
+            self.replies: list[str] = []
+
+        async def reply_text(self, text: str, reply_markup: object | None = None) -> None:
+            del reply_markup
+            self.replies.append(text)
+
+    class Update:
+        effective_user = User()
+
+        def __init__(self) -> None:
+            self.effective_message = Message()
+
+    class Context:
+        args = ["openrouter:minimax/minimax-m3", "--global"]
+
+    update = Update()
+
+    await handlers.model(update, Context())  # type: ignore[arg-type]
+
+    persisted = tmp_path / ".libre-claw" / "config.toml"
+    assert bridge.config.general.default_provider == "openrouter"
+    assert bridge.config.general.default_model == "minimax/minimax-m3"
+    assert update.effective_message.replies == [
+        f"Model set to openrouter:minimax/minimax-m3.\nSaved as global default in {persisted}."
+    ]
+    assert 'default_provider = "openrouter"' in persisted.read_text(encoding="utf-8")
+    assert 'default_model = "minimax/minimax-m3"' in persisted.read_text(encoding="utf-8")
+    assert "--global" not in persisted.read_text(encoding="utf-8")
+
+
 async def test_telegram_model_callback_sets_provider_and_model(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
