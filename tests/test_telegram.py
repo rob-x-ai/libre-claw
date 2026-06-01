@@ -602,6 +602,7 @@ def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monk
     text = _model_configuration_text(config)
     provider_keyboard = _provider_keyboard(config)
     model_keyboard = _model_keyboard(config, "openrouter")
+    ollama_keyboard = _model_keyboard(config, "ollama")
 
     assert "Model Configuration" in text
     assert "Select a provider" in text
@@ -610,6 +611,8 @@ def test_telegram_model_configuration_uses_inline_keyboards(tmp_path: Path, monk
     assert len([button for row in model_keyboard.inline_keyboard for button in row if button.callback_data.startswith("cfg:model:openrouter:")]) == len(
         TELEGRAM_MODEL_PRESETS["openrouter"]
     )
+    assert any("MiniMax M3" in button.text for row in ollama_keyboard.inline_keyboard for button in row)
+    assert any(preset.model == "minimax-m3:cloud" for preset in TELEGRAM_MODEL_PRESETS["ollama"])
 
 
 async def test_telegram_model_callback_sets_provider_and_model(monkeypatch, tmp_path: Path) -> None:

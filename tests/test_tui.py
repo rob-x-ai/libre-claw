@@ -244,6 +244,9 @@ def test_model_argument_suggestions_complete_provider_model(monkeypatch, tmp_pat
     assert app._should_complete_on_submit("/model openr") is True
     assert app._should_complete_on_submit("/model openrouter:deepseek/deepseek-v4-flash") is False
 
+    ollama_suggestions = app._slash_suggestion_matches("/model minimax-m3")
+    assert any(suggestion.name == "/model ollama:minimax-m3:cloud" for suggestion in ollama_suggestions)
+
 
 def test_heartbeat_suggestions(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))

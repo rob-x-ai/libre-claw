@@ -113,6 +113,7 @@ Key lookup order:
 /model list
 /model openrouter:qwen/qwen3.7-max --global
 /model openrouter:deepseek/deepseek-v4-flash --global
+/model ollama:minimax-m3:cloud --global
 /model ollama:kimi-k2.6:cloud --global
 /model anthropic:claude-opus-4-8 --global
 /model openai:gpt-5.5 --global
