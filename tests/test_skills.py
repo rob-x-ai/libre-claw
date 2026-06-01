@@ -102,6 +102,18 @@ async def test_skill_store_loads_bundled_hacker_news_skill(monkeypatch, tmp_path
     assert any("no raw ID arrays" in match for match in matches)
 
 
+async def test_skill_store_loads_bundled_server_monitor_template(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    store = SkillStore(tmp_path / "project")
+
+    skills = await store.list_skills()
+    matches = store.relevant_skill_texts("server down power outage storm utility map", limit=3)
+
+    assert any(skill.scope == "bundled" and skill.name == "server-monitor" for skill in skills)
+    assert any("Server Monitor Snapshot" in match for match in matches)
+    assert any("<LATITUDE>,<LONGITUDE>" in match for match in matches)
+
+
 async def test_bundled_skills_are_read_only(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     store = SkillStore(tmp_path / "project")
@@ -142,3 +154,19 @@ async def test_project_skill_overrides_bundled_relevance(monkeypatch, tmp_path: 
     assert len(matches) == 1
     assert "Custom HN Brief" in matches[0]
     assert "Hacker News Brief" not in matches[0]
+
+
+async def test_project_skill_overrides_bundled_even_when_template_scores_higher(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    store = SkillStore(tmp_path / "project")
+    await store.add_skill(
+        "server-monitor",
+        "# Private Server Monitor\n\nUse for Rob's server outage check.",
+        scope="project",
+    )
+
+    matches = store.relevant_skill_texts("server down power outage storm utility map", limit=1)
+
+    assert len(matches) == 1
+    assert "Private Server Monitor" in matches[0]
+    assert "<LATITUDE>,<LONGITUDE>" not in matches[0]

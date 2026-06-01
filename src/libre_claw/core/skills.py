@@ -167,8 +167,8 @@ class SkillStore:
             score = sum(3 if token in _tokens(skill.title + " " + skill.description) else 1 for token in tokens if token in haystack)
             if score > 0:
                 existing = scored.get(skill.name)
-                if existing is None or score > existing[0] or (
-                    score == existing[0] and SCOPE_ORDER[skill.scope] > SCOPE_ORDER[existing[1].scope]
+                if existing is None or SCOPE_ORDER[skill.scope] > SCOPE_ORDER[existing[1].scope] or (
+                    SCOPE_ORDER[skill.scope] == SCOPE_ORDER[existing[1].scope] and score > existing[0]
                 ):
                     scored[skill.name] = (score, skill)
         ranked = list(scored.values())
