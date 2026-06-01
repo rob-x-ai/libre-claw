@@ -15,10 +15,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Libre Claw Dashboard</title>
-  <link rel="icon" href="/assets/favicon.ico?v=20260527" sizes="any">
-  <link rel="shortcut icon" href="/assets/favicon.ico?v=20260527">
-  <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32x32.png?v=20260527">
-  <link rel="icon" type="image/png" sizes="256x256" href="/assets/favicon.png?v=20260527">
+  <link rel="icon" type="image/svg+xml" href="/assets/lobster-icon.svg?v=20260601">
   <style>
     :root {
       color-scheme: dark light;
@@ -33,11 +30,11 @@ _DASHBOARD_HTML = r"""<!doctype html>
       --text: #ffffff;
       --soft: #d4d4d8;
       --muted: #a1a1aa;
-      --accent: #0070f3;
-      --accent-soft: rgba(0, 112, 243, 0.15);
-      --accent-strong: #dbeafe;
-      --purple: #8b5cf6;
-      --purple-soft: rgba(139, 92, 246, 0.14);
+      --accent: #ef4444;
+      --accent-soft: rgba(239, 68, 68, 0.15);
+      --accent-strong: #fecaca;
+      --tool-accent: #fb7185;
+      --tool-soft: rgba(251, 113, 133, 0.14);
       --danger: #ff4d4f;
       --danger-soft: rgba(255, 77, 79, 0.14);
       --ok: #42d392;
@@ -68,7 +65,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       inset: 0;
       content: "";
       background-image:
-        linear-gradient(to bottom, rgba(0, 112, 243, 0.1), transparent 30%),
+        linear-gradient(to bottom, rgba(239, 68, 68, 0.1), transparent 30%),
         radial-gradient(circle at center, var(--grid-dot) 1px, transparent 1px);
       background-size: auto, 26px 26px;
       mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.72) 45%, transparent 86%);
@@ -194,18 +191,15 @@ _DASHBOARD_HTML = r"""<!doctype html>
       flex: 0 0 auto;
       width: 36px;
       height: 36px;
-      border-radius: 8px;
-      overflow: hidden;
-      box-shadow: 0 0 0 1px var(--line), 0 0 24px var(--accent-soft);
-      background: var(--surface-2);
+      display: grid;
+      place-items: center;
+      overflow: visible;
+      background: transparent;
+      border-radius: 0;
+      box-shadow: none;
+      font-size: 34px;
+      line-height: 1;
     }
-    .logo {
-      width: 100%;
-      height: 100%;
-      display: block;
-      object-fit: cover;
-    }
-    .logo-light { display: none; }
     .status-dot {
       width: 9px;
       height: 9px;
@@ -392,7 +386,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     .run-focus {
       border-color: color-mix(in srgb, var(--accent) 44%, var(--line));
       background:
-        linear-gradient(120deg, rgba(0, 112, 243, 0.16), rgba(139, 92, 246, 0.08) 42%, transparent 70%),
+        linear-gradient(120deg, rgba(239, 68, 68, 0.16), rgba(251, 113, 133, 0.08) 42%, transparent 70%),
         var(--panel);
     }
     .run-focus .section-head {
@@ -425,7 +419,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
     .event:hover { border-color: var(--line-strong); }
     .event.is-error, .event.event-error { border-color: color-mix(in srgb, var(--danger) 52%, var(--line)); background: var(--danger-soft); }
-    .event.event-tool-call, .event.event-tool-result { border-color: color-mix(in srgb, var(--purple) 36%, var(--line)); }
+    .event.event-tool-call, .event.event-tool-result { border-color: color-mix(in srgb, var(--tool-accent) 36%, var(--line)); }
     .event.event-permission-request { border-color: color-mix(in srgb, var(--warn) 52%, var(--line)); background: var(--warn-soft); }
     .event-head {
       display: flex;
@@ -435,7 +429,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
       min-width: 0;
     }
     .event-type {
-      color: var(--purple);
+      color: var(--tool-accent);
       font-size: 12px;
       font-weight: 850;
       min-width: 0;
@@ -563,18 +557,16 @@ _DASHBOARD_HTML = r"""<!doctype html>
         --surface-2: #f5f7fb;
         --panel: rgba(255, 255, 255, 0.88);
         --panel-strong: #ffffff;
-        --panel-hover: rgba(0, 112, 243, 0.06);
+        --panel-hover: rgba(239, 68, 68, 0.06);
         --line: rgba(15, 23, 42, 0.12);
         --line-strong: rgba(15, 23, 42, 0.2);
         --text: #09090b;
         --soft: #27272a;
         --muted: #71717a;
-        --accent-strong: #005cc5;
+        --accent-strong: #b91c1c;
         --grid-dot: rgba(0, 0, 0, 0.1);
         --shadow: 0 22px 70px rgba(15, 23, 42, 0.1);
       }
-      .logo-dark { display: none; }
-      .logo-light { display: block; }
       pre { background: rgba(15, 23, 42, 0.045); border-color: rgba(15, 23, 42, 0.08); }
     }
     @media (max-width: 1120px) {
@@ -635,10 +627,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
   <div class="app">
     <header class="topbar">
       <div class="brand">
-        <span class="logo-wrap" aria-hidden="true">
-          <img class="logo logo-dark" src="/assets/logo-dark.jpg?v=20260527" alt="" width="36" height="36">
-          <img class="logo logo-light" src="/assets/logo-light.jpg?v=20260527" alt="" width="36" height="36">
-        </span>
+        <span class="logo-wrap" role="img" aria-label="Libre Claw lobster">🦞</span>
         <div>
           <div class="brand-title"><span>Libre Claw Dashboard</span><span id="healthDot" class="status-dot" aria-label="Daemon status"></span></div>
           <small>Local control plane for runs, approvals, schedules, and usage.</small>

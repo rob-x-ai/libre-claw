@@ -95,11 +95,7 @@ AUTOMATION_FINALIZER_SYSTEM = (
     "mostly errored, or too incomplete to answer."
 )
 DASHBOARD_ASSET_TYPES = {
-    "favicon.ico": "image/vnd.microsoft.icon",
-    "favicon-32x32.png": "image/png",
-    "favicon.png": "image/png",
-    "logo-dark.jpg": "image/jpeg",
-    "logo-light.jpg": "image/jpeg",
+    "lobster-icon.svg": "image/svg+xml",
 }
 
 

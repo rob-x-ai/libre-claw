@@ -223,7 +223,7 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     assert "/automations/${id}/run" in response.text
     assert "Run now" in response.text
     assert "/usage?limit=250" in response.text
-    assert "/assets/favicon.ico" in response.text
+    assert "/assets/lobster-icon.svg" in response.text
     assert "Edit Schedule" in response.text
     assert 'method = editingId ? "PUT" : "POST"' in response.text
 
@@ -246,7 +246,7 @@ async def test_daemon_shutdown_endpoint_sets_shutdown_event(monkeypatch, tmp_pat
     assert server._shutdown_event.is_set()
 
 
-async def test_daemon_serves_packaged_dashboard_logo(monkeypatch, tmp_path: Path) -> None:
+async def test_daemon_serves_packaged_dashboard_lobster_icon(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     server = DaemonServer(
@@ -256,20 +256,15 @@ async def test_daemon_serves_packaged_dashboard_logo(monkeypatch, tmp_path: Path
         registry_factory=lambda _config, _memory: ToolRegistry(),
     )
 
-    response = await server.dashboard_asset(RequestStub(match_info={"name": "logo-dark.jpg"}))  # type: ignore[arg-type]
-    favicon = await server.dashboard_asset(RequestStub(match_info={"name": "favicon.ico"}))  # type: ignore[arg-type]
-    favicon_png = await server.dashboard_asset(  # type: ignore[arg-type]
-        RequestStub(match_info={"name": "favicon-32x32.png"})
+    response = await server.dashboard_asset(  # type: ignore[arg-type]
+        RequestStub(match_info={"name": "lobster-icon.svg"})
     )
     missing = await server.dashboard_asset(RequestStub(match_info={"name": "old-logo.svg"}))  # type: ignore[arg-type]
 
-    assert response.content_type == "image/jpeg"
+    assert response.content_type == "image/svg+xml"
     assert response.headers["Cache-Control"] == "no-store"
-    assert response.body.startswith(b"\xff\xd8")
-    assert favicon.content_type == "image/vnd.microsoft.icon"
-    assert favicon.body.startswith(b"\x00\x00\x01\x00")
-    assert favicon_png.content_type == "image/png"
-    assert favicon_png.body.startswith(b"\x89PNG")
+    assert b"Libre Claw lobster" in response.body
+    assert "🦞".encode("utf-8") in response.body
     assert missing.status == 404
 
 

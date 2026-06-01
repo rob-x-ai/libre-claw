@@ -268,7 +268,7 @@ PERMISSION_KEYS: dict[str, PermissionResolution] = {
     "exclamation_mark": "always_allow_call",
 }
 
-ASSISTANT_ACCENT = "#8B5CF6"
+ASSISTANT_ACCENT = "#EF4444"
 PROJECT_NOTICE = "Apache-2.0 | Kroonen AI | hello@kroonen.ai"
 STREAM_RENDER_INTERVAL = 0.05
 STREAM_RENDER_MAX_BUFFERED_CHARS = 240
@@ -299,9 +299,9 @@ class LibreClawApp(App[None]):
         layout: vertical;
         background: #101418;
         color: #dce3ea;
-        scrollbar-color: #0070F3;
-        scrollbar-color-hover: #0070F3;
-        scrollbar-color-active: #0070F3;
+        scrollbar-color: #EF4444;
+        scrollbar-color-hover: #EF4444;
+        scrollbar-color-active: #EF4444;
         scrollbar-background: #101418;
         scrollbar-background-hover: #101418;
         scrollbar-background-active: #101418;
@@ -313,9 +313,9 @@ class LibreClawApp(App[None]):
     Screen.light {
         background: #f7f7f2;
         color: #18212a;
-        scrollbar-color: #0070F3;
-        scrollbar-color-hover: #0070F3;
-        scrollbar-color-active: #0070F3;
+        scrollbar-color: #EF4444;
+        scrollbar-color-hover: #EF4444;
+        scrollbar-color-active: #EF4444;
         scrollbar-background: #f7f7f2;
         scrollbar-background-hover: #f7f7f2;
         scrollbar-background-active: #f7f7f2;
@@ -339,8 +339,8 @@ class LibreClawApp(App[None]):
     #workspace {
         height: 1fr;
         border: none;
-        border-top: solid #0070F3;
-        border-bottom: solid #0070F3;
+        border-top: solid #EF4444;
+        border-bottom: solid #EF4444;
         background: #111820;
     }
 
@@ -435,7 +435,7 @@ class LibreClawApp(App[None]):
         height: auto;
         max-height: 8;
         padding: 0 2;
-        border: solid #0070F3;
+        border: solid #EF4444;
         background: #0b1726;
         color: #dbeafe;
     }
@@ -476,7 +476,7 @@ class LibreClawApp(App[None]):
     #permission-panel {
         height: auto;
         padding: 1 2;
-        border-top: solid #0070F3;
+        border-top: solid #EF4444;
         background: #0b1726;
         color: #dbeafe;
     }
@@ -518,7 +518,7 @@ class LibreClawApp(App[None]):
 
     #artifact-panel {
         height: 16;
-        border-top: solid #0070F3;
+        border-top: solid #EF4444;
         background: #0f151c;
         padding: 0 1;
     }
@@ -567,9 +567,9 @@ class LibreClawApp(App[None]):
     #artifact-content,
     #chat,
     #input {
-        scrollbar-color: #0070F3;
-        scrollbar-color-hover: #0070F3;
-        scrollbar-color-active: #0070F3;
+        scrollbar-color: #EF4444;
+        scrollbar-color-hover: #EF4444;
+        scrollbar-color-active: #EF4444;
         scrollbar-background: #101418;
         scrollbar-background-hover: #101418;
         scrollbar-background-active: #101418;
@@ -590,9 +590,9 @@ class LibreClawApp(App[None]):
     Screen.light #artifact-content,
     Screen.light #chat,
     Screen.light #input {
-        scrollbar-color: #0070F3;
-        scrollbar-color-hover: #0070F3;
-        scrollbar-color-active: #0070F3;
+        scrollbar-color: #EF4444;
+        scrollbar-color-hover: #EF4444;
+        scrollbar-color-active: #EF4444;
         scrollbar-background: #f7f7f2;
         scrollbar-background-hover: #f7f7f2;
         scrollbar-background-active: #f7f7f2;
@@ -604,7 +604,7 @@ class LibreClawApp(App[None]):
     #input {
         height: 3;
         border: none;
-        border-top: solid #0070F3;
+        border-top: solid #EF4444;
         background: #121a22;
     }
 
@@ -2882,7 +2882,7 @@ class LibreClawApp(App[None]):
 
     def _format_entry(self, entry: TranscriptEntry, index: int = 0) -> RenderableType:
         if entry.role == "user":
-            return Text.assemble(("User: ", "bold #0070F3"), entry.content)
+            return Text.assemble(("User: ", "bold #EF4444"), entry.content)
         if entry.role == "assistant":
             if not entry.content:
                 return Text("Libre Claw: streaming...", style=f"bold {ASSISTANT_ACCENT} dim")
@@ -2909,7 +2909,7 @@ class LibreClawApp(App[None]):
             return Text.assemble(("Permission: ", "bold yellow"), entry.content)
         if entry.role == "file":
             title = entry.title or "File"
-            return Group(Text(f"File: {title}", style="bold blue"), Syntax(entry.content, "text"))
+            return Group(Text(f"File: {title}", style="bold #EF4444"), Syntax(entry.content, "text"))
         return Text("System: " + entry.content, style="dim")
 
     def _tool_display_index(self, transcript_index: int) -> int:
@@ -4337,8 +4337,8 @@ def _tool_style(status: str) -> str:
     if status == "error":
         return "red"
     if status == "pending":
-        return "#0070F3"
-    return "#8B5CF6"
+        return "#EF4444"
+    return "#EF4444"
 
 
 def _tool_timeline_title(name: str, *, is_error: bool, metadata: dict[str, Any]) -> str:
