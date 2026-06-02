@@ -40,6 +40,8 @@ class AgentConfig:
     max_tool_calls_per_turn: int
     auto_compact_threshold: float
     context_window_tokens: int
+    provider_retry_attempts: int
+    provider_retry_initial_delay: float
     system_prompt: str
     system_prompt_extra: str
 
@@ -386,6 +388,8 @@ def _load_default_config() -> ConfigTable:
             "max_tool_calls_per_turn": 50,
             "auto_compact_threshold": 0.8,
             "context_window_tokens": 200000,
+            "provider_retry_attempts": 2,
+            "provider_retry_initial_delay": 1.0,
             "system_prompt": (
                 "You are Libre Claw, an autonomous coding agent built by Kroonen AI "
                 "(https://kroonen.ai) running in the user's terminal.\n"
@@ -718,6 +722,8 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             max_tool_calls_per_turn=_int(agent, "max_tool_calls_per_turn"),
             auto_compact_threshold=_float(agent, "auto_compact_threshold"),
             context_window_tokens=_int(agent, "context_window_tokens"),
+            provider_retry_attempts=_int(agent, "provider_retry_attempts"),
+            provider_retry_initial_delay=_float(agent, "provider_retry_initial_delay"),
             system_prompt=_str(agent, "system_prompt"),
             system_prompt_extra=_str(agent, "system_prompt_extra"),
         ),

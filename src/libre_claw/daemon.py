@@ -835,6 +835,8 @@ class DaemonServer:
             max_tool_calls_per_turn=config.agent.max_tool_calls_per_turn,
             auto_compact_threshold=config.agent.auto_compact_threshold,
             context_window_tokens=config.agent.context_window_tokens,
+            provider_retry_attempts=config.agent.provider_retry_attempts,
+            provider_retry_initial_delay=config.agent.provider_retry_initial_delay,
             memory_facts=memory_facts,
             system_prompt_extra=_surface_prompt_extra(config.agent.system_prompt_extra, surface),
             skill_provider=skill_store.relevant_skill_texts,

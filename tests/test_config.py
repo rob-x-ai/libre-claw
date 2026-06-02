@@ -34,6 +34,8 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.auth.keyring_service == "libre-claw"
     assert config.auth.token_ttl_seconds == 3600
     assert config.agent.context_window_tokens == 200000
+    assert config.agent.provider_retry_attempts == 2
+    assert config.agent.provider_retry_initial_delay == 1.0
     assert config.goal.max_turns == 20
     assert config.goal.judge_provider == "current"
     assert config.goal.judge_model == ""

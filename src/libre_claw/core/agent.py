@@ -90,6 +90,8 @@ class Agent:
         max_tool_calls_per_turn: int = 50,
         auto_compact_threshold: float = 0.8,
         context_window_tokens: int = 200000,
+        provider_retry_attempts: int = 0,
+        provider_retry_initial_delay: float = 1.0,
         memory_facts: list[str] | None = None,
         system_prompt_extra: str = "",
         skill_provider: SkillProvider | None = None,
@@ -104,6 +106,8 @@ class Agent:
         self.max_tool_calls_per_turn = max_tool_calls_per_turn
         self.auto_compact_threshold = auto_compact_threshold
         self.context_window_tokens = context_window_tokens
+        self.provider_retry_attempts = max(0, provider_retry_attempts)
+        self.provider_retry_initial_delay = max(0.0, provider_retry_initial_delay)
         self.memory_facts = memory_facts or []
         self.system_prompt = system_prompt
         self.system_prompt_extra = system_prompt_extra
@@ -131,6 +135,7 @@ class Agent:
             tool_calls: list[ToolCall] = []
             provider_failed = False
             provider_error = ""
+            provider_attempt = 0
 
             while True:
                 try:
@@ -172,6 +177,19 @@ class Agent:
 
                 if not provider_failed:
                     break
+
+                can_retry_same_provider = (
+                    not assistant_chunks
+                    and not tool_calls
+                    and provider_attempt < self.provider_retry_attempts
+                    and _should_retry_provider_error(provider_error)
+                )
+                if can_retry_same_provider:
+                    provider_attempt += 1
+                    await asyncio.sleep(_retry_delay(self.provider_retry_initial_delay, provider_attempt))
+                    provider_failed = False
+                    provider_error = ""
+                    continue
 
                 if assistant_chunks or tool_calls or not fallback_queue:
                     self._save_assistant_text(assistant_chunks)
@@ -351,3 +369,42 @@ def _dedupe_texts(texts: Sequence[str]) -> list[str]:
         seen.add(key)
         result.append(cleaned)
     return result
+
+
+def _should_retry_provider_error(message: str) -> bool:
+    text = message.lower()
+    retry_markers = (
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "connection",
+        "connecterror",
+        "network",
+        "overloaded",
+        "rate limit",
+        "readerror",
+        "retry",
+        "temporarily",
+        "timeout",
+        "timed out",
+        "transport",
+    )
+    non_retry_markers = (
+        "api key",
+        "authentication",
+        "invalid model",
+        "not a valid model",
+        "permission",
+        "unauthorized",
+    )
+    return any(marker in text for marker in retry_markers) and not any(
+        marker in text for marker in non_retry_markers
+    )
+
+
+def _retry_delay(initial_delay: float, attempt: int) -> float:
+    if initial_delay <= 0:
+        return 0.0
+    return min(initial_delay * (2 ** max(0, attempt - 1)), 8.0)

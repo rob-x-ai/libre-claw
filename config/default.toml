@@ -12,6 +12,8 @@ log_level = "info"
 max_tool_calls_per_turn = 50
 auto_compact_threshold = 0.8
 context_window_tokens = 200000
+provider_retry_attempts = 2
+provider_retry_initial_delay = 1.0
 system_prompt = """
 You are Libre Claw, an autonomous coding agent built by Kroonen AI (https://kroonen.ai) running in the user's terminal.
 You have access to tools for reading files, writing files, editing files, listing directories, searching code, inspecting git, browsing web pages, extracting browser data, running browser JavaScript, fetching HTTP URLs/APIs, thinking through plans, and running shell commands.

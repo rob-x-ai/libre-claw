@@ -101,6 +101,8 @@ def make_agent(
     soul_provider=None,
     memory_provider: MemoryProvider | None = None,
     fallback_providers=None,
+    provider_retry_attempts: int = 0,
+    provider_retry_initial_delay: float = 0.0,
 ) -> Agent:
     permissions = PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=True))
     return Agent(
@@ -115,6 +117,8 @@ def make_agent(
         soul_provider=soul_provider,
         memory_provider=memory_provider,
         fallback_providers=fallback_providers,
+        provider_retry_attempts=provider_retry_attempts,
+        provider_retry_initial_delay=provider_retry_initial_delay,
     )
 
 
@@ -351,3 +355,34 @@ async def test_agent_does_not_fallback_after_partial_output() -> None:
 
     assert events == [AgentTextDelta("partial"), AgentError("down")]
     assert fallback.received_messages == []
+
+
+async def test_agent_retries_empty_transient_provider_failure_after_tool_result() -> None:
+    provider = ScriptedProvider(
+        [
+            [ToolCallReady("toolu_1", "echo", {"value": "ids"}), Done(stop_reason="tool_use")],
+            [ProviderError("OpenRouter request failed: ReadError('')")],
+            [TextDelta("final brief"), Done()],
+        ]
+    )
+    registry = ToolRegistry([EchoTool(ToolContext(working_directory=Path.cwd()))])
+    agent = make_agent(
+        provider,
+        registry,
+        provider_retry_attempts=2,
+        provider_retry_initial_delay=0.0,
+    )
+
+    events = await collect_events(agent, "Fetch HN")
+
+    assert events == [
+        AgentToolCall(ToolCall(id="toolu_1", name="echo", arguments={"value": "ids"})),
+        AgentToolResult(
+            ToolCall(id="toolu_1", name="echo", arguments={"value": "ids"}),
+            ToolResult(content="echo:ids"),
+        ),
+        AgentTextDelta("final brief"),
+        AgentDone(None),
+    ]
+    assert len(provider.received_messages) == 3
+    assert provider.responses == []
