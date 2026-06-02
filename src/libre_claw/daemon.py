@@ -7,7 +7,7 @@ import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib.resources import files
 from typing import Any, Literal, cast
 
@@ -15,7 +15,7 @@ import httpx
 import structlog
 from aiohttp import web
 
-from libre_claw.config import GeneralConfig, LibreClawConfig
+from libre_claw.config import ConfigError, GeneralConfig, LibreClawConfig, global_config_path, set_global_default_model
 from libre_claw.auth.api_keys import ApiKeyStore
 from libre_claw.core import (
     Agent,
@@ -143,6 +143,8 @@ class DaemonServer:
                 web.get("/dashboard", self.dashboard),
                 web.get("/assets/{name}", self.dashboard_asset),
                 web.get("/health", self.health),
+                web.get("/config/model", self.current_model),
+                web.patch("/config/model", self.update_model),
                 web.post("/shutdown", self.shutdown),
                 web.get("/runs", self.list_runs),
                 web.post("/runs", self.start_run),
@@ -325,6 +327,39 @@ class DaemonServer:
                 "text": usage_report_text(records, provider=provider or "all"),
             }
         )
+
+    async def current_model(self, _request: web.Request) -> web.Response:
+        return web.json_response(_model_payload(self.config))
+
+    async def update_model(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _json_error("Request body must be JSON.")
+        if not isinstance(payload, Mapping):
+            return _json_error("Request body must be a JSON object.")
+
+        provider = str(payload.get("provider", "")).strip().lower()
+        model = str(payload.get("model", "")).strip()
+        if provider == "local":
+            provider = "ollama"
+        if not provider:
+            return _json_error("Field 'provider' is required.")
+        if not model:
+            return _json_error("Field 'model' is required.")
+
+        persisted_path: str | None = None
+        if bool(payload.get("persist_global", False)):
+            try:
+                path = set_global_default_model(provider, model, config_path=global_config_path(self.config))
+            except ConfigError as exc:
+                return _json_error(str(exc), status=400)
+            persisted_path = str(path)
+
+        self.config = _config_with_model(self.config, provider, model)
+        response = _model_payload(self.config)
+        response["persisted_path"] = persisted_path
+        return web.json_response(response)
 
     async def start_run(self, request: web.Request) -> web.Response:
         try:
@@ -1030,6 +1065,16 @@ class DaemonClient:
             query += f"&provider={provider}"
         return await self._request("GET", f"/usage?{query}")
 
+    async def current_model(self) -> dict[str, Any]:
+        return await self._request("GET", "/config/model")
+
+    async def update_model(self, provider: str, model: str, *, persist_global: bool = False) -> dict[str, Any]:
+        return await self._request(
+            "PATCH",
+            "/config/model",
+            json={"provider": provider, "model": model, "persist_global": persist_global},
+        )
+
     async def list_automations(self, limit: int = 50) -> dict[str, Any]:
         return await self._request("GET", f"/automations?limit={limit}")
 
@@ -1337,6 +1382,28 @@ def _optional_int(value: object) -> int | None:
         except ValueError as exc:
             raise ValueError("Value must be an integer or empty.") from exc
     raise ValueError("Value must be an integer or empty.")
+
+
+def _config_with_model(config: LibreClawConfig, provider: str, model: str) -> LibreClawConfig:
+    provider = "ollama" if provider.lower() == "local" else provider.strip().lower()
+    model = model.strip()
+    provider_configs: dict[str, Mapping[str, Any]] = {}
+    for name, value in config.providers.items():
+        provider_configs[name] = dict(value) if isinstance(value, Mapping) else value
+    existing = provider_configs.get(provider)
+    if isinstance(existing, Mapping):
+        updated = dict(existing)
+        updated["default_model"] = model
+        provider_configs[provider] = updated
+    general = replace(config.general, default_provider=provider, default_model=model)
+    return replace(config, general=general, providers=provider_configs)
+
+
+def _model_payload(config: LibreClawConfig) -> dict[str, Any]:
+    return {
+        "provider": "ollama" if config.general.default_provider.lower() == "local" else config.general.default_provider,
+        "model": config.general.default_model,
+    }
 
 
 def _run_payload(run: RunRecord) -> dict[str, Any]:

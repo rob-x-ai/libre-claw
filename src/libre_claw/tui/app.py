@@ -8,8 +8,8 @@ import difflib
 import json
 import shlex
 import time
-from collections.abc import Coroutine
-from dataclasses import dataclass, field
+from collections.abc import Coroutine, Mapping
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -666,6 +666,9 @@ class LibreClawApp(App[None]):
         self._memory_background_tasks: set[asyncio.Task[Any]] = set()
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._heartbeat_interval_minutes = max(1, self.config.heartbeat.interval_minutes)
+        self._global_model_config_path = global_config_path(self.config)
+        self._global_model_config_mtime_ns = _path_mtime_ns(self._global_model_config_path)
+        self._daemon_model_sync_task: asyncio.Task[None] | None = None
 
         self._rebuild_agent()
 
@@ -730,6 +733,8 @@ class LibreClawApp(App[None]):
             self._active_task.cancel()
         if self._heartbeat_task is not None and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
+        if self._daemon_model_sync_task is not None and not self._daemon_model_sync_task.done():
+            self._daemon_model_sync_task.cancel()
         for task in self._memory_background_tasks:
             task.cancel()
 
@@ -1754,7 +1759,8 @@ class LibreClawApp(App[None]):
             return
 
         provider, selected_model = parsed
-        self.config = _replace_general(self.config, default_provider=provider, default_model=selected_model)
+        self.config = _replace_model_selection(self.config, provider, selected_model)
+        self._sync_daemon_model_after_selection(provider, selected_model)
         persisted_path: Path | None = None
         if persist_global:
             try:
@@ -1776,6 +1782,19 @@ class LibreClawApp(App[None]):
             )
         else:
             self._append_system(f"Model set to {provider}:{selected_model}.{suffix}")
+
+    def _sync_daemon_model_after_selection(self, provider: str, model: str) -> None:
+        if self.daemon_client is None:
+            return
+        self._track_run_background_task(self._update_daemon_model_runtime(provider, model))
+
+    async def _update_daemon_model_runtime(self, provider: str, model: str) -> None:
+        if self.daemon_client is None:
+            return
+        try:
+            await self.daemon_client.update_model(provider, model)
+        except Exception as exc:
+            self._append_system(f"Daemon model was not updated: {exc}")
 
     def _verified_global_model_config(
         self,
@@ -3412,8 +3431,72 @@ class LibreClawApp(App[None]):
         )
 
     def _update_status(self) -> None:
+        self._sync_global_model_if_changed()
+        self._sync_daemon_model_later()
         if self.config.tui.show_status_bar:
             self.query_one("#status", Static).update(self._status_text())
+
+    def _sync_daemon_model_later(self) -> None:
+        if self.daemon_client is None:
+            return
+        if self._daemon_model_sync_task is not None and not self._daemon_model_sync_task.done():
+            return
+        self._daemon_model_sync_task = asyncio.create_task(self._sync_daemon_model_if_changed())
+
+    async def _sync_daemon_model_if_changed(self) -> None:
+        if self.daemon_client is None:
+            return
+        try:
+            payload = await self.daemon_client.current_model()
+        except Exception:
+            return
+
+        provider = _canonical_tui_provider(str(payload.get("provider", "")).strip())
+        model = str(payload.get("model", "")).strip()
+        if not provider or not model:
+            return
+        if (
+            provider == _canonical_tui_provider(self.config.general.default_provider)
+            and model == self.config.general.default_model
+        ):
+            return
+
+        self.config = _replace_model_selection(self.config, provider, model)
+        self._rebuild_agent()
+        self._append_system(f"Daemon model changed to {provider}:{model}; TUI session updated.")
+        if self.config.tui.show_status_bar:
+            self.query_one("#status", Static).update(self._status_text())
+
+    def _sync_global_model_if_changed(self) -> None:
+        if self._active_task is not None and not self._active_task.done():
+            return
+        path = global_config_path(self.config)
+        mtime = _path_mtime_ns(path)
+        if mtime is None:
+            self._global_model_config_path = path
+            self._global_model_config_mtime_ns = None
+            return
+        if path == self._global_model_config_path and mtime == self._global_model_config_mtime_ns:
+            return
+
+        self._global_model_config_path = path
+        self._global_model_config_mtime_ns = mtime
+        try:
+            updated = load_config(path)
+        except ConfigError:
+            return
+
+        provider = _canonical_tui_provider(updated.general.default_provider)
+        model = updated.general.default_model
+        if (
+            provider == _canonical_tui_provider(self.config.general.default_provider)
+            and model == self.config.general.default_model
+        ):
+            return
+
+        self.config = _replace_model_selection(self.config, provider, model, providers=updated.providers)
+        self._rebuild_agent()
+        self._append_system(f"Global model changed to {provider}:{model}; TUI session updated.")
 
     def _input_placeholder(self) -> str:
         if self.palette_open:
@@ -3459,6 +3542,35 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
         providers=config.providers,
         source_paths=config.source_paths,
     )
+
+
+def _replace_model_selection(
+    config: LibreClawConfig,
+    provider: str,
+    model: str,
+    *,
+    providers: Mapping[str, Mapping[str, Any]] | None = None,
+) -> LibreClawConfig:
+    clean_provider = _canonical_tui_provider(provider)
+    clean_model = model.strip()
+    next_providers: dict[str, Mapping[str, Any]] = {
+        name: dict(value) if isinstance(value, Mapping) else value
+        for name, value in (providers or config.providers).items()
+    }
+    provider_config = next_providers.get(clean_provider)
+    if isinstance(provider_config, Mapping):
+        updated_provider = dict(provider_config)
+        updated_provider["default_model"] = clean_model
+        next_providers[clean_provider] = updated_provider
+    updated = _replace_general(config, default_provider=clean_provider, default_model=clean_model)
+    return replace(updated, providers=next_providers)
+
+
+def _path_mtime_ns(path: Path) -> int | None:
+    try:
+        return path.expanduser().stat().st_mtime_ns
+    except OSError:
+        return None
 
 
 def _append_session_note(summary: str | None, note: str, *, limit: int = 4000) -> str:

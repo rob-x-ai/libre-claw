@@ -92,6 +92,7 @@ class FakeDaemonClient:
         self.base_url = "http://127.0.0.1:8766"
         self.resolutions: list[tuple[str, str, str]] = []
         self.start_payloads: list[dict[str, Any]] = []
+        self.model_updates: list[tuple[str, str, bool]] = []
         self.with_permission = with_permission
         self._events_served: set[str] = set()
         self._run_count = 0
@@ -157,6 +158,10 @@ class FakeDaemonClient:
 
     async def shutdown(self) -> dict[str, Any]:
         return {"ok": True, "stopping": True}
+
+    async def update_model(self, provider: str, model: str, *, persist_global: bool = False) -> dict[str, Any]:
+        self.model_updates.append((provider, model, persist_global))
+        return {"provider": provider, "model": model, "persisted_path": None}
 
     async def resolve_permission(self, run_id: str, tool_call_id: str, resolution: str) -> dict[str, Any]:
         self.resolutions.append((run_id, tool_call_id, resolution))
@@ -670,6 +675,47 @@ async def test_telegram_model_command_strips_global_flag_and_persists(monkeypatc
     assert 'default_provider = "openrouter"' in persisted.read_text(encoding="utf-8")
     assert 'default_model = "minimax/minimax-m3"' in persisted.read_text(encoding="utf-8")
     assert "--global" not in persisted.read_text(encoding="utf-8")
+
+
+async def test_telegram_model_command_syncs_daemon_runtime(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    daemon = FakeDaemonClient(with_permission=False)
+    bridge = TelegramBridge(config, daemon_client=daemon)  # type: ignore[arg-type]
+    handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))
+
+    class User:
+        id = 123
+
+    class Message:
+        def __init__(self) -> None:
+            self.replies: list[str] = []
+
+        async def reply_text(self, text: str, reply_markup: object | None = None) -> None:
+            del reply_markup
+            self.replies.append(text)
+
+    class Update:
+        effective_user = User()
+
+        def __init__(self) -> None:
+            self.effective_message = Message()
+
+    class Context:
+        args = ["openrouter:deepseek/deepseek-v4-pro"]
+
+    update = Update()
+
+    await handlers.model(update, Context())  # type: ignore[arg-type]
+
+    assert bridge.config.general.default_provider == "openrouter"
+    assert bridge.config.general.default_model == "deepseek/deepseek-v4-pro"
+    assert daemon.model_updates == [("openrouter", "deepseek/deepseek-v4-pro", False)]
+    assert update.effective_message.replies == [
+        "Model set to openrouter:deepseek/deepseek-v4-pro.\n"
+        "Daemon default updated for new daemon-backed runs."
+    ]
 
 
 async def test_telegram_model_callback_sets_provider_and_model(monkeypatch, tmp_path: Path) -> None:

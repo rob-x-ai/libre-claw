@@ -56,7 +56,17 @@ class FakeDaemonClient:
     def __init__(self) -> None:
         self.cancelled: list[str] = []
         self.resolutions: list[tuple[str, str, str]] = []
+        self.model_updates: list[tuple[str, str, bool]] = []
+        self.model_payload = {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash"}
         self._served = False
+
+    async def current_model(self):
+        return self.model_payload
+
+    async def update_model(self, provider: str, model: str, *, persist_global: bool = False):
+        self.model_updates.append((provider, model, persist_global))
+        self.model_payload = {"provider": provider, "model": model}
+        return {"provider": provider, "model": model, "persisted_path": None}
 
     async def start_run(self, message: str, **payload):
         del message, payload
@@ -307,6 +317,77 @@ async def test_model_global_flag_updates_next_launch_for_codex(monkeypatch, tmp_
     assert reloaded.providers["codex"]["default_model"] == "gpt-5.5"
     assert app.config.general.default_provider == "codex"
     assert app.config.general.default_model == "gpt-5.5"
+
+
+async def test_tui_syncs_changed_global_model_config(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test():
+        config_path = tmp_path / ".libre-claw" / "config.toml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            "\n".join(
+                [
+                    "[general]",
+                    'default_provider = "openrouter"',
+                    'default_model = "deepseek/deepseek-v4-pro"',
+                    "",
+                    "[providers.openrouter]",
+                    'default_model = "deepseek/deepseek-v4-pro"',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        app._global_model_config_mtime_ns = None
+        app._sync_global_model_if_changed()
+
+    assert app.config.general.default_provider == "openrouter"
+    assert app.config.general.default_model == "deepseek/deepseek-v4-pro"
+    assert app.config.providers["openrouter"]["default_model"] == "deepseek/deepseek-v4-pro"
+    assert any("Global model changed to openrouter:deepseek/deepseek-v4-pro" in entry.content for entry in app.transcript)
+
+
+async def test_tui_daemon_mode_syncs_daemon_model(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config = load_config()
+    config = replace(config, tui=replace(config.tui, use_daemon=True))
+    app = LibreClawApp(config=config)
+    daemon = FakeDaemonClient()
+    daemon.model_payload = {"provider": "openrouter", "model": "deepseek/deepseek-v4-pro"}
+    app.daemon_client = daemon  # type: ignore[assignment]
+
+    async with app.run_test():
+        await app._sync_daemon_model_if_changed()
+
+    assert app.config.general.default_provider == "openrouter"
+    assert app.config.general.default_model == "deepseek/deepseek-v4-pro"
+    assert app.config.providers["openrouter"]["default_model"] == "deepseek/deepseek-v4-pro"
+    assert "openrouter:deepseek/deepseek-v4-pro" in app._status_text()
+    assert any("Daemon model changed to openrouter:deepseek/deepseek-v4-pro" in entry.content for entry in app.transcript)
+
+
+async def test_tui_daemon_mode_model_command_updates_daemon(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    config = load_config()
+    config = replace(config, tui=replace(config.tui, use_daemon=True))
+    app = LibreClawApp(config=config)
+    daemon = FakeDaemonClient()
+    app.daemon_client = daemon  # type: ignore[assignment]
+
+    async with app.run_test():
+        await app._handle_command("/model openrouter:deepseek/deepseek-v4-pro")
+        await asyncio.gather(*app._run_background_tasks)
+
+    assert app.config.general.default_provider == "openrouter"
+    assert app.config.general.default_model == "deepseek/deepseek-v4-pro"
+    assert daemon.model_updates == [("openrouter", "deepseek/deepseek-v4-pro", False)]
 
 
 async def test_goal_commands_update_session_limit_and_report_status(monkeypatch, tmp_path: Path) -> None:

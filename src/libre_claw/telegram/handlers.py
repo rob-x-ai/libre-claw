@@ -198,6 +198,7 @@ class TelegramHandlers:
             return
         self.bridge.config = _replace_general(self.bridge.config, default_provider=provider, default_model=selected_model)
         response = f"Model set to {provider}:{selected_model}."
+        daemon_note = await self._sync_daemon_model(provider, selected_model)
         if persist_global:
             try:
                 path = set_global_default_model(
@@ -208,6 +209,10 @@ class TelegramHandlers:
                 response += f"\nSaved as global default in {path}."
             except ConfigError as exc:
                 response += f"\nModel set for this Telegram session, but global config was not updated: {exc}"
+        elif self.bridge.daemon_client is None:
+            response += "\nTelegram session only. Add --global to update the TUI/default config."
+        if daemon_note:
+            response += f"\n{daemon_note}"
         await update.effective_message.reply_text(response)
 
     async def provider(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -593,8 +598,23 @@ class TelegramHandlers:
                 default_provider=preset.provider,
                 default_model=preset.model,
             )
+            daemon_note = await self._sync_daemon_model(preset.provider, preset.model)
             await query.answer("Model selected.")
-            await query.edit_message_text(_model_selected_text(preset))
+            text = _model_selected_text(preset)
+            if daemon_note:
+                text += f"\n\n{daemon_note}"
+            elif self.bridge.daemon_client is None:
+                text += "\n\nTelegram session only. Use /model <provider>:<model> --global to update the TUI/default config."
+            await query.edit_message_text(text)
+
+    async def _sync_daemon_model(self, provider: str, model: str) -> str:
+        if self.bridge.daemon_client is None:
+            return ""
+        try:
+            await self.bridge.daemon_client.update_model(provider, model)
+        except Exception as exc:
+            return f"Daemon default was not updated: {exc}"
+        return "Daemon default updated for new daemon-backed runs."
 
     async def _authorized(self, update: Update) -> bool:
         user_id = update.effective_user.id if update.effective_user else None

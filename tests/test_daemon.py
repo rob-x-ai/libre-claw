@@ -246,6 +246,31 @@ async def test_daemon_shutdown_endpoint_sets_shutdown_event(monkeypatch, tmp_pat
     assert server._shutdown_event.is_set()
 
 
+async def test_daemon_updates_runtime_model(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: ScriptedProvider([[TextDelta("ok"), Done()]]),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+
+    before = _response_payload(await server.current_model(RequestStub()))  # type: ignore[arg-type]
+    response = await server.update_model(  # type: ignore[arg-type]
+        RequestStub(body={"provider": "openrouter", "model": "deepseek/deepseek-v4-pro"})
+    )
+    after = _response_payload(response)
+
+    assert before == {"provider": "anthropic", "model": "claude-opus-4-8"}
+    assert response.status == 200
+    assert after["provider"] == "openrouter"
+    assert after["model"] == "deepseek/deepseek-v4-pro"
+    assert server.config.general.default_provider == "openrouter"
+    assert server.config.general.default_model == "deepseek/deepseek-v4-pro"
+    assert server.config.providers["openrouter"]["default_model"] == "deepseek/deepseek-v4-pro"
+
+
 async def test_daemon_serves_packaged_dashboard_lobster_icon(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -374,6 +399,10 @@ async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> Non
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET" and request.url.path == "/health":
             response = await server.health(RequestStub())  # type: ignore[arg-type]
+        elif request.method == "GET" and request.url.path == "/config/model":
+            response = await server.current_model(RequestStub())  # type: ignore[arg-type]
+        elif request.method == "PATCH" and request.url.path == "/config/model":
+            response = await server.update_model(RequestStub(body=json.loads(request.content)))  # type: ignore[arg-type]
         elif request.method == "POST" and request.url.path == "/runs":
             response = await server.start_run(RequestStub(body=json.loads(request.content)))  # type: ignore[arg-type]
         else:
@@ -382,10 +411,15 @@ async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> Non
 
     client = DaemonClient("http://daemon.test", transport=httpx.MockTransport(handler))
     health = await client.health()
+    model_before = await client.current_model()
+    model_after = await client.update_model("openrouter", "deepseek/deepseek-v4-pro")
     started = await client.start_run("hello")
     await _wait_for_state(server, started["run"]["run_id"], "done")
 
     assert health["ok"] is True
+    assert model_before == {"provider": "anthropic", "model": "claude-opus-4-8"}
+    assert model_after["provider"] == "openrouter"
+    assert model_after["model"] == "deepseek/deepseek-v4-pro"
     assert started["run"]["state"] == "queued"
 
 
