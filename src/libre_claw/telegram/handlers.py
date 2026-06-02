@@ -14,6 +14,7 @@ from typing import Any
 from libre_claw.config import ConfigError, global_config_path, set_global_default_model
 from libre_claw.core.automations import AutomationError
 from libre_claw.core.heartbeat import HeartbeatError, heartbeat_prompt, parse_heartbeat_interval
+from libre_claw.core.permissions import PermissionResolution
 from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
@@ -40,6 +41,20 @@ TELEGRAM_CONTINUED_SUFFIX = "\n\n...[continued]"
 TELEGRAM_TYPING_INTERVAL_SECONDS = 4.0
 TELEGRAM_TOOL_LOG_UPDATE_INTERVAL_SECONDS = 8.0
 TELEGRAM_TOOL_LOG_UPDATE_EVENT_INTERVAL = 12
+PERMISSION_CALLBACKS: dict[str, tuple[PermissionResolution, str, str]] = {
+    "p:y:": ("allow_once", "Approved.", "✅ Approved"),
+    "p:t:": (
+        "always_allow_tool",
+        "Always allowing this tool for this run.",
+        "✅ Always allowing this tool for this run",
+    ),
+    "p:c:": (
+        "always_allow_call",
+        "Always allowing this exact call for this run.",
+        "✅ Always allowing this exact call for this run",
+    ),
+    "p:n:": ("deny", "Denied.", "✖️ Denied"),
+}
 
 
 @dataclass(frozen=True)
@@ -551,22 +566,15 @@ class TelegramHandlers:
             await query.answer("Not authorized.", show_alert=True)
             return
         data = query.data or ""
-        if data.startswith("p:y:"):
-            prompt_id = self._permission_callback_ids.pop(data.removeprefix("p:y:"), "")
-            resolved = await self.bridge.resolve_permission_async(prompt_id, "allow_once")
-            await query.answer("Approved." if resolved else "Prompt expired.")
-            if resolved:
-                with suppress(Exception):
-                    await query.edit_message_text("✅ Approved")
-            return
-        if data.startswith("p:n:"):
-            prompt_id = self._permission_callback_ids.pop(data.removeprefix("p:n:"), "")
-            resolved = await self.bridge.resolve_permission_async(prompt_id, "deny")
-            await query.answer("Denied." if resolved else "Prompt expired.")
-            if resolved:
-                with suppress(Exception):
-                    await query.edit_message_text("✖️ Denied")
-            return
+        for prefix, (resolution, answer_text, edit_text) in PERMISSION_CALLBACKS.items():
+            if data.startswith(prefix):
+                prompt_id = self._permission_callback_ids.pop(data.removeprefix(prefix), "")
+                resolved = await self.bridge.resolve_permission_async(prompt_id, resolution)
+                await query.answer(answer_text if resolved else "Prompt expired.")
+                if resolved:
+                    with suppress(Exception):
+                        await query.edit_message_text(edit_text)
+                return
         if data == "cfg:cancel":
             await query.answer("Cancelled.")
             await query.edit_message_text("Model configuration cancelled.")
@@ -669,6 +677,10 @@ class TelegramHandlers:
                 [
                     InlineKeyboardButton("✅ Approve", callback_data=f"p:y:{token}"),
                     InlineKeyboardButton("✖️ Deny", callback_data=f"p:n:{token}"),
+                ],
+                [
+                    InlineKeyboardButton("Always tool", callback_data=f"p:t:{token}"),
+                    InlineKeyboardButton("Always exact", callback_data=f"p:c:{token}"),
                 ]
             ]
         )

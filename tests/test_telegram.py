@@ -816,38 +816,59 @@ async def test_telegram_permission_callback_data_stays_under_telegram_limit(monk
 
     bridge = Bridge()
     handlers = TelegramHandlers(bridge, TelegramAuth(allowed_user_ids=frozenset({123})))  # type: ignore[arg-type]
-    markup = handlers._permission_reply_markup(long_prompt_id)
-    approve_data = markup.inline_keyboard[0][0].callback_data
-    deny_data = markup.inline_keyboard[0][1].callback_data
-
-    assert approve_data is not None
-    assert deny_data is not None
-    assert len(approve_data) <= 64
-    assert len(deny_data) <= 64
 
     class User:
         id = 123
 
     class Query:
-        data = approve_data
         from_user = User()
 
-        def __init__(self) -> None:
+        def __init__(self, data: str) -> None:
+            self.data = data
             self.answers: list[str] = []
+            self.edits: list[str] = []
 
         async def answer(self, text: str, show_alert: bool = False) -> None:
             del show_alert
             self.answers.append(text)
 
+        async def edit_message_text(self, text: str, reply_markup: object | None = None) -> None:
+            del reply_markup
+            self.edits.append(text)
+
     class Update:
         def __init__(self, query: Query) -> None:
             self.callback_query = query
 
-    query = Query()
-    await handlers.callback(Update(query), object())  # type: ignore[arg-type]
+    cases = [
+        ("p:y:", "allow_once", "Approved.", "✅ Approved"),
+        ("p:n:", "deny", "Denied.", "✖️ Denied"),
+        ("p:t:", "always_allow_tool", "Always allowing this tool for this run.", "✅ Always allowing this tool"),
+        (
+            "p:c:",
+            "always_allow_call",
+            "Always allowing this exact call for this run.",
+            "✅ Always allowing this exact call",
+        ),
+    ]
 
-    assert bridge.resolved == [(long_prompt_id, "allow_once")]
-    assert query.answers == ["Approved."]
+    for prefix, resolution, answer, edit_prefix in cases:
+        markup = handlers._permission_reply_markup(long_prompt_id)
+        callback_values = [
+            button.callback_data
+            for row in markup.inline_keyboard
+            for button in row
+            if button.callback_data is not None
+        ]
+        assert callback_values
+        assert all(len(value) <= 64 for value in callback_values)
+        callback_data = next(value for value in callback_values if value.startswith(prefix))
+        query = Query(callback_data)
+        await handlers.callback(Update(query), object())  # type: ignore[arg-type]
+        assert query.answers == [answer]
+        assert query.edits and query.edits[-1].startswith(edit_prefix)
+
+    assert bridge.resolved == [(long_prompt_id, resolution) for _, resolution, _, _ in cases]
 
 
 def test_telegram_bot_reads_secure_stored_token(monkeypatch, tmp_path: Path) -> None:
@@ -1070,14 +1091,14 @@ async def test_telegram_bridge_can_use_daemon_runs_for_approvals(monkeypatch, tm
 
     events = [event async for event in bridge.stream_message(1, "hello")]
     prompt = next(event for event in events if isinstance(event, TelegramPermissionPrompt))
-    resolved = await bridge.resolve_permission_async(prompt.prompt_id, "allow_once")
+    resolved = await bridge.resolve_permission_async(prompt.prompt_id, "always_allow_tool")
 
     assert any(isinstance(event, TelegramText) and event.text == "hi" for event in events)
     assert prompt.text.startswith("🔐 Approve bash?")
     assert "Approve daemon run" not in prompt.text
     assert prompt.prompt_id == "daemon:run-1:toolu_1"
     assert resolved is True
-    assert daemon.resolutions == [("run-1", "toolu_1", "allow_once")]
+    assert daemon.resolutions == [("run-1", "toolu_1", "always_allow_tool")]
 
 
 async def test_telegram_daemon_event_cursor_is_per_run(monkeypatch, tmp_path: Path) -> None:
