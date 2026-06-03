@@ -227,6 +227,25 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     assert "/assets/lobster-icon.svg" in response.text
     assert "Edit Schedule" in response.text
     assert 'method = editingId ? "PUT" : "POST"' in response.text
+    assert "libre-claw-dashboard-theme" in response.text
+    assert 'id="themeSelect"' in response.text
+    assert "GitHub Dark" in response.text
+    assert "GitHub Light" in response.text
+    assert "Monokai Pro" in response.text
+    assert "Night Owl" in response.text
+    assert "Tokyo Night" in response.text
+    assert "Ayu Mirage" in response.text
+    assert "Dracula" in response.text
+    assert "Catppuccin Mocha" in response.text
+    assert "Catppuccin Latte" in response.text
+    assert "Gruvbox Dark" in response.text
+    assert "Nord" in response.text
+    assert "Solarized Dark" in response.text
+    assert "Solarized Light" in response.text
+    assert "One Dark Pro" in response.text
+    assert "Rose Pine" in response.text
+    assert "Kanagawa" in response.text
+    assert "Matrix" in response.text
 
 
 async def test_daemon_shutdown_endpoint_sets_shutdown_event(monkeypatch, tmp_path: Path) -> None:
