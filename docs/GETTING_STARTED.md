@@ -118,3 +118,27 @@ If `[telegram].enabled = true`, `[telegram].use_daemon = true`, and a bot token
 is available, the daemon starts and supervises the Telegram bridge
 automatically. Telegram approvals, schedules, memory commands, and model
 switching all route through the same durable run store.
+
+## Terminal Selection
+
+Libre Claw disables Textual mouse capture by default so normal terminal text
+selection works like other coding CLIs: drag over visible output and copy with
+your terminal shortcut. Enable clickable mouse controls with:
+
+```bash
+libre-claw tui --mouse
+```
+
+For terminal scrollback-friendly rendering, use:
+
+```bash
+libre-claw tui --inline
+```
+
+The same defaults can be persisted in `~/.libre-claw/config.toml`:
+
+```toml
+[tui]
+mouse = false
+inline = false
+```

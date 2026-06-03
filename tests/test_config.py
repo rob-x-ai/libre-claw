@@ -30,6 +30,8 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.tui.show_status_bar is True
     assert config.tui.show_file_tree is False
     assert config.tui.use_daemon is False
+    assert config.tui.mouse is False
+    assert config.tui.inline is False
     assert config.permissions.default_level == "ask"
     assert config.auth.keyring_service == "libre-claw"
     assert config.auth.token_ttl_seconds == 3600
@@ -261,6 +263,30 @@ def test_set_global_default_model_updates_user_config(monkeypatch, tmp_path: Pat
     assert config.telegram.default_model == "qwen/qwen3.7-max"
     assert config.providers["openrouter"]["default_model"] == "qwen/qwen3.7-max"
     assert config.tui.show_file_tree is False
+    assert config.tui.mouse is False
+    assert config.tui.inline is False
+
+
+def test_tui_mouse_and_inline_overrides(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / ".libre-claw" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "\n".join(
+            [
+                "[tui]",
+                "mouse = true",
+                "inline = true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config()
+
+    assert config.tui.mouse is True
+    assert config.tui.inline is True
 
 
 def test_set_global_working_directory_updates_user_config(monkeypatch, tmp_path: Path) -> None:

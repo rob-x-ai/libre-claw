@@ -94,38 +94,92 @@ def _load_context_config(ctx: click.Context) -> LibreClawConfig:
     type=click.Path(file_okay=False, path_type=Path),
     help="Working directory for the Libre Claw session.",
 )
+@click.option(
+    "--mouse/--no-mouse",
+    "tui_mouse",
+    default=None,
+    help="Enable or disable Textual mouse capture for the TUI. Disable it for native terminal text selection.",
+)
+@click.option(
+    "--inline/--fullscreen",
+    "tui_inline",
+    default=None,
+    help="Run the TUI inline in terminal scrollback or in the full-screen alternate screen.",
+)
 @click.version_option(__version__, prog_name="libre-claw")
 @click.pass_context
-def main(ctx: click.Context, config_path: Path | None, working_directory: Path | None) -> None:
+def main(
+    ctx: click.Context,
+    config_path: Path | None,
+    working_directory: Path | None,
+    tui_mouse: bool | None,
+    tui_inline: bool | None,
+) -> None:
     """Launch Libre Claw, a terminal-native coding agent harness.
 
     Running without a subcommand opens the Textual TUI. Use `auth` to manage
     provider keys, `config` to inspect defaults, or `telegram` for the daemon.
     """
-    ctx.obj = {"config_path": config_path, "working_directory": working_directory}
+    ctx.obj = {
+        "config_path": config_path,
+        "working_directory": working_directory,
+        "tui_mouse": tui_mouse,
+        "tui_inline": tui_inline,
+    }
     if ctx.invoked_subcommand is not None:
         return
     _run_tui(ctx)
 
 
 @main.command("tui")
+@click.option(
+    "--mouse/--no-mouse",
+    "mouse",
+    default=None,
+    help="Enable or disable Textual mouse capture. Disable it for native terminal text selection.",
+)
+@click.option(
+    "--inline/--fullscreen",
+    "inline",
+    default=None,
+    help="Run inline in terminal scrollback or in the full-screen alternate screen.",
+)
 @click.pass_context
-def tui_command(ctx: click.Context) -> None:
+def tui_command(ctx: click.Context, mouse: bool | None, inline: bool | None) -> None:
     """Open the Libre Claw terminal UI."""
-    _run_tui(ctx)
+    _run_tui(ctx, mouse=mouse, inline=inline)
 
 
 @main.command("chat")
+@click.option(
+    "--mouse/--no-mouse",
+    "mouse",
+    default=None,
+    help="Enable or disable Textual mouse capture. Disable it for native terminal text selection.",
+)
+@click.option(
+    "--inline/--fullscreen",
+    "inline",
+    default=None,
+    help="Run inline in terminal scrollback or in the full-screen alternate screen.",
+)
 @click.pass_context
-def chat_command(ctx: click.Context) -> None:
+def chat_command(ctx: click.Context, mouse: bool | None, inline: bool | None) -> None:
     """Open the Libre Claw chat TUI."""
-    _run_tui(ctx)
+    _run_tui(ctx, mouse=mouse, inline=inline)
 
 
-def _run_tui(ctx: click.Context) -> None:
+def _run_tui(ctx: click.Context, *, mouse: bool | None = None, inline: bool | None = None) -> None:
     config = _load_context_config(ctx)
+    obj = ctx.obj or {}
+    mouse_enabled = mouse if mouse is not None else obj.get("tui_mouse")
+    inline_enabled = inline if inline is not None else obj.get("tui_inline")
+    if mouse_enabled is None:
+        mouse_enabled = config.tui.mouse
+    if inline_enabled is None:
+        inline_enabled = config.tui.inline
     app = LibreClawApp(config=config)
-    app.run()
+    app.run(mouse=mouse_enabled, inline=inline_enabled)
 
 
 @main.group("telegram", invoke_without_command=True)

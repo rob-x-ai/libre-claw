@@ -77,6 +77,8 @@ class TUIConfig:
     show_status_bar: bool
     vim_keybindings: bool
     use_daemon: bool
+    mouse: bool
+    inline: bool
 
 
 @dataclass(frozen=True)
@@ -520,6 +522,8 @@ def _load_default_config() -> ConfigTable:
             "show_status_bar": True,
             "vim_keybindings": False,
             "use_daemon": False,
+            "mouse": False,
+            "inline": False,
         },
         "telegram": {
             "enabled": False,
@@ -786,6 +790,8 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             show_status_bar=_bool(tui, "show_status_bar"),
             vim_keybindings=_bool(tui, "vim_keybindings"),
             use_daemon=_bool(tui, "use_daemon"),
+            mouse=_bool(tui, "mouse"),
+            inline=_bool(tui, "inline"),
         ),
         telegram=TelegramConfig(
             enabled=_bool(telegram, "enabled"),

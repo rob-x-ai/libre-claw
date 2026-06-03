@@ -68,6 +68,12 @@ libre-claw chat
 python -m libre_claw
 ```
 
+The TUI keeps native terminal text selection enabled by default, so you can drag
+over visible transcript text and copy it with your terminal shortcut. If you
+prefer clickable mouse controls, launch with `libre-claw tui --mouse` or set
+`[tui].mouse = true`. Use `libre-claw tui --inline` when you want the app to run
+inside terminal scrollback instead of the full-screen alternate screen.
+
 Inside the app, run:
 
 ```text

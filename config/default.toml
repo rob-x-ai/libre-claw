@@ -108,6 +108,8 @@ show_file_tree = false
 show_status_bar = true
 vim_keybindings = false
 use_daemon = false # when true, the TUI starts and polls daemon-owned runs
+mouse = false # keep native terminal text selection available by default
+inline = false # render inside the terminal scrollback instead of full-screen mode when true
 
 [telegram]
 enabled = false
