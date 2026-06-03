@@ -318,6 +318,37 @@ def set_global_working_directory(
     return path
 
 
+def set_global_theme(
+    theme: str,
+    config_path: Path | str | None = None,
+) -> Path:
+    """Persist the default UI theme in the user-level config file."""
+    clean_theme = theme.strip()
+    if not clean_theme:
+        raise ConfigError("Theme cannot be empty.")
+
+    path = Path(config_path).expanduser() if config_path is not None else user_config_path()
+    updates = {
+        "general": {
+            "theme": clean_theme,
+        },
+    }
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        updated = _update_toml_sections(existing, updates)
+        tomllib.loads(updated)
+        path.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        msg = f"Could not write config file {path}: {exc}"
+        raise ConfigError(msg) from exc
+    except tomllib.TOMLDecodeError as exc:
+        msg = f"Could not update config file {path}: {exc}"
+        raise ConfigError(msg) from exc
+    return path
+
+
 def configure_telegram(
     allowed_user_ids: tuple[int, ...],
     *,

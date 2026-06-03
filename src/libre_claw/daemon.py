@@ -15,7 +15,14 @@ import httpx
 import structlog
 from aiohttp import web
 
-from libre_claw.config import ConfigError, GeneralConfig, LibreClawConfig, global_config_path, set_global_default_model
+from libre_claw.config import (
+    ConfigError,
+    GeneralConfig,
+    LibreClawConfig,
+    global_config_path,
+    set_global_default_model,
+    set_global_theme,
+)
 from libre_claw.auth.api_keys import ApiKeyStore
 from libre_claw.core import (
     Agent,
@@ -46,6 +53,7 @@ from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.review import RUN_ARTIFACT_NAMES, browser_artifact_text, run_plan_text
 from libre_claw.core.skills import SkillStore
 from libre_claw.core.soul import SoulStore
+from libre_claw.core.themes import THEME_ALIASES, THEME_PALETTES, normalize_theme
 from libre_claw.core.tools import ToolRegistry
 from libre_claw.core.usage import (
     load_usage_records,
@@ -146,6 +154,7 @@ class DaemonServer:
                 web.get("/health", self.health),
                 web.get("/config/model", self.current_model),
                 web.patch("/config/model", self.update_model),
+                web.patch("/config/theme", self.update_theme),
                 web.post("/shutdown", self.shutdown),
                 web.get("/runs", self.list_runs),
                 web.post("/runs", self.start_run),
@@ -172,7 +181,7 @@ class DaemonServer:
 
     async def dashboard(self, _request: web.Request) -> web.Response:
         return web.Response(
-            text=dashboard_html(),
+            text=dashboard_html(theme=self.config.general.theme),
             content_type="text/html",
             headers={"Cache-Control": "no-store"},
         )
@@ -367,6 +376,30 @@ class DaemonServer:
         response["persisted_path"] = persisted_path
         response["automations_updated"] = automations_updated
         return web.json_response(response)
+
+    async def update_theme(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _json_error("Request body must be JSON.")
+        if not isinstance(payload, Mapping):
+            return _json_error("Request body must be a JSON object.")
+
+        requested_theme = str(payload.get("theme", "")).strip().lower()
+        theme = THEME_ALIASES.get(requested_theme, requested_theme)
+        if theme not in THEME_PALETTES:
+            return _json_error("Field 'theme' must be a known theme id.")
+
+        persisted_path: str | None = None
+        if bool(payload.get("persist_global", True)):
+            try:
+                path = set_global_theme(theme, config_path=global_config_path(self.config))
+            except ConfigError as exc:
+                return _json_error(str(exc), status=400)
+            persisted_path = str(path)
+
+        self.config = _config_with_theme(self.config, theme)
+        return web.json_response({"theme": theme, "label": THEME_PALETTES[theme].label, "persisted_path": persisted_path})
 
     async def start_run(self, request: web.Request) -> web.Response:
         try:
@@ -1416,6 +1449,11 @@ def _config_with_model(config: LibreClawConfig, provider: str, model: str) -> Li
     general = replace(config.general, default_provider=provider, default_model=model)
     telegram = replace(config.telegram, default_provider=provider, default_model=model)
     return replace(config, general=general, telegram=telegram, providers=provider_configs)
+
+
+def _config_with_theme(config: LibreClawConfig, theme: str) -> LibreClawConfig:
+    general = replace(config.general, theme=normalize_theme(theme))
+    return replace(config, general=general)
 
 
 def _model_payload(config: LibreClawConfig) -> dict[str, Any]:

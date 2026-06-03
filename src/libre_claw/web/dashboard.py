@@ -3,10 +3,15 @@
 
 from __future__ import annotations
 
+import json
 
-def dashboard_html() -> str:
+from libre_claw.core.themes import dashboard_theme_id
+
+
+def dashboard_html(theme: str = "libre-default") -> str:
     """Return the self-contained local daemon dashboard."""
-    return _DASHBOARD_HTML
+    fallback_theme = json.dumps(dashboard_theme_id(theme))
+    return _DASHBOARD_HTML.replace("__LIBRE_CLAW_DASHBOARD_THEME__", fallback_theme)
 
 
 _DASHBOARD_HTML = r"""<!doctype html>
@@ -19,7 +24,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
   <script>
     (() => {
       const key = "libre-claw-dashboard-theme";
-      const fallback = "libre-default";
+      const fallback = __LIBRE_CLAW_DASHBOARD_THEME__;
       const value = localStorage.getItem(key) || fallback;
       document.documentElement.dataset.theme = value;
     })();
@@ -1360,11 +1365,30 @@ _DASHBOARD_HTML = r"""<!doctype html>
       localStorage.setItem(THEME_KEY, theme);
       const picker = $("themeSelect");
       if (picker) picker.value = theme;
+      return theme;
+    }
+
+    async function saveTheme(value) {
+      const theme = applyTheme(value);
+      try {
+        const response = await fetch("/config/theme", {
+          method: "PATCH",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({theme, persist_global: true}),
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        setNotice(`Theme saved: ${data.label || theme}`);
+      } catch (error) {
+        setNotice(`Theme changed locally but could not be saved: ${error.message || error}`, true);
+      }
     }
 
     function initTheme() {
       applyTheme(localStorage.getItem(THEME_KEY) || document.documentElement.dataset.theme || "libre-default");
-      $("themeSelect").addEventListener("change", (event) => applyTheme(event.target.value));
+      $("themeSelect").addEventListener("change", (event) => {
+        void saveTheme(event.target.value);
+      });
     }
 
     function setNotice(text, error = false) {

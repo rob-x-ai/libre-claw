@@ -354,6 +354,26 @@ async def test_tui_syncs_changed_global_model_config(monkeypatch, tmp_path: Path
     assert any("Global model changed to openrouter:deepseek/deepseek-v4-pro" in entry.content for entry in app.transcript)
 
 
+async def test_tui_syncs_changed_global_theme_config(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        config_path = tmp_path / ".libre-claw" / "config.toml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text("[general]\ntheme = \"matrix\"\n", encoding="utf-8")
+        app._global_model_config_mtime_ns = None
+        app._sync_global_model_if_changed()
+
+        chat = app.query_one("#chat")
+        assert app.config.general.theme == "matrix"
+        assert chat.styles.scrollbar_color.hex == "#00FF41"
+
+    assert any("Global theme changed to Matrix" in entry.content for entry in app.transcript)
+
+
 async def test_tui_daemon_mode_syncs_daemon_model(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -1102,6 +1122,49 @@ async def test_tui_scrollbars_use_brand_accent(monkeypatch, tmp_path: Path) -> N
             assert styles.scrollbar_color_active.hex == "#EF4444"
             assert styles.scrollbar_size_vertical == 1
             assert styles.scrollbar_size_horizontal == 1
+
+
+async def test_tui_uses_configured_theme_palette(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config = load_config()
+    themed = replace(config, general=replace(config.general, theme="matrix"))
+    app = LibreClawApp(config=themed)
+
+    async with app.run_test(size=(120, 45)):
+        workspace = app.query_one("#workspace")
+        chat = app.query_one("#chat")
+        renderable = app._format_entry(TranscriptEntry(role="assistant", content="hello"))
+
+        assert workspace.styles.background.hex == "#06100A"
+        assert chat.styles.scrollbar_color.hex == "#00FF41"
+        assert "#00ff41" in str(renderable.renderables[0].style).lower()
+
+
+async def test_theme_command_switches_and_persists_global_theme(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        suggestions = app._slash_suggestion_matches("/theme tok")
+        assert suggestions[0].name == "/theme tokyo-night"
+
+        await app._handle_command("/theme matrix --global")
+        chat = app.query_one("#chat")
+        renderable = app._format_entry(TranscriptEntry(role="assistant", content="hello"))
+
+        assert app.config.general.theme == "matrix"
+        assert chat.styles.scrollbar_color.hex == "#00FF41"
+        assert "#00ff41" in str(renderable.renderables[0].style).lower()
+
+    config_path = tmp_path / ".libre-claw" / "config.toml"
+    text = config_path.read_text(encoding="utf-8")
+    assert 'theme = "matrix"' in text
+    assert load_config().general.theme == "matrix"
+    assert any("Saved as global default" in entry.content for entry in app.transcript)
 
 
 async def test_file_tree_up_updates_agent_working_directory(monkeypatch, tmp_path: Path) -> None:

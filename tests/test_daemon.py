@@ -20,6 +20,7 @@ from libre_claw.core.tools import BaseTool, ToolContext, ToolRegistry, ToolResul
 from libre_claw.daemon import DaemonClient, DaemonServer, _automation_finalizer_prompt, _automation_telegram_message
 from libre_claw.providers.base import Done, LLMProvider, ProviderError, StreamEvent, TextDelta, ToolCallReady, ToolSchema, Usage
 from libre_claw.providers.openrouter_metadata import OpenRouterModelLimits
+from libre_claw.web.dashboard import dashboard_html
 
 
 class RequestStub:
@@ -224,10 +225,12 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     assert "/automations/${id}/run" in response.text
     assert "Run now" in response.text
     assert "/usage?limit=250" in response.text
+    assert "/config/theme" in response.text
     assert "/assets/lobster-icon.svg" in response.text
     assert "Edit Schedule" in response.text
     assert 'method = editingId ? "PUT" : "POST"' in response.text
     assert "libre-claw-dashboard-theme" in response.text
+    assert 'const fallback = "libre-default";' in response.text
     assert 'id="themeSelect"' in response.text
     assert "GitHub Dark" in response.text
     assert "GitHub Light" in response.text
@@ -246,6 +249,35 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     assert "Rose Pine" in response.text
     assert "Kanagawa" in response.text
     assert "Matrix" in response.text
+
+
+def test_dashboard_html_uses_config_theme_fallback() -> None:
+    assert 'const fallback = "matrix";' in dashboard_html(theme="matrix")
+    assert 'const fallback = "github-light";' in dashboard_html(theme="light")
+    assert 'const fallback = "libre-default";' in dashboard_html(theme="unknown-theme")
+
+
+async def test_daemon_theme_update_persists_global_config(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: ScriptedProvider([[TextDelta("ok"), Done()]]),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+
+    response = await server.update_theme(RequestStub(body={"theme": "tokyo-night"}))  # type: ignore[arg-type]
+    payload = _response_payload(response)
+    config_path = tmp_path / ".libre-claw" / "config.toml"
+
+    assert response.status == 200
+    assert payload["theme"] == "tokyo-night"
+    assert payload["label"] == "Tokyo Night"
+    assert payload["persisted_path"] == str(config_path)
+    assert server.config.general.theme == "tokyo-night"
+    assert 'theme = "tokyo-night"' in config_path.read_text(encoding="utf-8")
+    assert load_config().general.theme == "tokyo-night"
 
 
 async def test_daemon_shutdown_endpoint_sets_shutdown_event(monkeypatch, tmp_path: Path) -> None:

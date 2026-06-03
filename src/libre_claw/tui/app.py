@@ -22,6 +22,7 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.color import Color
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DirectoryTree, Input, RichLog, Static
 
@@ -35,6 +36,7 @@ from libre_claw.config import (
     global_config_path,
     load_config,
     set_global_default_model,
+    set_global_theme,
     set_global_working_directory,
 )
 from libre_claw.core import (
@@ -80,6 +82,7 @@ from libre_claw.core.sandbox import SandboxPolicy, SandboxViolation
 from libre_claw.core.session import ChatMessage, estimate_context_tokens, session_to_payload
 from libre_claw.core.skills import Skill, SkillError, SkillScope, SkillStore
 from libre_claw.core.soul import SoulError, SoulStore
+from libre_claw.core.themes import THEME_ALIASES, THEME_PALETTES, normalize_theme, tui_theme_palette
 from libre_claw.core.tools import ToolCall, ToolResult
 from libre_claw.core.usage import (
     load_usage_records,
@@ -216,6 +219,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/usage", "/usage openrouter|attribution|presets", "Show provider usage analytics"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
     SlashCommand("/models", "/models", "Show model presets"),
+    SlashCommand("/theme", "/theme list|<name> [--global]", "Switch or persist the TUI/dashboard theme"),
     SlashCommand("/provider", "/provider anthropic|openai|openrouter|ollama|codex", "Switch provider for new turns"),
     SlashCommand("/setup", "/setup status|provider|key|model|openrouter|ollama-cloud|codex", "First-run provider and key setup"),
     SlashCommand("/codex", "/codex login|status|logout|use [model]", "Manage Codex/ChatGPT login"),
@@ -632,6 +636,7 @@ class LibreClawApp(App[None]):
     def __init__(self, config: LibreClawConfig | None = None) -> None:
         super().__init__()
         self.config = config or load_config()
+        self._theme = tui_theme_palette(self.config.general.theme)
         self.session = Session()
         self.memory_store = MemoryStore()
         self.skill_store = SkillStore(self.config.general.working_directory)
@@ -717,7 +722,10 @@ class LibreClawApp(App[None]):
                 yield Input(placeholder=self._input_placeholder(), id="input")
 
     async def on_mount(self) -> None:
-        self.add_class(self.config.general.theme)
+        self.add_class(self._theme.theme_id)
+        if self._theme.is_light:
+            self.add_class("light")
+        self._apply_tui_theme()
         self.query_one("#input", Input).focus()
         self._sync_sidebar_visibility()
         self._update_startup_panel()
@@ -743,6 +751,66 @@ class LibreClawApp(App[None]):
             self._daemon_model_sync_task.cancel()
         for task in self._memory_background_tasks:
             task.cancel()
+
+    def _apply_tui_theme(self) -> None:
+        palette = self._theme
+        accent = Color.parse(palette.accent)
+        text = Color.parse(palette.text)
+        muted = Color.parse(palette.muted)
+        background = Color.parse(palette.background)
+        surface = Color.parse(palette.surface)
+        surface_2 = Color.parse(palette.surface_2)
+        panel = Color.parse(palette.panel)
+        sidebar = Color.parse(palette.sidebar)
+        status_bg = Color.parse(palette.status_bg)
+
+        self.styles.background = background
+        self.styles.color = text
+        self.styles.scrollbar_color = accent
+        self.styles.scrollbar_color_hover = accent
+        self.styles.scrollbar_color_active = accent
+        self.styles.scrollbar_background = background
+        self.styles.scrollbar_background_hover = background
+        self.styles.scrollbar_background_active = background
+        self.styles.scrollbar_corner_color = background
+
+        themed_nodes: tuple[tuple[str, Color, Color], ...] = (
+            ("#status", status_bg, text),
+            ("#workspace", surface, text),
+            ("#sidebar-rail", sidebar, text),
+            ("#sidebar", sidebar, text),
+            ("#sidebar-root", sidebar, muted),
+            ("#file-tree", sidebar, text),
+            ("#main", surface, text),
+            ("#startup-panel", surface, text),
+            ("#chat", surface, text),
+            ("#input", surface_2, text),
+            ("#suggestions", panel, text),
+            ("#permission-panel", panel, text),
+            ("#artifact-panel", sidebar, text),
+            ("#artifact-content", sidebar, text),
+            ("#palette", panel, text),
+        )
+        for selector, bg, fg in themed_nodes:
+            for widget in self.query(selector):
+                widget.styles.background = bg
+                widget.styles.color = fg
+                widget.styles.scrollbar_color = accent
+                widget.styles.scrollbar_color_hover = accent
+                widget.styles.scrollbar_color_active = accent
+                widget.styles.scrollbar_background = background
+                widget.styles.scrollbar_background_hover = background
+                widget.styles.scrollbar_background_active = background
+                widget.styles.scrollbar_corner_color = background
+
+        for selector in ("#workspace", "#input", "#permission-panel", "#artifact-panel", "#suggestions"):
+            for widget in self.query(selector):
+                widget.styles.border_top = ("solid", accent)
+        for widget in self.query("#workspace"):
+            widget.styles.border_bottom = ("solid", accent)
+
+        self.query_one("#permission-warning", Static).styles.color = Color.parse(palette.warn)
+        self.query_one("#artifact-title", Static).styles.color = Color.parse(palette.accent_strong)
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -903,6 +971,9 @@ class LibreClawApp(App[None]):
             return
         if command == "/models":
             self._append_system(_model_help_text(self.config))
+            return
+        if command == "/theme":
+            self._handle_theme_command(argument)
             return
         if command == "/provider":
             self._set_provider(argument)
@@ -1761,6 +1832,47 @@ class LibreClawApp(App[None]):
         self._tool_entry_by_call_id.clear()
         self._render_transcript()
         self._append_system("Transcript cleared.")
+
+    def _handle_theme_command(self, argument: str) -> None:
+        selected, persist_global = _strip_global_flag(argument)
+        selected = selected.strip().lower()
+        if selected in {"", "status", "list", "help"}:
+            self._append_system(_theme_help_text(self.config.general.theme))
+            return
+
+        theme_id = _resolve_theme_id(selected)
+        if theme_id is None:
+            self._append_system(f"Unknown theme: {selected}\n\n{_theme_help_text(self.config.general.theme)}")
+            return
+
+        self._set_tui_theme(theme_id)
+        persisted_path: Path | None = None
+        if persist_global:
+            try:
+                persisted_path = set_global_theme(theme_id, config_path=global_config_path(self.config))
+                self._global_model_config_path = persisted_path
+                self._global_model_config_mtime_ns = _path_mtime_ns(persisted_path)
+            except ConfigError as exc:
+                self._append_system(f"Theme set for this session, but global config was not updated: {exc}")
+                return
+
+        suffix = f"\nSaved as global default in {persisted_path}." if persisted_path is not None else ""
+        self._append_system(f"Theme set to {THEME_PALETTES[theme_id].label}.{suffix}")
+
+    def _set_tui_theme(self, theme_id: str) -> None:
+        for known_theme in THEME_PALETTES:
+            self.remove_class(known_theme)
+        self.remove_class("light")
+
+        self._theme = tui_theme_palette(theme_id)
+        self.config = replace(self.config, general=replace(self.config.general, theme=self._theme.theme_id))
+        self.add_class(self._theme.theme_id)
+        if self._theme.is_light:
+            self.add_class("light")
+        self._apply_tui_theme()
+        self._update_startup_panel()
+        self._render_transcript()
+        self._update_status()
 
     def _set_model(self, model: str) -> None:
         model, persist_global = _strip_global_flag(model)
@@ -2946,11 +3058,11 @@ class LibreClawApp(App[None]):
 
     def _format_entry(self, entry: TranscriptEntry, index: int = 0) -> RenderableType:
         if entry.role == "user":
-            return Text.assemble(("User: ", "bold #EF4444"), entry.content)
+            return Text.assemble(("User: ", f"bold {self._theme.accent}"), entry.content)
         if entry.role == "assistant":
             if not entry.content:
-                return Text("Libre Claw: streaming...", style=f"bold {ASSISTANT_ACCENT} dim")
-            return Group(Text("Libre Claw:", style=f"bold {ASSISTANT_ACCENT}"), Markdown(entry.content))
+                return Text("Libre Claw: streaming...", style=f"bold {self._theme.accent} dim")
+            return Group(Text("Libre Claw:", style=f"bold {self._theme.accent}"), Markdown(entry.content))
         if entry.role == "tool":
             title = entry.title or "Tool"
             metadata = entry.metadata or {}
@@ -3086,7 +3198,7 @@ class LibreClawApp(App[None]):
         self.query_one("#sidebar-rail", Vertical).display = not self.sidebar_visible
 
     def _update_startup_panel(self) -> None:
-        self.query_one("#startup-panel", Static).update(_startup_renderable(self.startup_expanded))
+        self.query_one("#startup-panel", Static).update(_startup_renderable(self.startup_expanded, accent=self._theme.accent))
 
     def _sidebar_root_text(self) -> str:
         return f"cwd: {self.config.general.working_directory}"
@@ -3164,6 +3276,17 @@ class LibreClawApp(App[None]):
         if lowered.startswith("/model "):
             query = lowered.removeprefix("/model ").strip()
             suggestions = _model_suggestion_commands(self.config)
+            if not query:
+                return suggestions[:6]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
+
+        if lowered.startswith("/theme "):
+            query = lowered.removeprefix("/theme ").strip()
+            suggestions = _theme_suggestion_commands()
             if not query:
                 return suggestions[:6]
             return [
@@ -3603,15 +3726,22 @@ class LibreClawApp(App[None]):
 
         provider = _canonical_tui_provider(updated.general.default_provider)
         model = updated.general.default_model
-        if (
-            provider == _canonical_tui_provider(self.config.general.default_provider)
-            and model == self.config.general.default_model
-        ):
+        theme = normalize_theme(updated.general.theme)
+        model_changed = (
+            provider != _canonical_tui_provider(self.config.general.default_provider)
+            or model != self.config.general.default_model
+        )
+        theme_changed = theme != normalize_theme(self.config.general.theme)
+        if not model_changed and not theme_changed:
             return
 
-        self.config = _replace_model_selection(self.config, provider, model, providers=updated.providers)
-        self._rebuild_agent()
-        self._append_system(f"Global model changed to {provider}:{model}; TUI session updated.")
+        if model_changed:
+            self.config = _replace_model_selection(self.config, provider, model, providers=updated.providers)
+            self._rebuild_agent()
+            self._append_system(f"Global model changed to {provider}:{model}; TUI session updated.")
+        if theme_changed:
+            self._set_tui_theme(theme)
+            self._append_system(f"Global theme changed to {THEME_PALETTES[theme].label}; TUI session updated.")
 
     def _input_placeholder(self) -> str:
         if self.palette_open:
@@ -4550,6 +4680,41 @@ def _model_suggestion_commands(config: LibreClawConfig) -> list[SlashCommand]:
     return suggestions
 
 
+def _theme_suggestion_commands() -> list[SlashCommand]:
+    return [
+        SlashCommand(
+            name=f"/theme {theme_id}",
+            usage=f"/theme {theme_id} [--global]",
+            description=palette.label,
+        )
+        for theme_id, palette in THEME_PALETTES.items()
+    ]
+
+
+def _resolve_theme_id(value: str) -> str | None:
+    normalized = value.strip().lower()
+    theme_id = THEME_ALIASES.get(normalized, normalized)
+    if theme_id in THEME_PALETTES:
+        return theme_id
+    return None
+
+
+def _theme_help_text(current_theme: str) -> str:
+    current_theme_id = normalize_theme(current_theme)
+    lines = [
+        "Libre Claw themes",
+        f"Current: {THEME_PALETTES[current_theme_id].label} (`{current_theme_id}`)",
+        "",
+        "Use `/theme <name>` to switch this TUI session.",
+        "Use `/theme <name> --global` to save the TUI and dashboard default.",
+        "",
+        "Available themes:",
+    ]
+    lines.extend(f"- `{theme_id}` - {palette.label}" for theme_id, palette in THEME_PALETTES.items())
+    lines.extend(["", "Aliases: `dark` = `libre-default`, `light` = `github-light`."])
+    return "\n".join(lines)
+
+
 def _usage_requires_argument(usage: str) -> bool:
     return " " in usage
 
@@ -4667,8 +4832,8 @@ def _compact_tool_output(content: str, expanded: bool) -> str:
     return f"{shown}\n... {hidden} more lines hidden; use /tools expand <index> to show all"
 
 
-def _startup_renderable(expanded: bool) -> RenderableType:
-    banner = Text(STARTUP_ASCII.strip(), style=ASSISTANT_ACCENT)
+def _startup_renderable(expanded: bool, accent: str = ASSISTANT_ACCENT) -> RenderableType:
+    banner = Text(STARTUP_ASCII.strip(), style=accent)
     if not expanded:
         return Group(
             banner,
@@ -4680,7 +4845,7 @@ def _startup_renderable(expanded: bool) -> RenderableType:
         )
     return Group(
         banner,
-        Text(f"Libre Claw v{__version__}", style=f"bold {ASSISTANT_ACCENT}"),
+        Text(f"Libre Claw v{__version__}", style=f"bold {accent}"),
         Text(PROJECT_NOTICE, style="dim"),
         Markdown(latest_release_notes()),
         Text("Click this header to collapse. Type /help for commands.", style="dim"),
