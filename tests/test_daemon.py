@@ -444,6 +444,52 @@ async def test_daemon_start_run_uses_supplied_session_history(monkeypatch, tmp_p
     ]
 
 
+async def test_daemon_start_run_passes_image_attachments_to_agent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    provider = ScriptedProvider([[TextDelta("ok"), Done()]])
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: provider,
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+
+    started = await server.start_run(
+        RequestStub(
+            body={
+                "message": "inspect",
+                "attachments": [
+                    {
+                        "media_type": "image/png",
+                        "data": "aGVsbG8=",
+                        "filename": "shot.png",
+                        "path": str(tmp_path / "shot.png"),
+                    }
+                ],
+            }
+        )  # type: ignore[arg-type]
+    )
+    run_id = _response_payload(started)["run"]["run_id"]
+    await _wait_for_state(server, run_id, "done")
+
+    user_message = provider.message_batches[0][-1]
+    assert user_message.content == [
+        {"type": "text", "text": "inspect"},
+        {
+            "type": "image",
+            "media_type": "image/png",
+            "data": "aGVsbG8=",
+            "filename": "shot.png",
+            "path": str(tmp_path / "shot.png"),
+        },
+    ]
+    user_event = await _wait_for_event(server, run_id, "user_message")
+    assert user_event["data"]["attachments"] == [
+        {"media_type": "image/png", "filename": "shot.png", "path": str(tmp_path / "shot.png")}
+    ]
+
+
 async def test_daemon_blocks_and_resumes_on_permission_approval(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

@@ -270,6 +270,7 @@ def _format_assistant_message(blocks: Sequence[ContentBlock]) -> dict[str, Any]:
 def _format_user_or_tool_messages(blocks: Sequence[ContentBlock]) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     text_parts: list[str] = []
+    image_parts: list[ContentBlock] = []
     for block in blocks:
         block_type = block.get("type")
         if block_type == "tool_result":
@@ -282,10 +283,33 @@ def _format_user_or_tool_messages(blocks: Sequence[ContentBlock]) -> list[dict[s
             )
         elif block_type == "text":
             text_parts.append(str(block.get("text", "")))
+        elif block_type == "image":
+            image_parts.append(block)
 
-    if text_parts:
-        messages.append({"role": "user", "content": "\n".join(part for part in text_parts if part)})
+    text = "\n".join(part for part in text_parts if part)
+    if image_parts:
+        content: list[dict[str, Any]] = []
+        if text:
+            content.append({"type": "text", "text": text})
+        content.extend(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": _image_data_url(block),
+                },
+            }
+            for block in image_parts
+        )
+        messages.append({"role": "user", "content": content})
+    elif text:
+        messages.append({"role": "user", "content": text})
     return messages
+
+
+def _image_data_url(block: ContentBlock) -> str:
+    media_type = str(block.get("media_type", "image/jpeg"))
+    data = str(block.get("data", ""))
+    return f"data:{media_type};base64,{data}"
 
 
 def _usage_from(raw_usage: Any, previous: Usage | None) -> Usage | None:

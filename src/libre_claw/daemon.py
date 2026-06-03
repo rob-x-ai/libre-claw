@@ -62,7 +62,7 @@ from libre_claw.core.usage import (
     usage_report_text,
     usage_summary_payload,
 )
-from libre_claw.core.session import ChatMessage, session_from_payload, text_block
+from libre_claw.core.session import ChatMessage, UserAttachment, session_from_payload, text_block
 from libre_claw.providers import Done, LLMProvider, ProviderError, TextDelta, Usage, create_fallback_providers, create_provider
 from libre_claw.providers.openrouter_metadata import apply_openrouter_model_limits, detect_openrouter_model_limits
 from libre_claw.telegram.formatting import clean_final_answer_for_telegram, plain_text_chunks, telegram_html_chunks
@@ -429,7 +429,10 @@ class DaemonServer:
         )
         surface = str(payload.get("surface", "daemon")).strip() or "daemon"
         session = session_from_payload(payload.get("session"))
-        task = asyncio.create_task(self._run_agent(run, message, run_config, surface=surface, session=session))
+        attachments = _attachments_from_payload(payload.get("attachments"))
+        task = asyncio.create_task(
+            self._run_agent(run, message, run_config, surface=surface, session=session, attachments=attachments)
+        )
         active = ActiveRun(run_id=run.run_id, task=task)
         self.active_runs[run.run_id] = active
         task.add_done_callback(lambda _task, run_id=run.run_id: self.active_runs.pop(run_id, None))
@@ -634,6 +637,7 @@ class DaemonServer:
         surface: str = "daemon",
         hold_final_state: bool = False,
         session: Session | None = None,
+        attachments: tuple[UserAttachment, ...] = (),
     ) -> RunState:
         assistant_chunks: list[str] = []
         state: RunState = "done"
@@ -650,9 +654,16 @@ class DaemonServer:
                     "surface": surface,
                 },
             )
-            await self.run_store.append_event(run.run_id, "user_message", {"content": message})
+            await self.run_store.append_event(
+                run.run_id,
+                "user_message",
+                {
+                    "content": message,
+                    "attachments": [_attachment_metadata(attachment) for attachment in attachments],
+                },
+            )
             agent = await self._create_agent(config, session=session, surface=surface)
-            async for event in agent.run(message):
+            async for event in agent.run(message, attachments=attachments):
                 if isinstance(event, AgentTextDelta):
                     assistant_chunks.append(event.text)
                     await self.run_store.append_event(run.run_id, "assistant_delta", {"text": event.text})
@@ -1670,3 +1681,34 @@ def _telegram_text_chunks(text: str, max_message_length: int) -> list[str]:
 
 def _strip_telegram_html(text: str) -> str:
     return re.sub(r"</?(?:b|i|code|pre|a)(?:\s+[^>]*)?>", "", text)
+
+
+def _attachments_from_payload(value: object) -> tuple[UserAttachment, ...]:
+    if not isinstance(value, list):
+        return ()
+    attachments: list[UserAttachment] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        media_type = str(item.get("media_type", "")).strip()
+        data = str(item.get("data", "")).strip()
+        if not media_type.startswith("image/") or not data:
+            continue
+        attachments.append(
+            UserAttachment(
+                media_type=media_type,
+                data=data,
+                filename=str(item.get("filename", "")).strip(),
+                path=str(item.get("path", "")).strip(),
+            )
+        )
+    return tuple(attachments)
+
+
+def _attachment_metadata(attachment: UserAttachment) -> dict[str, str]:
+    metadata = {"media_type": attachment.media_type}
+    if attachment.filename:
+        metadata["filename"] = attachment.filename
+    if attachment.path:
+        metadata["path"] = attachment.path
+    return metadata

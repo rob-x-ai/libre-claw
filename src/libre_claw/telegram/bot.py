@@ -77,6 +77,7 @@ class TelegramBot:
         application.add_handler(CommandHandler("memory", handlers.memory))
         application.add_handler(CallbackQueryHandler(handlers.callback))
         application.add_handler(MessageHandler(filters.COMMAND, handlers.unknown_command))
+        application.add_handler(MessageHandler(_telegram_image_filter(), handlers.message))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.message))
 
         updater = application.updater
@@ -138,3 +139,10 @@ class TelegramBot:
                     await bot.set_chat_menu_button(chat_id=user_id, menu_button=MenuButtonCommands())
             except Exception as exc:
                 LOGGER.warning("telegram_command_scope_sync_failed", user_id=user_id, error=str(exc))
+
+
+def _telegram_image_filter() -> object:
+    image_document = getattr(getattr(filters, "Document", object()), "IMAGE", None)
+    if image_document is None:
+        return filters.PHOTO & ~filters.COMMAND
+    return (filters.PHOTO | image_document) & ~filters.COMMAND

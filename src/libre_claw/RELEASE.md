@@ -139,6 +139,9 @@ First shippable Libre Claw release, built by Kroonen AI.
 - Telegram daemon with allowlist auth, streaming updates, per-chat sessions,
   model/provider commands, compact emoji tool notices, per-run daemon event
   cursors to avoid stale tool replay, and inline permission prompts.
+- Telegram image input: photos and image documents are saved locally, archived
+  as session attachments, and sent to vision-capable providers with captions as
+  prompts.
 - User-friendly Telegram setup with `libre-claw telegram setup`, secure token
   storage, `libre-claw telegram status`, and `libre-claw telegram up` to run
   the bot plus local daemon together.

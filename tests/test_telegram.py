@@ -10,6 +10,7 @@ from typing import Any
 
 from libre_claw.config import load_config
 from libre_claw.core.session import ChatMessage
+from libre_claw.core.session import UserAttachment
 from libre_claw.core.tools import ToolCall
 from libre_claw.providers.base import Done, LLMProvider, StreamEvent, TextDelta, ToolCallReady, ToolSchema
 from libre_claw.telegram.auth import TelegramAuth
@@ -37,6 +38,7 @@ from libre_claw.telegram.handlers import (
     _reply_text_chunks,
     _safe_edit_text_preview,
     _stream_preview,
+    _telegram_image_attachments,
     _telegram_help_text,
     _tool_log_formatted_chunk,
     _tool_log_preview,
@@ -1106,6 +1108,63 @@ async def test_telegram_bridge_streams_text(monkeypatch, tmp_path: Path) -> None
     events = [event async for event in bridge.stream_message(1, "hello")]
 
     assert events == [TelegramText("hi"), TelegramDone(None)]
+
+
+async def test_telegram_bridge_passes_image_attachments_to_daemon(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    daemon = FakeDaemonClient(with_permission=False)
+    bridge = TelegramBridge(config, daemon_client=daemon)  # type: ignore[arg-type]
+    await bridge.initialize()
+    attachment = UserAttachment(
+        media_type="image/png",
+        data="aGVsbG8=",
+        filename="shot.png",
+        path=str(tmp_path / "shot.png"),
+    )
+
+    events = [event async for event in bridge.stream_message(1, "inspect", attachments=[attachment])]
+
+    assert any(isinstance(event, TelegramText) and event.text == "hi" for event in events)
+    assert daemon.start_payloads[0]["attachments"] == [
+        {
+            "media_type": "image/png",
+            "data": "aGVsbG8=",
+            "filename": "shot.png",
+            "path": str(tmp_path / "shot.png"),
+        }
+    ]
+
+
+async def test_telegram_image_attachments_download_photo(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    payload = b"\x89PNG\r\n\x1a\nimage"
+
+    class FakeTelegramFile:
+        async def download_to_drive(self, custom_path: Path) -> None:
+            custom_path.write_bytes(payload)
+
+    class FakePhoto:
+        file_id = "file-id"
+        file_unique_id = "unique-id"
+        file_size = len(payload)
+
+        async def get_file(self) -> FakeTelegramFile:
+            return FakeTelegramFile()
+
+    class FakeMessage:
+        photo = [FakePhoto()]
+        document = None
+
+    attachments, warnings = await _telegram_image_attachments(FakeMessage(), 42)
+
+    assert warnings == []
+    assert len(attachments) == 1
+    assert attachments[0].media_type == "image/jpeg"
+    assert attachments[0].data
+    assert attachments[0].filename == "telegram-photo-unique-id.jpg"
+    assert Path(attachments[0].path).exists()
 
 
 async def test_telegram_bridge_injects_skills(monkeypatch, tmp_path: Path) -> None:

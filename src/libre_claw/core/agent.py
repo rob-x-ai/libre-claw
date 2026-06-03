@@ -11,7 +11,14 @@ from dataclasses import dataclass
 import structlog
 
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
-from libre_claw.core.session import Session, estimate_context_tokens, text_block, tool_result_block, tool_use_block
+from libre_claw.core.session import (
+    Session,
+    UserAttachment,
+    estimate_context_tokens,
+    text_block,
+    tool_result_block,
+    tool_use_block,
+)
 from libre_claw.core.skills import SKILL_AUTHORING_GUIDANCE
 from libre_claw.core.tools import ToolCall, ToolRegistry, ToolRegistryError, ToolResult
 from libre_claw.providers.base import (
@@ -120,8 +127,12 @@ class Agent:
         self._active_memory: list[str] = []
         self._logger = structlog.get_logger(__name__)
 
-    async def run(self, user_message: str) -> AsyncIterator[AgentEvent]:
-        self.session.add_user_message(user_message)
+    async def run(
+        self,
+        user_message: str,
+        attachments: Sequence[UserAttachment] = (),
+    ) -> AsyncIterator[AgentEvent]:
+        self.session.add_user_message(user_message, attachments=attachments)
         self._active_soul = await self._load_soul()
         self._active_skills = await self._load_skills(user_message)
         self._active_memory = await self._load_memory(user_message)

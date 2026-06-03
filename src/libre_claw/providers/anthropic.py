@@ -11,7 +11,7 @@ from typing import Any
 
 import structlog
 
-from libre_claw.core.session import ChatMessage
+from libre_claw.core.session import ChatMessage, ContentBlock
 from libre_claw.providers.base import (
     Done,
     LLMProvider,
@@ -160,7 +160,13 @@ class AnthropicProvider(LLMProvider):
         yield Done(usage=usage, stop_reason=stop_reason)
 
     def _format_messages(self, messages: Sequence[ChatMessage]) -> list[dict[str, Any]]:
-        return [message.as_provider_dict() for message in messages]
+        return [
+            {
+                "role": message.role,
+                "content": [_format_anthropic_block(block) for block in message.content],
+            }
+            for message in messages
+        ]
 
     def _handle_content_block_start(
         self,
@@ -271,3 +277,16 @@ async def _maybe_final_message(response_stream: Any) -> Any | None:
     if get_final_message is None:
         return None
     return await get_final_message()
+
+
+def _format_anthropic_block(block: ContentBlock) -> dict[str, Any]:
+    if block.get("type") != "image":
+        return dict(block)
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": str(block.get("media_type", "image/jpeg")),
+            "data": str(block.get("data", "")),
+        },
+    }

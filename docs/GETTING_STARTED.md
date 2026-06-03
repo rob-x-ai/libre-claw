@@ -119,6 +119,11 @@ is available, the daemon starts and supervises the Telegram bridge
 automatically. Telegram approvals, schedules, memory commands, and model
 switching all route through the same durable run store.
 
+Telegram also accepts photos and image documents. Captions become the prompt;
+uncaptioned images default to "Please inspect the attached image." Uploaded
+files stay local in `~/.libre-claw/telegram/uploads/` and are passed to
+vision-capable providers.
+
 ## Terminal Selection
 
 Libre Claw disables Textual mouse capture by default so normal terminal text

@@ -7,7 +7,7 @@ import json
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
-from libre_claw.core.session import ChatMessage, text_block, tool_result_block, tool_use_block
+from libre_claw.core.session import ChatMessage, UserAttachment, image_block, text_block, tool_result_block, tool_use_block
 from libre_claw.providers.base import (
     Done,
     LLMProvider,
@@ -274,6 +274,22 @@ def test_format_ollama_messages_preserves_tool_history() -> None:
             ],
         },
         {"role": "tool", "tool_name": "read_file", "content": "contents"},
+    ]
+
+
+def test_format_ollama_messages_preserves_user_images() -> None:
+    messages = [
+        ChatMessage(
+            role="user",
+            content=[
+                text_block("Inspect this"),
+                image_block(UserAttachment(media_type="image/jpeg", data="ZmFrZQ==", filename="photo.jpg")),
+            ],
+        )
+    ]
+
+    assert format_ollama_messages(messages) == [
+        {"role": "user", "content": "Inspect this", "images": ["ZmFrZQ=="]},
     ]
 
 

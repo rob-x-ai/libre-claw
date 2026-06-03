@@ -4,17 +4,21 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import mimetypes
 import re
 import time
 from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from libre_claw.config import ConfigError, global_config_path, set_global_default_model
 from libre_claw.core.automations import AutomationError
 from libre_claw.core.heartbeat import HeartbeatError, heartbeat_prompt, parse_heartbeat_interval
 from libre_claw.core.permissions import PermissionResolution
+from libre_claw.core.session import UserAttachment
 from libre_claw.providers.anthropic_catalog import ANTHROPIC_MODEL_PRESETS
 from libre_claw.providers.codex_catalog import CODEX_MODEL_PRESETS
 from libre_claw.providers.ollama_catalog import OLLAMA_MODEL_PRESETS
@@ -42,6 +46,7 @@ TELEGRAM_CONTINUED_SUFFIX = "\n\n...[continued]"
 TELEGRAM_TYPING_INTERVAL_SECONDS = 4.0
 TELEGRAM_TOOL_LOG_UPDATE_INTERVAL_SECONDS = 8.0
 TELEGRAM_TOOL_LOG_UPDATE_EVENT_INTERVAL = 12
+TELEGRAM_MAX_IMAGE_BYTES = 8 * 1024 * 1024
 PERMISSION_CALLBACKS: dict[str, tuple[PermissionResolution, str, str]] = {
     "p:y:": ("allow_once", "Approved.", "✅ Approved"),
     "p:t:": (
@@ -332,8 +337,16 @@ class TelegramHandlers:
     async def message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
-        text = update.effective_message.text or ""
-        if text.strip() == "/":
+        attachments, attachment_warnings = await _telegram_image_attachments(update.effective_message, update.effective_chat.id)
+        for warning in attachment_warnings:
+            await update.effective_message.reply_text(warning)
+        text = update.effective_message.text or update.effective_message.caption or ""
+        if attachments and not text.strip():
+            text = "Please inspect the attached image."
+        if not text.strip() and not attachments:
+            await update.effective_message.reply_text("Send a message or a supported image attachment.")
+            return
+        if text.strip() == "/" and not attachments:
             await _reply_text_chunks(update.effective_message, _telegram_help_text(), self.bridge.config.telegram.max_message_length)
             return
         chat_id = update.effective_chat.id
@@ -363,7 +376,12 @@ class TelegramHandlers:
         async def runner() -> None:
             nonlocal accumulated, http_done, http_started, last_update, saw_tool_notice, tool_event_count, tool_log_dirty, tool_log_last_update, tool_log_message
             try:
-                async for event in self.bridge.stream_message(chat_id, text):
+                stream = (
+                    self.bridge.stream_message(chat_id, text, attachments=attachments)
+                    if attachments
+                    else self.bridge.stream_message(chat_id, text)
+                )
+                async for event in stream:
                     if isinstance(event, TelegramText):
                         accumulated += event.text
                         if saw_tool_notice:
@@ -799,6 +817,124 @@ class TelegramHandlers:
             return
         if bot is not None and chat_id is not None:
             await _send_text_chunks(bot, chat_id, notice, self.bridge.config.telegram.max_message_length)
+
+
+async def _telegram_image_attachments(message: Any, chat_id: int) -> tuple[list[UserAttachment], list[str]]:
+    candidates = _telegram_image_candidates(message)
+    if not candidates:
+        return [], []
+
+    attachments: list[UserAttachment] = []
+    warnings: list[str] = []
+    upload_dir = Path.home() / ".libre-claw" / "telegram" / "uploads" / str(chat_id)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    for index, candidate in enumerate(candidates, start=1):
+        file_ref = candidate["file_ref"]
+        filename = _safe_telegram_filename(candidate["filename"] or f"telegram-image-{index}{candidate['extension']}")
+        media_type = candidate["media_type"]
+        file_size = candidate["file_size"]
+        if file_size is not None and file_size > TELEGRAM_MAX_IMAGE_BYTES:
+            warnings.append(f"Skipped {filename}: image is larger than {TELEGRAM_MAX_IMAGE_BYTES // (1024 * 1024)} MB.")
+            continue
+
+        destination = upload_dir / f"{int(time.time() * 1000)}-{index}-{filename}"
+        try:
+            telegram_file = await file_ref.get_file()
+            await _download_telegram_file(telegram_file, destination)
+            payload = await asyncio.to_thread(destination.read_bytes)
+        except Exception as exc:
+            warnings.append(f"Could not download {filename}: {exc}")
+            continue
+
+        if len(payload) > TELEGRAM_MAX_IMAGE_BYTES:
+            destination.unlink(missing_ok=True)
+            warnings.append(f"Skipped {filename}: image is larger than {TELEGRAM_MAX_IMAGE_BYTES // (1024 * 1024)} MB.")
+            continue
+
+        detected_media_type = media_type or _image_media_type(payload, destination)
+        if not detected_media_type.startswith("image/"):
+            destination.unlink(missing_ok=True)
+            warnings.append(f"Skipped {filename}: attachment is not a supported image.")
+            continue
+
+        attachments.append(
+            UserAttachment(
+                media_type=detected_media_type,
+                data=base64.b64encode(payload).decode("ascii"),
+                filename=filename,
+                path=str(destination),
+            )
+        )
+
+    return attachments, warnings
+
+
+def _telegram_image_candidates(message: Any) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    photos = list(getattr(message, "photo", None) or [])
+    if photos:
+        photo = photos[-1]
+        candidates.append(
+            {
+                "file_ref": photo,
+                "filename": f"telegram-photo-{getattr(photo, 'file_unique_id', getattr(photo, 'file_id', 'image'))}.jpg",
+                "media_type": "image/jpeg",
+                "extension": ".jpg",
+                "file_size": _optional_int(getattr(photo, "file_size", None)),
+            }
+        )
+
+    document = getattr(message, "document", None)
+    if document is not None:
+        media_type = str(getattr(document, "mime_type", "") or "")
+        filename = str(getattr(document, "file_name", "") or "")
+        guessed_media_type, _ = mimetypes.guess_type(filename)
+        media_type = media_type or str(guessed_media_type or "")
+        if media_type.startswith("image/"):
+            extension = mimetypes.guess_extension(media_type) or Path(filename).suffix or ".img"
+            candidates.append(
+                {
+                    "file_ref": document,
+                    "filename": filename or f"telegram-document{extension}",
+                    "media_type": media_type,
+                    "extension": extension,
+                    "file_size": _optional_int(getattr(document, "file_size", None)),
+                }
+            )
+    return candidates
+
+
+async def _download_telegram_file(telegram_file: Any, destination: Path) -> None:
+    download_to_drive = getattr(telegram_file, "download_to_drive", None)
+    if download_to_drive is None:
+        raise RuntimeError("Telegram file object does not support download_to_drive.")
+    try:
+        await download_to_drive(custom_path=destination)
+    except TypeError:
+        await download_to_drive(destination)
+
+
+def _image_media_type(payload: bytes, path: Path) -> str:
+    if payload.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if payload.startswith(b"GIF87a") or payload.startswith(b"GIF89a"):
+        return "image/gif"
+    if len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
+        return "image/webp"
+    guessed, _ = mimetypes.guess_type(path.name)
+    return str(guessed or "application/octet-stream")
+
+
+def _safe_telegram_filename(filename: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", filename).strip(".-")
+    return cleaned[:120] or "telegram-image"
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) else None
 
 
 def _truncate(text: str, limit: int) -> str:

@@ -400,6 +400,7 @@ def _format_ollama_user_or_tool_messages(
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     text_parts: list[str] = []
+    images: list[str] = []
     for block in blocks:
         block_type = block.get("type")
         if block_type == "tool_result":
@@ -413,9 +414,16 @@ def _format_ollama_user_or_tool_messages(
             )
         elif block_type == "text":
             text_parts.append(str(block.get("text", "")))
+        elif block_type == "image":
+            data = str(block.get("data", ""))
+            if data:
+                images.append(data)
 
-    if text_parts:
-        messages.append({"role": "user", "content": "\n".join(part for part in text_parts if part)})
+    if text_parts or images:
+        message: dict[str, Any] = {"role": "user", "content": "\n".join(part for part in text_parts if part)}
+        if images:
+            message["images"] = images
+        messages.append(message)
     return messages
 
 

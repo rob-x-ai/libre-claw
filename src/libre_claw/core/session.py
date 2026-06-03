@@ -5,12 +5,31 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias, cast
 
 
 MessageRole: TypeAlias = Literal["user", "assistant"]
 ContentBlock: TypeAlias = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class UserAttachment:
+    """A user-supplied attachment that can be represented in provider messages."""
+
+    media_type: str
+    data: str
+    filename: str = ""
+    path: str = ""
+
+    def as_payload(self) -> dict[str, str]:
+        payload = {"media_type": self.media_type, "data": self.data}
+        if self.filename:
+            payload["filename"] = self.filename
+        if self.path:
+            payload["path"] = self.path
+        return payload
 
 
 @dataclass(frozen=True)
@@ -29,8 +48,12 @@ class Session:
     messages: list[ChatMessage] = field(default_factory=list)
     summary: str | None = None
 
-    def add_user_message(self, content: str) -> None:
-        self.messages.append(ChatMessage(role="user", content=[text_block(content)]))
+    def add_user_message(self, content: str, attachments: Sequence[UserAttachment] = ()) -> None:
+        blocks: list[ContentBlock] = []
+        if content.strip() or not attachments:
+            blocks.append(text_block(content))
+        blocks.extend(image_block(attachment) for attachment in attachments)
+        self.messages.append(ChatMessage(role="user", content=blocks))
 
     def add_assistant_message(self, content: str) -> None:
         self.messages.append(ChatMessage(role="assistant", content=[text_block(content)]))
@@ -62,6 +85,19 @@ class Session:
 
 def text_block(text: str) -> ContentBlock:
     return {"type": "text", "text": text}
+
+
+def image_block(attachment: UserAttachment) -> ContentBlock:
+    block: ContentBlock = {
+        "type": "image",
+        "media_type": attachment.media_type,
+        "data": attachment.data,
+    }
+    if attachment.filename:
+        block["filename"] = attachment.filename
+    if attachment.path:
+        block["path"] = attachment.path
+    return block
 
 
 def tool_use_block(tool_use_id: str, name: str, input_data: dict[str, Any]) -> ContentBlock:
@@ -97,6 +133,8 @@ def summarize_messages(messages: list[ChatMessage]) -> str:
                 tool_parts.append(f"called {block.get('name', 'tool')}")
             elif block_type == "tool_result":
                 tool_parts.append(f"tool result {block.get('tool_use_id', '')}")
+            elif block_type == "image":
+                tool_parts.append(f"attached image {block.get('filename') or block.get('media_type', '')}")
 
         content = " ".join(part for part in text_parts + tool_parts if part).strip()
         if content:
@@ -157,6 +195,10 @@ def estimate_context_tokens(
                 character_count += len(json.dumps(block.get("input", {}), sort_keys=True, default=str))
             elif block_type == "tool_result":
                 character_count += len(str(block.get("content", "")))
+            elif block_type == "image":
+                character_count += len(str(block.get("filename", "")))
+                character_count += len(str(block.get("media_type", "")))
+                character_count += len(str(block.get("data", ""))) // 4
             else:
                 character_count += len(json.dumps(block, sort_keys=True, default=str))
 

@@ -204,6 +204,10 @@ libre-claw telegram up
 Telegram uses your numeric Telegram user ID, not your `@username`. If you are
 blocked, the bot replies with the exact allow command to run.
 
+Telegram messages can include photos or image documents. Libre Claw stores
+uploads locally under `~/.libre-claw/telegram/uploads/`, passes them to
+vision-capable providers, and keeps captions as the user prompt.
+
 Useful Telegram commands:
 
 ```text

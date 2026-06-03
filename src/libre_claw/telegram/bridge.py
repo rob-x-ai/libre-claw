@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 from uuid import uuid4
@@ -40,7 +40,7 @@ from libre_claw.core.memory import (
 )
 from libre_claw.core.permissions import PermissionManager, PermissionResolution
 from libre_claw.core.runs import RunRecord, RunStore
-from libre_claw.core.session import estimate_context_tokens, session_to_payload
+from libre_claw.core.session import UserAttachment, estimate_context_tokens, session_to_payload
 from libre_claw.core.skills import SkillStore
 from libre_claw.core.soul import SoulStore
 from libre_claw.core.tools import ToolCall
@@ -160,10 +160,22 @@ class TelegramBridge:
         self._states[chat_id] = state
         return state
 
-    async def stream_message(self, chat_id: int, text: str):
-        await self._archive_event(chat_id, "user_message", {"content": text})
+    async def stream_message(
+        self,
+        chat_id: int,
+        text: str,
+        attachments: Sequence[UserAttachment] = (),
+    ):
+        await self._archive_event(
+            chat_id,
+            "user_message",
+            {
+                "content": text,
+                "attachments": [_attachment_metadata(attachment) for attachment in attachments],
+            },
+        )
         if self.daemon_client is not None:
-            async for event in self._stream_daemon_message(chat_id, text):
+            async for event in self._stream_daemon_message(chat_id, text, attachments=tuple(attachments)):
                 yield event
             return
 
@@ -175,7 +187,7 @@ class TelegramBridge:
             yield TelegramError(str(exc))
             return
 
-        async for event in agent.run(text):
+        async for event in agent.run(text, attachments=attachments):
             if isinstance(event, AgentTextDelta):
                 yield TelegramText(event.text)
                 continue
@@ -695,7 +707,12 @@ class TelegramBridge:
     def _memory_enabled(self) -> bool:
         return self.memory_enabled and self.config.memory.enabled
 
-    async def _stream_daemon_message(self, chat_id: int, text: str):
+    async def _stream_daemon_message(
+        self,
+        chat_id: int,
+        text: str,
+        attachments: tuple[UserAttachment, ...] = (),
+    ):
         if self.daemon_client is None:
             yield TelegramError("Daemon client is not configured.")
             return
@@ -711,6 +728,7 @@ class TelegramBridge:
                 surface="telegram:daemon",
                 telegram_chat_id=chat_id,
                 session=session_to_payload(state.session),
+                attachments=[attachment.as_payload() for attachment in attachments],
             )
         except Exception as exc:
             yield TelegramError(f"Could not start daemon run: {exc}")
@@ -768,7 +786,7 @@ class TelegramBridge:
             run_state = str(run.get("state", ""))
             if run_state in {"done", "failed", "cancelled"}:
                 if run_state == "done":
-                    state.session.add_user_message(text)
+                    state.session.add_user_message(text, attachments=attachments)
                     assistant_text = "".join(assistant_chunks)
                     if assistant_text:
                         state.session.add_assistant_message(assistant_text)
@@ -1302,3 +1320,12 @@ def _automation_record_payload(record: AutomationRecord) -> dict[str, Any]:
         "metadata": record.metadata,
         "path": str(record.path),
     }
+
+
+def _attachment_metadata(attachment: UserAttachment) -> dict[str, str]:
+    metadata = {"media_type": attachment.media_type}
+    if attachment.filename:
+        metadata["filename"] = attachment.filename
+    if attachment.path:
+        metadata["path"] = attachment.path
+    return metadata

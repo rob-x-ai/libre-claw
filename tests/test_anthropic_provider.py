@@ -6,7 +6,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from libre_claw.core.session import ChatMessage, text_block
+from libre_claw.core.session import ChatMessage, UserAttachment, image_block, text_block
 from libre_claw.providers.anthropic import AnthropicProvider
 from libre_claw.providers.base import Done, TextDelta, ToolCallDelta, ToolCallReady, ToolCallStart, Usage
 
@@ -130,6 +130,45 @@ async def test_anthropic_provider_omits_temperature_for_opus_4_8() -> None:
     assert client.messages.last_request is not None
     assert client.messages.last_request["model"] == "claude-opus-4-8"
     assert "temperature" not in client.messages.last_request
+
+
+async def test_anthropic_provider_formats_user_image_blocks() -> None:
+    final_message = SimpleNamespace(usage=SimpleNamespace(input_tokens=1, output_tokens=1), stop_reason="end_turn")
+    stream = FakeStream(
+        events=[
+            SimpleNamespace(type="content_block_delta", delta=SimpleNamespace(type="text_delta", text="seen")),
+            SimpleNamespace(type="message_stop"),
+        ],
+        final_message=final_message,
+    )
+    client = FakeClient(FakeStreamManager(stream))
+    provider = AnthropicProvider(api_key="test-key", model="claude-sonnet-4-6", max_tokens=99, client=client)
+    image = UserAttachment(media_type="image/png", data="aGVsbG8=", filename="shot.png")
+
+    events = [
+        event
+        async for event in provider.complete(
+            messages=[ChatMessage(role="user", content=[text_block("What is this?"), image_block(image)])],
+        )
+    ]
+
+    assert events == [TextDelta("seen"), Done(usage=Usage(input_tokens=1, output_tokens=1), stop_reason="end_turn")]
+    assert client.messages.last_request["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is this?"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "aGVsbG8=",
+                    },
+                },
+            ],
+        }
+    ]
 
 
 async def test_anthropic_provider_normalizes_streamed_tool_call() -> None:
