@@ -47,6 +47,8 @@ from libre_claw.tui.app import (
     _attachment_summary,
     _context_bar,
     _format_token_count,
+    _lobster_markdown,
+    _lobster_syntax,
     _collect_run_artifacts,
     _model_help_text,
     _load_tui_clipboard_image,
@@ -305,6 +307,39 @@ def test_selectable_rich_log_extracts_rendered_text() -> None:
 
     assert _rich_log_selection_text(log.lines) == "System: selectable text\nnext line"
     assert selected == ("selectable", "\n")
+
+
+def test_lobster_markdown_uses_website_code_theme() -> None:
+    markdown = _lobster_markdown("`inline`\n\n```python\nprint('hi')\n```")
+    background = markdown.code_theme.get_background_style().bgcolor
+
+    assert background is not None
+    assert background.get_truecolor().hex == "#0b1020"
+    assert markdown.inline_code_lexer == "text"
+    assert markdown.inline_code_theme is markdown.code_theme
+
+
+def test_tui_code_renderables_use_lobster_theme(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    assistant = app._format_entry(TranscriptEntry(role="assistant", content="```python\nprint('hi')\n```"))
+    diff = app._format_entry(
+        TranscriptEntry(
+            role="tool",
+            title="edit_file result",
+            content="+ added\n- removed",
+            metadata={"syntax": "diff", "status": "result"},
+        )
+    )
+    file_preview = app._format_entry(TranscriptEntry(role="file", title="demo.py", content="print('hi')"))
+
+    assert assistant.renderables[1].code_theme.get_background_style().bgcolor.get_truecolor().hex == "#0b1020"
+    assert diff.renderables[1].background_color == "#0b1020"
+    assert file_preview.renderables[1].background_color == "#0b1020"
+    assert _lobster_syntax("print('hi')", "python").background_color == "#0b1020"
 
 
 async def test_copy_shortcut_prefers_active_text_selection(monkeypatch, tmp_path: Path) -> None:

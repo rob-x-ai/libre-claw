@@ -17,10 +17,12 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import unquote, urlparse
 
+from pygments.token import Token as PygmentsToken
 from rich.console import Group, RenderableType
 from rich.markdown import Markdown
 from rich.markup import escape
-from rich.syntax import Syntax
+from rich.style import Style
+from rich.syntax import Syntax, SyntaxTheme
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
@@ -307,6 +309,16 @@ PERMISSION_KEYS: dict[str, PermissionResolution] = {
 ASSISTANT_ACCENT = "#FF5C5C"
 PROJECT_NOTICE = "Apache-2.0 | Kroonen AI | hello@kroonen.ai"
 PROJECT_LINKS = "Website: https://libreclaw.sh | GitHub: https://github.com/kroonen-ai/libre-claw"
+LOBSTER_CODE_BACKGROUND = "#0b1020"
+LOBSTER_CODE_TEXT = "#f8fafc"
+LOBSTER_CODE_MUTED = "#9ca3af"
+LOBSTER_CODE_ORANGE = "#f59e0b"
+LOBSTER_CODE_CYAN = "#14b8a6"
+LOBSTER_CODE_RED = "#ff5c5c"
+LOBSTER_CODE_GREEN = "#22c55e"
+LOBSTER_CODE_PURPLE = "#a78bfa"
+LOBSTER_DIFF_ADDED_BACKGROUND = "#14372f"
+LOBSTER_DIFF_REMOVED_BACKGROUND = "#3c171c"
 STREAM_RENDER_INTERVAL = 0.05
 STREAM_RENDER_MAX_BUFFERED_CHARS = 240
 RUN_ARTIFACT_TIMEOUT = 10.0
@@ -317,6 +329,91 @@ TUI_IMAGE_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
 TUI_IMAGE_ATTACHMENT_PROMPT = "Please inspect the attached image."
 TUI_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 TUI_CLIPBOARD_IMAGE_DIR = Path.home() / ".libre-claw" / "tui" / "uploads"
+
+
+class LobsterSyntaxTheme(SyntaxTheme):
+    """Rich syntax theme matching Libre Claw's Lobster website code blocks."""
+
+    def __init__(self) -> None:
+        base = Style(color=LOBSTER_CODE_TEXT, bgcolor=LOBSTER_CODE_BACKGROUND)
+        muted = Style(color=LOBSTER_CODE_MUTED, bgcolor=LOBSTER_CODE_BACKGROUND, italic=True)
+        orange = Style(color=LOBSTER_CODE_ORANGE, bgcolor=LOBSTER_CODE_BACKGROUND)
+        cyan = Style(color=LOBSTER_CODE_CYAN, bgcolor=LOBSTER_CODE_BACKGROUND)
+        red = Style(color=LOBSTER_CODE_RED, bgcolor=LOBSTER_CODE_BACKGROUND)
+        green = Style(color=LOBSTER_CODE_GREEN, bgcolor=LOBSTER_CODE_BACKGROUND)
+        purple = Style(color=LOBSTER_CODE_PURPLE, bgcolor=LOBSTER_CODE_BACKGROUND)
+
+        self._background_style = Style(bgcolor=LOBSTER_CODE_BACKGROUND)
+        self._missing_style = base
+        self._style_cache: dict[object, Style] = {}
+        self._styles: dict[object, Style] = {
+            PygmentsToken.Text: base,
+            PygmentsToken.Whitespace: base,
+            PygmentsToken.Comment: muted,
+            PygmentsToken.Keyword: orange,
+            PygmentsToken.Name.Tag: orange,
+            PygmentsToken.Name.Attribute: orange,
+            PygmentsToken.Name.Function: orange,
+            PygmentsToken.Name.Class: purple,
+            PygmentsToken.Name.Decorator: purple,
+            PygmentsToken.Name.Variable: cyan,
+            PygmentsToken.Literal.String: cyan,
+            PygmentsToken.Literal.Number: purple,
+            PygmentsToken.Operator: red,
+            PygmentsToken.Punctuation: Style(color=LOBSTER_CODE_MUTED, bgcolor=LOBSTER_CODE_BACKGROUND),
+            PygmentsToken.Generic.Heading: Style(color=LOBSTER_CODE_ORANGE, bgcolor=LOBSTER_CODE_BACKGROUND, bold=True),
+            PygmentsToken.Generic.Subheading: Style(color=LOBSTER_CODE_PURPLE, bgcolor=LOBSTER_CODE_BACKGROUND, bold=True),
+            PygmentsToken.Generic.Inserted: Style(color=LOBSTER_CODE_GREEN, bgcolor=LOBSTER_DIFF_ADDED_BACKGROUND),
+            PygmentsToken.Generic.Deleted: Style(color=LOBSTER_CODE_RED, bgcolor=LOBSTER_DIFF_REMOVED_BACKGROUND),
+            PygmentsToken.Generic.Error: red,
+            PygmentsToken.Generic.Prompt: Style(color=LOBSTER_CODE_MUTED, bgcolor=LOBSTER_CODE_BACKGROUND, bold=True),
+            PygmentsToken.Generic.Output: base,
+            PygmentsToken.Generic.Traceback: red,
+        }
+
+    def get_style_for_token(self, token_type: object) -> Style:
+        cached = self._style_cache.get(token_type)
+        if cached is not None:
+            return cached
+
+        token = tuple(cast(Any, token_type))
+        style = self._missing_style
+        while token:
+            found = self._styles.get(token)
+            if found is not None:
+                style = found
+                break
+            token = token[:-1]
+        self._style_cache[token_type] = style
+        return style
+
+    def get_background_style(self) -> Style:
+        return self._background_style
+
+
+_LOBSTER_SYNTAX_THEME = LobsterSyntaxTheme()
+
+
+def _lobster_markdown(markup: str) -> Markdown:
+    return Markdown(
+        markup,
+        code_theme=_LOBSTER_SYNTAX_THEME,  # type: ignore[arg-type]
+        inline_code_lexer="text",
+        inline_code_theme=_LOBSTER_SYNTAX_THEME,  # type: ignore[arg-type]
+    )
+
+
+def _lobster_syntax(code: str, lexer: str) -> Syntax:
+    return Syntax(
+        code,
+        lexer,
+        theme=_LOBSTER_SYNTAX_THEME,
+        word_wrap=True,
+        padding=1,
+        background_color=LOBSTER_CODE_BACKGROUND,
+    )
+
+
 STARTUP_ASCII = r"""
  █████        ███  █████                             █████████  ████
 ░░███        ░░░  ░░███                             ███░░░░░███░░███
@@ -2960,9 +3057,9 @@ class LibreClawApp(App[None]):
         title.update(f"{run.run_id} [{run.state}] {self._artifact_tab}")
         content.clear()
         if self._artifact_tab == "diff":
-            content.write(Syntax(text or "No diff artifact.", "diff"))
+            content.write(_lobster_syntax(text or "No diff artifact.", "diff"))
         else:
-            content.write(Markdown(text or f"No {self._artifact_tab} artifact."))
+            content.write(_lobster_markdown(text or f"No {self._artifact_tab} artifact."))
 
     def _handle_artifact_button(self, button_id: str) -> None:
         if button_id == "artifact-close":
@@ -3282,7 +3379,7 @@ class LibreClawApp(App[None]):
         if entry.role == "assistant":
             if not entry.content:
                 return Text("Libre Claw: streaming...", style=f"bold {self._theme.accent} dim")
-            return Group(Text("Libre Claw:", style=f"bold {self._theme.accent}"), Markdown(entry.content))
+            return Group(Text("Libre Claw:", style=f"bold {self._theme.accent}"), _lobster_markdown(entry.content))
         if entry.role == "tool":
             title = entry.title or "Tool"
             metadata = entry.metadata or {}
@@ -3296,7 +3393,10 @@ class LibreClawApp(App[None]):
                     (_tool_preview(entry), "dim"),
                 )
             if metadata.get("syntax") == "diff":
-                return Group(Text(f"Tool {self._tool_display_index(index)}: {title}", style=f"bold {style}"), Syntax(entry.content, "diff"))
+                return Group(
+                    Text(f"Tool {self._tool_display_index(index)}: {title}", style=f"bold {style}"),
+                    _lobster_syntax(entry.content, "diff"),
+                )
             return Text.assemble(
                 (f"Tool {self._tool_display_index(index)}: {title}\n", f"bold {style}"),
                 _compact_tool_output(entry.content, expanded=True),
@@ -3307,7 +3407,7 @@ class LibreClawApp(App[None]):
             return _attachment_renderable(entry, accent=self._theme.accent)
         if entry.role == "file":
             title = entry.title or "File"
-            return Group(Text(f"File: {title}", style=f"bold {self._theme.accent}"), Syntax(entry.content, "text"))
+            return Group(Text(f"File: {title}", style=f"bold {self._theme.accent}"), _lobster_syntax(entry.content, "text"))
         return Text("System: " + entry.content, style="dim")
 
     def _tool_display_index(self, transcript_index: int) -> int:
@@ -5187,7 +5287,7 @@ def _startup_renderable(expanded: bool, accent: str = ASSISTANT_ACCENT) -> Rende
         Text(PROJECT_LINKS, style="dim"),
         Text(f"Libre Claw v{__version__}", style=f"bold {accent}"),
         Text(PROJECT_NOTICE, style="dim"),
-        Markdown(latest_release_notes()),
+        _lobster_markdown(latest_release_notes()),
         Text("Press Ctrl+R to collapse. Type /help for commands.", style="dim"),
     )
 
