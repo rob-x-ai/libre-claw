@@ -20,6 +20,9 @@ class PermissionManager:
     always_allowed_tools: set[str] = field(default_factory=set)
     always_allowed_calls: set[str] = field(default_factory=set)
 
+    def allow_tools_for_session(self, tool_names: tuple[str, ...]) -> None:
+        self.always_allowed_tools.update(name for name in tool_names if name)
+
     def check(self, call: ToolCall, tool: BaseTool) -> PermissionDecision:
         if tool.permission_level == "deny":
             return "deny"

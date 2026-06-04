@@ -66,6 +66,8 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.automations.root == tmp_path / ".libre-claw" / "automations"
     assert config.automations.poll_interval == 30.0
     assert config.automations.max_due_per_tick == 5
+    assert "bash" in config.automations.auto_approve_tools
+    assert "write_file" not in config.automations.auto_approve_tools
     assert config.automations.finalizer_max_tokens == 3000
     assert config.automations.finalizer_max_context_chars == 70000
     assert config.browser.allowed_domains == ()

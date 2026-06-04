@@ -531,6 +531,44 @@ async def test_daemon_blocks_and_resumes_on_permission_approval(monkeypatch, tmp
     assert any(event["type"] == "tool_result" and event["data"]["content"] == "echo:ok" for event in events["events"])
 
 
+async def test_daemon_automation_auto_approves_configured_tools(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    provider = ScriptedProvider(
+        [
+            [ToolCallReady("toolu_1", "ask_echo", {"value": "ok"}), Done()],
+            [TextDelta("done"), Done()],
+        ]
+    )
+    config = load_config()
+    config = replace(config, automations=replace(config.automations, auto_approve_tools=("ask_echo",)))
+    run_store = RunStore(tmp_path / "runs")
+    server = DaemonServer(
+        config,
+        run_store=run_store,
+        provider_factory=lambda _config: provider,
+        registry_factory=_registry,
+    )
+    run = await run_store.create_run(
+        "Scheduled: approval smoke",
+        kind="chat",
+        provider=config.general.default_provider,
+        model=config.general.default_model,
+        working_directory=config.general.working_directory,
+        state="queued",
+    )
+
+    state = await server._run_agent(run, "use the tool", config, surface="automation:report")
+    events = _response_payload(
+        await server.get_events(RequestStub(match_info={"run_id": run.run_id}))  # type: ignore[arg-type]
+    )
+    event_types = [event["type"] for event in events["events"]]
+
+    assert state == "done"
+    assert "permission_request" not in event_types
+    assert any(event["type"] == "tool_result" and event["data"]["content"] == "echo:ok" for event in events["events"])
+
+
 async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)

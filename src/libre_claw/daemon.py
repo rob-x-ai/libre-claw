@@ -914,11 +914,14 @@ class DaemonServer:
         memory_facts = await self.memory_store.list_always_injected_memories()
         skill_store = SkillStore(config.general.working_directory)
         soul_store = SoulStore(config.general.working_directory)
+        permission_manager = PermissionManager(config.permissions)
+        if surface.startswith("automation:"):
+            permission_manager.allow_tools_for_session(config.automations.auto_approve_tools)
         return Agent(
             session=session or Session(),
             provider=provider,
             tool_registry=self.registry_factory(config, self.memory_store),
-            permission_manager=PermissionManager(config.permissions),
+            permission_manager=permission_manager,
             system_prompt=config.agent.system_prompt,
             max_tool_calls_per_turn=config.agent.max_tool_calls_per_turn,
             auto_compact_threshold=config.agent.auto_compact_threshold,

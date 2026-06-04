@@ -55,6 +55,15 @@ def test_identical_call_cache() -> None:
     assert manager.check(different_call, AskTool(context)) == "ask"
 
 
+def test_can_seed_session_tool_allowlist() -> None:
+    context = ToolContext(working_directory=Path.cwd())
+    manager = PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=False))
+
+    manager.allow_tools_for_session(("ask_tool", ""))
+
+    assert manager.check(ToolCall(id="1", name="ask_tool"), AskTool(context)) == "allow"
+
+
 def test_read_tools_auto_allowed_by_config() -> None:
     context = ToolContext(working_directory=Path.cwd())
     manager = PermissionManager(PermissionsConfig(default_level="ask", auto_approve_read=True))

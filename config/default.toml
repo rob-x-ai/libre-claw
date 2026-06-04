@@ -172,6 +172,17 @@ enabled = true
 root = "~/.libre-claw/automations"
 poll_interval = 30.0
 max_due_per_tick = 5
+auto_approve_tools = [
+  "bash",
+  "http_request",
+  "read_file",
+  "list_directory",
+  "search_files",
+  "glob",
+  "browser_read",
+  "browser_screenshot",
+  "browser_extract",
+]
 finalizer_max_tokens = 3000
 finalizer_max_context_chars = 70000
 

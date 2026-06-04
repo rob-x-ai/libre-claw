@@ -152,6 +152,7 @@ class AutomationsConfig:
     root: Path
     poll_interval: float
     max_due_per_tick: int
+    auto_approve_tools: tuple[str, ...]
     finalizer_max_tokens: int
     finalizer_max_context_chars: int
 
@@ -581,6 +582,17 @@ def _load_default_config() -> ConfigTable:
             "root": "~/.libre-claw/automations",
             "poll_interval": 30.0,
             "max_due_per_tick": 5,
+            "auto_approve_tools": [
+                "bash",
+                "http_request",
+                "read_file",
+                "list_directory",
+                "search_files",
+                "glob",
+                "browser_read",
+                "browser_screenshot",
+                "browser_extract",
+            ],
             "finalizer_max_tokens": 3000,
             "finalizer_max_context_chars": 70000,
         },
@@ -844,6 +856,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             root=_path(automations, "root"),
             poll_interval=_float(automations, "poll_interval"),
             max_due_per_tick=_int(automations, "max_due_per_tick"),
+            auto_approve_tools=tuple(_list(automations, "auto_approve_tools", str)),
             finalizer_max_tokens=_int(automations, "finalizer_max_tokens"),
             finalizer_max_context_chars=_int(automations, "finalizer_max_context_chars"),
         ),
