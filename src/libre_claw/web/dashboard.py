@@ -25,7 +25,15 @@ _DASHBOARD_HTML = r"""<!doctype html>
     (() => {
       const key = "libre-claw-dashboard-theme";
       const fallback = __LIBRE_CLAW_DASHBOARD_THEME__;
-      const aliases = { "": "lobster", "default": "lobster", "dark": "lobster", "libre-default": "lobster" };
+      const aliases = {
+        "": "lobster",
+        "default": "lobster",
+        "dark": "lobster",
+        "libre-default": "lobster",
+        "clear": "lobster-light",
+        "lobster-clear": "lobster-light",
+        "codex-lobster-light": "lobster-light",
+      };
       const raw = localStorage.getItem(key) || fallback;
       const value = aliases[raw] || raw;
       document.documentElement.dataset.theme = value;
@@ -61,6 +69,35 @@ _DASHBOARD_HTML = r"""<!doctype html>
       --grid-dot: rgba(255, 255, 255, 0.12);
       --shadow: 0 26px 80px rgba(0, 0, 0, 0.5);
       --radius: 8px;
+    }
+    html[data-theme="lobster-light"] {
+      color-scheme: light;
+      --font-ui: "Satoshi", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: "Jetbrains Mono", "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+      --bg: #fdf6e3;
+      --surface: #fffaf0;
+      --surface-2: #eee8d5;
+      --panel: rgba(255, 250, 240, 0.9);
+      --panel-strong: #fffaf0;
+      --panel-hover: rgba(255, 92, 92, 0.08);
+      --line: rgba(101, 123, 131, 0.18);
+      --line-strong: rgba(101, 123, 131, 0.3);
+      --text: #073642;
+      --soft: #586e75;
+      --muted: #657b83;
+      --accent: #ff5c5c;
+      --accent-soft: rgba(255, 92, 92, 0.14);
+      --accent-strong: #b91c1c;
+      --tool-accent: #268bd2;
+      --tool-soft: rgba(38, 139, 210, 0.12);
+      --danger: #dc322f;
+      --danger-soft: rgba(220, 50, 47, 0.1);
+      --ok: #859900;
+      --ok-soft: rgba(133, 153, 0, 0.1);
+      --warn: #b58900;
+      --warn-soft: rgba(181, 137, 0, 0.1);
+      --grid-dot: rgba(255, 92, 92, 0.11);
+      --shadow: 0 22px 70px rgba(101, 123, 131, 0.14);
     }
     html[data-theme="github-dark"] {
       color-scheme: dark;
@@ -1171,6 +1208,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
           <span>Theme</span>
           <select id="themeSelect">
             <option value="lobster">Lobster</option>
+            <option value="lobster-light">Lobster Light</option>
             <option value="github-dark">GitHub Dark</option>
             <option value="github-light">GitHub Light</option>
             <option value="monokai-pro">Monokai Pro</option>
@@ -1344,6 +1382,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     const THEME_KEY = "libre-claw-dashboard-theme";
     const THEMES = new Set([
       "lobster",
+      "lobster-light",
       "github-dark",
       "github-light",
       "monokai-pro",
@@ -1370,6 +1409,9 @@ _DASHBOARD_HTML = r"""<!doctype html>
       ["libre-dark", "lobster"],
       ["libre-default", "lobster"],
       ["codex-lobster", "lobster"],
+      ["clear", "lobster-light"],
+      ["lobster-clear", "lobster-light"],
+      ["codex-lobster-light", "lobster-light"],
       ["light", "github-light"],
     ]);
 

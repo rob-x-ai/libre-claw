@@ -312,9 +312,13 @@ def test_selectable_rich_log_extracts_rendered_text() -> None:
 def test_lobster_markdown_uses_website_code_theme() -> None:
     markdown = _lobster_markdown("`inline`\n\n```python\nprint('hi')\n```")
     background = markdown.code_theme.get_background_style().bgcolor
+    light_markdown = _lobster_markdown("```python\nprint('hi')\n```", light=True)
+    light_background = light_markdown.code_theme.get_background_style().bgcolor
 
     assert background is not None
     assert background.get_truecolor().hex == "#0b1020"
+    assert light_background is not None
+    assert light_background.get_truecolor().hex == "#fffaf0"
     assert markdown.inline_code_lexer == "text"
     assert markdown.inline_code_theme is markdown.code_theme
 
@@ -340,6 +344,7 @@ def test_tui_code_renderables_use_lobster_theme(monkeypatch, tmp_path: Path) -> 
     assert diff.renderables[1].background_color == "#0b1020"
     assert file_preview.renderables[1].background_color == "#0b1020"
     assert _lobster_syntax("print('hi')", "python").background_color == "#0b1020"
+    assert _lobster_syntax("print('hi')", "python", light=True).background_color == "#fffaf0"
 
 
 async def test_copy_shortcut_prefers_active_text_selection(monkeypatch, tmp_path: Path) -> None:
@@ -1554,6 +1559,24 @@ async def test_tui_uses_configured_theme_palette(monkeypatch, tmp_path: Path) ->
         assert suggestions.styles.border.left[1].hex == "#00FF41"
         assert input_box.styles.border.top[1].hex == "#00FF41"
         assert "#00ff41" in str(renderable.renderables[0].style).lower()
+
+
+async def test_tui_lobster_light_theme_uses_cream_palette(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config = load_config()
+    themed = replace(config, general=replace(config.general, theme="lobster-light"))
+    app = LibreClawApp(config=themed)
+
+    async with app.run_test(size=(120, 45)):
+        workspace = app.query_one("#workspace")
+        chat = app.query_one("#chat")
+        assistant = app._format_entry(TranscriptEntry(role="assistant", content="```python\nprint('hi')\n```"))
+
+        assert workspace.styles.background.hex == "#FFFAF0"
+        assert chat.styles.scrollbar_color.hex == "#FF5C5C"
+        assert assistant.renderables[1].code_theme.get_background_style().bgcolor.get_truecolor().hex == "#fffaf0"
 
 
 async def test_theme_command_switches_and_persists_global_theme(monkeypatch, tmp_path: Path) -> None:

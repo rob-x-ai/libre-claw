@@ -235,6 +235,8 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     assert "libre-claw-dashboard-theme" in response.text
     assert 'const fallback = "lobster";' in response.text
     assert "Lobster" in response.text
+    assert "Lobster Light" in response.text
+    assert 'html[data-theme="lobster-light"]' in response.text
     assert 'id="themeSelect"' in response.text
     assert "GitHub Dark" in response.text
     assert "GitHub Light" in response.text
@@ -257,6 +259,8 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
 
 def test_dashboard_html_uses_config_theme_fallback() -> None:
     assert 'const fallback = "matrix";' in dashboard_html(theme="matrix")
+    assert 'const fallback = "lobster-light";' in dashboard_html(theme="lobster-light")
+    assert 'const fallback = "lobster-light";' in dashboard_html(theme="clear")
     assert 'const fallback = "github-light";' in dashboard_html(theme="light")
     assert 'const fallback = "lobster";' in dashboard_html(theme="dark")
     assert 'const fallback = "lobster";' in dashboard_html(theme="libre-default")

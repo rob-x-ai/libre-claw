@@ -323,6 +323,16 @@ LOBSTER_CODE_GREEN = "#22c55e"
 LOBSTER_CODE_PURPLE = "#a78bfa"
 LOBSTER_DIFF_ADDED_BACKGROUND = "#14372f"
 LOBSTER_DIFF_REMOVED_BACKGROUND = "#3c171c"
+LOBSTER_LIGHT_CODE_BACKGROUND = "#fffaf0"
+LOBSTER_LIGHT_CODE_TEXT = "#073642"
+LOBSTER_LIGHT_CODE_MUTED = "#657b83"
+LOBSTER_LIGHT_CODE_ORANGE = "#b58900"
+LOBSTER_LIGHT_CODE_CYAN = "#2aa198"
+LOBSTER_LIGHT_CODE_RED = "#ff5c5c"
+LOBSTER_LIGHT_CODE_GREEN = "#859900"
+LOBSTER_LIGHT_CODE_PURPLE = "#6c71c4"
+LOBSTER_LIGHT_DIFF_ADDED_BACKGROUND = "#eef3d2"
+LOBSTER_LIGHT_DIFF_REMOVED_BACKGROUND = "#f8ddcf"
 STREAM_RENDER_INTERVAL = 0.05
 STREAM_RENDER_MAX_BUFFERED_CHARS = 240
 RUN_ARTIFACT_TIMEOUT = 10.0
@@ -338,41 +348,55 @@ TUI_CLIPBOARD_IMAGE_DIR = Path.home() / ".libre-claw" / "tui" / "uploads"
 class LobsterSyntaxTheme(SyntaxTheme):
     """Rich syntax theme matching Libre Claw's Lobster website code blocks."""
 
-    def __init__(self) -> None:
-        base = Style(color=LOBSTER_CODE_TEXT, bgcolor=LOBSTER_CODE_BACKGROUND)
-        muted = Style(color=LOBSTER_CODE_MUTED, bgcolor=LOBSTER_CODE_BACKGROUND, italic=True)
-        orange = Style(color=LOBSTER_CODE_ORANGE, bgcolor=LOBSTER_CODE_BACKGROUND)
-        cyan = Style(color=LOBSTER_CODE_CYAN, bgcolor=LOBSTER_CODE_BACKGROUND)
-        red = Style(color=LOBSTER_CODE_RED, bgcolor=LOBSTER_CODE_BACKGROUND)
-        green = Style(color=LOBSTER_CODE_GREEN, bgcolor=LOBSTER_CODE_BACKGROUND)
-        purple = Style(color=LOBSTER_CODE_PURPLE, bgcolor=LOBSTER_CODE_BACKGROUND)
+    def __init__(
+        self,
+        *,
+        background: str,
+        text: str,
+        muted: str,
+        orange: str,
+        cyan: str,
+        red: str,
+        green: str,
+        purple: str,
+        diff_added_background: str,
+        diff_removed_background: str,
+    ) -> None:
+        base = Style(color=text, bgcolor=background)
+        muted_style = Style(color=muted, bgcolor=background, italic=True)
+        orange_style = Style(color=orange, bgcolor=background)
+        cyan_style = Style(color=cyan, bgcolor=background)
+        red_style = Style(color=red, bgcolor=background)
+        green_style = Style(color=green, bgcolor=background)
+        purple_style = Style(color=purple, bgcolor=background)
 
-        self._background_style = Style(bgcolor=LOBSTER_CODE_BACKGROUND)
+        self.background_color = background
+        self._background_style = Style(bgcolor=background)
         self._missing_style = base
         self._style_cache: dict[object, Style] = {}
         self._styles: dict[object, Style] = {
             PygmentsToken.Text: base,
             PygmentsToken.Whitespace: base,
-            PygmentsToken.Comment: muted,
-            PygmentsToken.Keyword: orange,
-            PygmentsToken.Name.Tag: orange,
-            PygmentsToken.Name.Attribute: orange,
-            PygmentsToken.Name.Function: orange,
-            PygmentsToken.Name.Class: purple,
-            PygmentsToken.Name.Decorator: purple,
-            PygmentsToken.Name.Variable: cyan,
-            PygmentsToken.Literal.String: cyan,
-            PygmentsToken.Literal.Number: purple,
-            PygmentsToken.Operator: red,
-            PygmentsToken.Punctuation: Style(color=LOBSTER_CODE_MUTED, bgcolor=LOBSTER_CODE_BACKGROUND),
-            PygmentsToken.Generic.Heading: Style(color=LOBSTER_CODE_ORANGE, bgcolor=LOBSTER_CODE_BACKGROUND, bold=True),
-            PygmentsToken.Generic.Subheading: Style(color=LOBSTER_CODE_PURPLE, bgcolor=LOBSTER_CODE_BACKGROUND, bold=True),
-            PygmentsToken.Generic.Inserted: Style(color=LOBSTER_CODE_GREEN, bgcolor=LOBSTER_DIFF_ADDED_BACKGROUND),
-            PygmentsToken.Generic.Deleted: Style(color=LOBSTER_CODE_RED, bgcolor=LOBSTER_DIFF_REMOVED_BACKGROUND),
-            PygmentsToken.Generic.Error: red,
-            PygmentsToken.Generic.Prompt: Style(color=LOBSTER_CODE_MUTED, bgcolor=LOBSTER_CODE_BACKGROUND, bold=True),
+            PygmentsToken.Comment: muted_style,
+            PygmentsToken.Keyword: orange_style,
+            PygmentsToken.Name.Tag: orange_style,
+            PygmentsToken.Name.Attribute: orange_style,
+            PygmentsToken.Name.Function: orange_style,
+            PygmentsToken.Name.Class: purple_style,
+            PygmentsToken.Name.Decorator: purple_style,
+            PygmentsToken.Name.Variable: cyan_style,
+            PygmentsToken.Literal.String: cyan_style,
+            PygmentsToken.Literal.Number: purple_style,
+            PygmentsToken.Operator: red_style,
+            PygmentsToken.Punctuation: Style(color=muted, bgcolor=background),
+            PygmentsToken.Generic.Heading: Style(color=orange, bgcolor=background, bold=True),
+            PygmentsToken.Generic.Subheading: Style(color=purple, bgcolor=background, bold=True),
+            PygmentsToken.Generic.Inserted: Style(color=green, bgcolor=diff_added_background),
+            PygmentsToken.Generic.Deleted: Style(color=red, bgcolor=diff_removed_background),
+            PygmentsToken.Generic.Error: red_style,
+            PygmentsToken.Generic.Prompt: Style(color=muted, bgcolor=background, bold=True),
             PygmentsToken.Generic.Output: base,
-            PygmentsToken.Generic.Traceback: red,
+            PygmentsToken.Generic.Traceback: red_style,
         }
 
     def get_style_for_token(self, token_type: object) -> Style:
@@ -395,26 +419,55 @@ class LobsterSyntaxTheme(SyntaxTheme):
         return self._background_style
 
 
-_LOBSTER_SYNTAX_THEME = LobsterSyntaxTheme()
+_LOBSTER_SYNTAX_THEME = LobsterSyntaxTheme(
+    background=LOBSTER_CODE_BACKGROUND,
+    text=LOBSTER_CODE_TEXT,
+    muted=LOBSTER_CODE_MUTED,
+    orange=LOBSTER_CODE_ORANGE,
+    cyan=LOBSTER_CODE_CYAN,
+    red=LOBSTER_CODE_RED,
+    green=LOBSTER_CODE_GREEN,
+    purple=LOBSTER_CODE_PURPLE,
+    diff_added_background=LOBSTER_DIFF_ADDED_BACKGROUND,
+    diff_removed_background=LOBSTER_DIFF_REMOVED_BACKGROUND,
+)
+_LOBSTER_LIGHT_SYNTAX_THEME = LobsterSyntaxTheme(
+    background=LOBSTER_LIGHT_CODE_BACKGROUND,
+    text=LOBSTER_LIGHT_CODE_TEXT,
+    muted=LOBSTER_LIGHT_CODE_MUTED,
+    orange=LOBSTER_LIGHT_CODE_ORANGE,
+    cyan=LOBSTER_LIGHT_CODE_CYAN,
+    red=LOBSTER_LIGHT_CODE_RED,
+    green=LOBSTER_LIGHT_CODE_GREEN,
+    purple=LOBSTER_LIGHT_CODE_PURPLE,
+    diff_added_background=LOBSTER_LIGHT_DIFF_ADDED_BACKGROUND,
+    diff_removed_background=LOBSTER_LIGHT_DIFF_REMOVED_BACKGROUND,
+)
 
 
-def _lobster_markdown(markup: str) -> Markdown:
+def _lobster_code_theme(*, light: bool = False) -> LobsterSyntaxTheme:
+    return _LOBSTER_LIGHT_SYNTAX_THEME if light else _LOBSTER_SYNTAX_THEME
+
+
+def _lobster_markdown(markup: str, *, light: bool = False) -> Markdown:
+    code_theme = _lobster_code_theme(light=light)
     return Markdown(
         markup,
-        code_theme=_LOBSTER_SYNTAX_THEME,  # type: ignore[arg-type]
+        code_theme=code_theme,  # type: ignore[arg-type]
         inline_code_lexer="text",
-        inline_code_theme=_LOBSTER_SYNTAX_THEME,  # type: ignore[arg-type]
+        inline_code_theme=code_theme,  # type: ignore[arg-type]
     )
 
 
-def _lobster_syntax(code: str, lexer: str) -> Syntax:
+def _lobster_syntax(code: str, lexer: str, *, light: bool = False) -> Syntax:
+    code_theme = _lobster_code_theme(light=light)
     return Syntax(
         code,
         lexer,
-        theme=_LOBSTER_SYNTAX_THEME,
+        theme=code_theme,
         word_wrap=True,
         padding=1,
-        background_color=LOBSTER_CODE_BACKGROUND,
+        background_color=code_theme.background_color,
     )
 
 
@@ -3165,9 +3218,9 @@ class LibreClawApp(App[None]):
         title.update(f"{run.run_id} [{run.state}] {self._artifact_tab}")
         content.clear()
         if self._artifact_tab == "diff":
-            content.write(_lobster_syntax(text or "No diff artifact.", "diff"))
+            content.write(_lobster_syntax(text or "No diff artifact.", "diff", light=self._theme.is_light))
         else:
-            content.write(_lobster_markdown(text or f"No {self._artifact_tab} artifact."))
+            content.write(_lobster_markdown(text or f"No {self._artifact_tab} artifact.", light=self._theme.is_light))
 
     def _handle_artifact_button(self, button_id: str) -> None:
         if button_id == "artifact-close":
@@ -3481,13 +3534,16 @@ class LibreClawApp(App[None]):
 
     def _format_entry(self, entry: TranscriptEntry, index: int = 0) -> RenderableType:
         if entry.role == "startup":
-            return _startup_renderable(self.startup_expanded, accent=self._theme.accent)
+            return _startup_renderable(self.startup_expanded, accent=self._theme.accent, light=self._theme.is_light)
         if entry.role == "user":
             return Text.assemble(("User: ", f"bold {self._theme.accent}"), entry.content)
         if entry.role == "assistant":
             if not entry.content:
                 return Text("Libre Claw: streaming...", style=f"bold {self._theme.accent} dim")
-            return Group(Text("Libre Claw:", style=f"bold {self._theme.accent}"), _lobster_markdown(entry.content))
+            return Group(
+                Text("Libre Claw:", style=f"bold {self._theme.accent}"),
+                _lobster_markdown(entry.content, light=self._theme.is_light),
+            )
         if entry.role == "tool":
             title = entry.title or "Tool"
             metadata = entry.metadata or {}
@@ -3503,7 +3559,7 @@ class LibreClawApp(App[None]):
             if metadata.get("syntax") == "diff":
                 return Group(
                     Text(f"Tool {self._tool_display_index(index)}: {title}", style=f"bold {style}"),
-                    _lobster_syntax(entry.content, "diff"),
+                    _lobster_syntax(entry.content, "diff", light=self._theme.is_light),
                 )
             return Text.assemble(
                 (f"Tool {self._tool_display_index(index)}: {title}\n", f"bold {style}"),
@@ -3515,7 +3571,10 @@ class LibreClawApp(App[None]):
             return _attachment_renderable(entry, accent=self._theme.accent)
         if entry.role == "file":
             title = entry.title or "File"
-            return Group(Text(f"File: {title}", style=f"bold {self._theme.accent}"), _lobster_syntax(entry.content, "text"))
+            return Group(
+                Text(f"File: {title}", style=f"bold {self._theme.accent}"),
+                _lobster_syntax(entry.content, "text", light=self._theme.is_light),
+            )
         return Text("System: " + entry.content, style="dim")
 
     def _tool_display_index(self, transcript_index: int) -> int:
@@ -5348,7 +5407,13 @@ def _theme_help_text(current_theme: str) -> str:
         "Available themes:",
     ]
     lines.extend(f"- `{theme_id}` - {palette.label}" for theme_id, palette in THEME_PALETTES.items())
-    lines.extend(["", "Aliases: `dark`, `default`, and `libre-default` = `lobster`; `light` = `github-light`."])
+    lines.extend(
+        [
+            "",
+            "Aliases: `dark`, `default`, and `libre-default` = `lobster`; "
+            "`clear` and `lobster-clear` = `lobster-light`; `light` = `github-light`.",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -5469,7 +5534,7 @@ def _compact_tool_output(content: str, expanded: bool) -> str:
     return f"{shown}\n... {hidden} more lines hidden; use /tools expand <index> to show all"
 
 
-def _startup_renderable(expanded: bool, accent: str = ASSISTANT_ACCENT) -> RenderableType:
+def _startup_renderable(expanded: bool, accent: str = ASSISTANT_ACCENT, *, light: bool = False) -> RenderableType:
     banner = Text(STARTUP_ASCII.strip(), style=accent)
     if not expanded:
         return Group(
@@ -5486,7 +5551,7 @@ def _startup_renderable(expanded: bool, accent: str = ASSISTANT_ACCENT) -> Rende
         Text(PROJECT_LINKS, style="dim"),
         Text(f"Libre Claw v{__version__}", style=f"bold {accent}"),
         Text(PROJECT_NOTICE, style="dim"),
-        _lobster_markdown(latest_release_notes()),
+        _lobster_markdown(latest_release_notes(), light=light),
         Text("Press Ctrl+R to collapse. Type /help for commands.", style="dim"),
     )
 
