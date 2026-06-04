@@ -419,7 +419,7 @@ def _load_default_config() -> ConfigTable:
             "default_provider": "anthropic",
             "default_model": "claude-opus-4-8",
             "working_directory": ".",
-            "theme": "dark",
+            "theme": "lobster",
             "log_level": "info",
         },
         "agent": {

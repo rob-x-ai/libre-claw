@@ -30,11 +30,13 @@ class ThemePalette:
 
 
 THEME_ALIASES: dict[str, str] = {
-    "": "libre-default",
-    "default": "libre-default",
-    "dark": "libre-default",
-    "libre": "libre-default",
-    "libre-dark": "libre-default",
+    "": "lobster",
+    "default": "lobster",
+    "dark": "lobster",
+    "libre": "lobster",
+    "libre-dark": "lobster",
+    "libre-default": "lobster",
+    "codex-lobster": "lobster",
     "light": "github-light",
     "ayu-mirage": "ayu",
     "rosepine": "rose-pine",
@@ -44,9 +46,9 @@ THEME_ALIASES: dict[str, str] = {
 
 
 THEME_PALETTES: dict[str, ThemePalette] = {
-    "libre-default": ThemePalette(
-        theme_id="libre-default",
-        label="Libre Default",
+    "lobster": ThemePalette(
+        theme_id="lobster",
+        label="Lobster",
         is_light=False,
         background="#101418",
         surface="#111820",
@@ -395,7 +397,7 @@ def normalize_theme(theme: str | None) -> str:
     value = THEME_ALIASES.get(value, value)
     if value in THEME_PALETTES:
         return value
-    return "libre-default"
+    return "lobster"
 
 
 def dashboard_theme_id(theme: str | None) -> str:

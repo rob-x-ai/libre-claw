@@ -5049,7 +5049,7 @@ def _theme_help_text(current_theme: str) -> str:
         "Available themes:",
     ]
     lines.extend(f"- `{theme_id}` - {palette.label}" for theme_id, palette in THEME_PALETTES.items())
-    lines.extend(["", "Aliases: `dark` = `libre-default`, `light` = `github-light`."])
+    lines.extend(["", "Aliases: `dark`, `default`, and `libre-default` = `lobster`; `light` = `github-light`."])
     return "\n".join(lines)
 
 

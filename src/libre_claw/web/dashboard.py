@@ -8,7 +8,7 @@ import json
 from libre_claw.core.themes import dashboard_theme_id
 
 
-def dashboard_html(theme: str = "libre-default") -> str:
+def dashboard_html(theme: str = "lobster") -> str:
     """Return the self-contained local daemon dashboard."""
     fallback_theme = json.dumps(dashboard_theme_id(theme))
     return _DASHBOARD_HTML.replace("__LIBRE_CLAW_DASHBOARD_THEME__", fallback_theme)
@@ -25,7 +25,9 @@ _DASHBOARD_HTML = r"""<!doctype html>
     (() => {
       const key = "libre-claw-dashboard-theme";
       const fallback = __LIBRE_CLAW_DASHBOARD_THEME__;
-      const value = localStorage.getItem(key) || fallback;
+      const aliases = { "": "lobster", "default": "lobster", "dark": "lobster", "libre-default": "lobster" };
+      const raw = localStorage.getItem(key) || fallback;
+      const value = aliases[raw] || raw;
       document.documentElement.dataset.theme = value;
     })();
   </script>
@@ -1080,7 +1082,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 999px; }
     @media (prefers-color-scheme: light) {
-      html:not([data-theme]), html[data-theme="libre-default"] {
+      html:not([data-theme]), html[data-theme="lobster"], html[data-theme="libre-default"] {
         --bg: #f7f8fb;
         --surface: #ffffff;
         --surface-2: #f5f7fb;
@@ -1168,7 +1170,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         <label class="theme-picker" for="themeSelect">
           <span>Theme</span>
           <select id="themeSelect">
-            <option value="libre-default">Libre Default</option>
+            <option value="lobster">Lobster</option>
             <option value="github-dark">GitHub Dark</option>
             <option value="github-light">GitHub Light</option>
             <option value="monokai-pro">Monokai Pro</option>
@@ -1339,7 +1341,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     const $ = (id) => document.getElementById(id);
     const THEME_KEY = "libre-claw-dashboard-theme";
     const THEMES = new Set([
-      "libre-default",
+      "lobster",
       "github-dark",
       "github-light",
       "monokai-pro",
@@ -1358,9 +1360,20 @@ _DASHBOARD_HTML = r"""<!doctype html>
       "kanagawa",
       "matrix",
     ]);
+    const THEME_ALIASES = new Map([
+      ["", "lobster"],
+      ["default", "lobster"],
+      ["dark", "lobster"],
+      ["libre", "lobster"],
+      ["libre-dark", "lobster"],
+      ["libre-default", "lobster"],
+      ["codex-lobster", "lobster"],
+      ["light", "github-light"],
+    ]);
 
     function applyTheme(value) {
-      const theme = THEMES.has(value) ? value : "libre-default";
+      const normalized = THEME_ALIASES.get(String(value || "").toLowerCase()) || value;
+      const theme = THEMES.has(normalized) ? normalized : "lobster";
       document.documentElement.dataset.theme = theme;
       localStorage.setItem(THEME_KEY, theme);
       const picker = $("themeSelect");
@@ -1385,7 +1398,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     }
 
     function initTheme() {
-      applyTheme(localStorage.getItem(THEME_KEY) || document.documentElement.dataset.theme || "libre-default");
+      applyTheme(localStorage.getItem(THEME_KEY) || document.documentElement.dataset.theme || "lobster");
       $("themeSelect").addEventListener("change", (event) => {
         void saveTheme(event.target.value);
       });

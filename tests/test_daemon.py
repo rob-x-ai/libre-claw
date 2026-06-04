@@ -230,7 +230,8 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     assert "Edit Schedule" in response.text
     assert 'method = editingId ? "PUT" : "POST"' in response.text
     assert "libre-claw-dashboard-theme" in response.text
-    assert 'const fallback = "libre-default";' in response.text
+    assert 'const fallback = "lobster";' in response.text
+    assert "Lobster" in response.text
     assert 'id="themeSelect"' in response.text
     assert "GitHub Dark" in response.text
     assert "GitHub Light" in response.text
@@ -254,7 +255,9 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
 def test_dashboard_html_uses_config_theme_fallback() -> None:
     assert 'const fallback = "matrix";' in dashboard_html(theme="matrix")
     assert 'const fallback = "github-light";' in dashboard_html(theme="light")
-    assert 'const fallback = "libre-default";' in dashboard_html(theme="unknown-theme")
+    assert 'const fallback = "lobster";' in dashboard_html(theme="dark")
+    assert 'const fallback = "lobster";' in dashboard_html(theme="libre-default")
+    assert 'const fallback = "lobster";' in dashboard_html(theme="unknown-theme")
 
 
 async def test_daemon_theme_update_persists_global_config(monkeypatch, tmp_path: Path) -> None:
