@@ -632,6 +632,10 @@ class LibreClawApp(App[None]):
         Binding("ctrl+b", "toggle_sidebar", "Files", show=True),
         Binding("ctrl+p", "command_palette", "Palette", show=True),
         Binding("ctrl+r", "toggle_release_notes", "Release Notes", show=True),
+        Binding("pageup", "scroll_chat_up", "Scroll Up", show=True),
+        Binding("pagedown", "scroll_chat_down", "Scroll Down", show=True),
+        Binding("ctrl+home", "scroll_chat_top", "Top", show=False),
+        Binding("ctrl+end", "scroll_chat_bottom", "Bottom", show=False),
         Binding("ctrl+shift+c", "copy_last_response", "Copy Last", show=True),
         Binding("tab", "accept_suggestion", "Complete", show=False),
     ]
@@ -731,7 +735,9 @@ class LibreClawApp(App[None]):
         if self._theme.is_light:
             self.add_class("light")
         self._apply_tui_theme()
-        self.query_one("#input", Input).focus()
+        input_widget = self.query_one("#input", Input)
+        input_widget.cursor_blink = False
+        input_widget.focus()
         self._sync_sidebar_visibility()
         self._append_startup_entry()
         self._update_palette()
@@ -1108,6 +1114,18 @@ class LibreClawApp(App[None]):
     def action_toggle_release_notes(self) -> None:
         self.startup_expanded = not self.startup_expanded
         self._refresh_startup_entry()
+
+    def action_scroll_chat_up(self) -> None:
+        self.query_one("#chat", RichLog).scroll_page_up(animate=False, immediate=True)
+
+    def action_scroll_chat_down(self) -> None:
+        self.query_one("#chat", RichLog).scroll_page_down(animate=False, immediate=True)
+
+    def action_scroll_chat_top(self) -> None:
+        self.query_one("#chat", RichLog).scroll_home(animate=False, immediate=True)
+
+    def action_scroll_chat_bottom(self) -> None:
+        self.query_one("#chat", RichLog).scroll_end(animate=False, immediate=True)
 
     def action_copy_last_response(self) -> None:
         if self._copy_selected_text_to_clipboard():
@@ -3053,12 +3071,14 @@ class LibreClawApp(App[None]):
 
     def _render_transcript(self) -> None:
         chat = self.query_one("#chat", RichLog)
+        scroll_y, stick_to_end, selection = self._capture_chat_view_state(chat)
         chat.clear()
         self._chat_entry_spans.clear()
         for index, entry in enumerate(self.transcript):
             start_line = len(chat.lines)
-            chat.write(self._format_entry(entry, index), scroll_end=True)
+            chat.write(self._format_entry(entry, index), scroll_end=False)
             self._chat_entry_spans[index] = (start_line, len(chat.lines))
+        self._restore_chat_view_state(chat, scroll_y, stick_to_end, selection)
 
     def _replace_rendered_tail_entry(self, index: int) -> bool:
         if index != len(self.transcript) - 1:
@@ -3073,12 +3093,27 @@ class LibreClawApp(App[None]):
         if start_line < 0 or end_line < start_line or end_line > len(chat.lines):
             return False
 
+        scroll_y, stick_to_end, selection = self._capture_chat_view_state(chat)
         del chat.lines[start_line:end_line]
         if hasattr(chat, "_line_cache"):
             chat._line_cache.clear()
-        chat.write(self._format_entry(self.transcript[index], index), scroll_end=True)
+        chat.write(self._format_entry(self.transcript[index], index), scroll_end=False)
         self._chat_entry_spans[index] = (start_line, len(chat.lines))
+        self._restore_chat_view_state(chat, scroll_y, stick_to_end, selection)
         return True
+
+    def _capture_chat_view_state(self, chat: RichLog) -> tuple[float, bool, Selection | None]:
+        selection = self.screen.selections.get(chat)
+        stick_to_end = selection is None and (not chat.lines or chat.is_vertical_scroll_end)
+        return chat.scroll_y, stick_to_end, selection
+
+    def _restore_chat_view_state(self, chat: RichLog, scroll_y: float, stick_to_end: bool, selection: Selection | None) -> None:
+        if stick_to_end:
+            chat.scroll_end(animate=False, immediate=True)
+        else:
+            chat.scroll_to(y=min(scroll_y, chat.max_scroll_y), animate=False, immediate=True)
+        if selection is not None:
+            self.screen.selections[chat] = selection
 
     def _format_entry(self, entry: TranscriptEntry, index: int = 0) -> RenderableType:
         if entry.role == "startup":
@@ -3287,6 +3322,7 @@ class LibreClawApp(App[None]):
         return (
             f"{command_lines}\n"
             "Ctrl+C exits. Ctrl+R toggles release notes. Esc or /cancel interrupts. "
+            "PageUp/PageDown scroll the transcript. Ctrl+Home/Ctrl+End jump top/bottom. "
             "Menus support Up/Down, Enter, and Tab. "
             "Permission prompts support buttons plus y, n, a, ! shortcuts."
         )
@@ -3843,7 +3879,7 @@ class LibreClawApp(App[None]):
             return "Permission prompt active: click a choice or press y/n/a/!"
         if self._goal_description is not None:
             return "Goal mode active... (/goal status, /goal stop)"
-        return "Type a message... (/help, Ctrl+B files, Ctrl+P palette, Ctrl+R release, Ctrl+C exit)"
+        return "Type a message... (/help, PageUp/PageDown scroll, Ctrl+R release, Ctrl+C exit)"
 
 
 def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig:

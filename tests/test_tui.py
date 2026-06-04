@@ -1119,6 +1119,15 @@ def test_ctrl_r_binding_toggles_release_notes() -> None:
     assert binding.description == "Release Notes"
 
 
+def test_transcript_scroll_bindings_are_available() -> None:
+    bindings = {binding.key: binding for binding in LibreClawApp.BINDINGS}
+
+    assert bindings["pageup"].action == "scroll_chat_up"
+    assert bindings["pagedown"].action == "scroll_chat_down"
+    assert bindings["ctrl+home"].action == "scroll_chat_top"
+    assert bindings["ctrl+end"].action == "scroll_chat_bottom"
+
+
 async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -1139,6 +1148,7 @@ async def test_tui_mounts_phase_four_layout(monkeypatch, tmp_path: Path) -> None
         assert app.query_one("#sidebar-up")
         assert app.query_one("#palette")
         assert app.query_one("#permission-panel").has_class("hidden")
+        assert app.query_one("#input").cursor_blink is False
 
 
 async def test_tui_release_notes_toggle_uses_startup_transcript_entry(monkeypatch, tmp_path: Path) -> None:
@@ -1155,6 +1165,45 @@ async def test_tui_release_notes_toggle_uses_startup_transcript_entry(monkeypatc
 
         assert app.transcript[0].role == "startup"
         assert app.startup_expanded is True
+
+
+async def test_tui_preserves_chat_selection_when_rerendering(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(80, 18)):
+        chat = app.query_one("#chat", SelectableRichLog)
+        selection = Selection(Offset(0, 0), Offset(6, 0))
+        app.screen.selections = {chat: selection}
+
+        app._append_entry("system", "selection should survive")
+
+        assert app.screen.selections.get(chat) is selection
+
+
+async def test_tui_preserves_chat_scroll_when_reading_history(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(80, 12)) as pilot:
+        for index in range(60):
+            app._append_entry("system", f"history line {index}")
+        await pilot.pause()
+
+        chat = app.query_one("#chat", SelectableRichLog)
+        assert chat.max_scroll_y > 0
+        chat.scroll_to(y=3, animate=False, immediate=True)
+        await pilot.pause()
+        scroll_y = chat.scroll_y
+
+        app._append_entry("system", "new line while reading history")
+        await pilot.pause()
+
+        assert chat.scroll_y == scroll_y
 
 
 async def test_tui_main_panel_avoids_vertical_divider_drift(monkeypatch, tmp_path: Path) -> None:
