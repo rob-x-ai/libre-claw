@@ -140,7 +140,7 @@ class SlashCommand:
 
 @dataclass(frozen=True)
 class ParsedTUIInput:
-    message: str
+    message: str = ""
     attachments: tuple[UserAttachment, ...] = ()
     warnings: tuple[str, ...] = ()
 
@@ -5198,13 +5198,28 @@ def _startup_message() -> str:
 
 def _parse_tui_image_input(text: str, working_directory: Path) -> ParsedTUIInput:
     """Extract image paths/data URLs from a TUI input line."""
+    path_matches = _find_tui_image_path_matches(text, working_directory)
+    path_spans: list[tuple[int, int]] = []
+    path_attachments: list[UserAttachment] = []
+    warnings: list[str] = []
+
+    for start, end, image_path in path_matches:
+        path_spans.append((start, end))
+        attachment, warning = _load_tui_image_attachment(image_path)
+        if attachment is None:
+            warnings.append(warning or f"Could not attach image: {image_path}")
+            continue
+        path_attachments.append(attachment)
+
+    if path_spans:
+        text = _remove_tui_text_spans(text, path_spans)
+
     tokens = _split_tui_input_tokens(text)
     if not tokens:
-        return ParsedTUIInput(message=text)
+        return ParsedTUIInput(attachments=tuple(path_attachments), warnings=tuple(warnings))
 
     message_tokens: list[str] = []
-    attachments: list[UserAttachment] = []
-    warnings: list[str] = []
+    attachments: list[UserAttachment] = list(path_attachments)
 
     for token in tokens:
         data_attachment, data_warning = _attachment_from_data_url(token)
@@ -5234,6 +5249,63 @@ def _parse_tui_image_input(text: str, working_directory: Path) -> ParsedTUIInput
         attachments=tuple(attachments),
         warnings=tuple(warnings),
     )
+
+
+def _find_tui_image_path_matches(text: str, working_directory: Path) -> list[tuple[int, int, Path]]:
+    lowered = text.lower()
+    matches: list[tuple[int, int, Path]] = []
+    consumed_until = 0
+
+    for start in _tui_path_candidate_starts(text):
+        if start < consumed_until:
+            continue
+
+        best: tuple[int, int, Path] | None = None
+        for extension in TUI_IMAGE_EXTENSIONS:
+            search_from = start
+            while True:
+                extension_index = lowered.find(extension, search_from)
+                if extension_index == -1:
+                    break
+                end = extension_index + len(extension)
+                candidate = text[start:end].strip("'\"")
+                image_path = _resolve_tui_image_path(candidate, working_directory)
+                if image_path is not None:
+                    best = (start, end, image_path)
+                search_from = extension_index + 1
+
+        if best is not None:
+            matches.append(best)
+            consumed_until = best[1]
+
+    return matches
+
+
+def _tui_path_candidate_starts(text: str) -> tuple[int, ...]:
+    starts: list[int] = []
+    index = 0
+    while index < len(text):
+        previous_is_boundary = index == 0 or text[index - 1].isspace() or text[index - 1] in {"(", "[", "{"}
+        if previous_is_boundary and text.startswith("file://", index):
+            starts.append(index)
+            index += len("file://")
+            continue
+        if previous_is_boundary and text[index] == "/":
+            starts.append(index)
+        if previous_is_boundary and text[index] == "~" and index + 1 < len(text) and text[index + 1] == "/":
+            starts.append(index)
+        index += 1
+    return tuple(starts)
+
+
+def _remove_tui_text_spans(text: str, spans: Sequence[tuple[int, int]]) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for start, end in sorted(spans):
+        parts.append(text[cursor:start])
+        cursor = end
+    parts.append(text[cursor:])
+    return " ".join("".join(parts).split())
 
 
 def _split_tui_input_tokens(text: str) -> list[str]:

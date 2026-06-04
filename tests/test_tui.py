@@ -386,6 +386,19 @@ def test_tui_parses_pasted_image_path(tmp_path: Path) -> None:
     assert "type: image/png" in _attachment_summary(attachment)
 
 
+def test_tui_parses_unquoted_macos_screenshot_path_with_spaces(tmp_path: Path) -> None:
+    image = tmp_path / "Screenshot 2026-06-04 at 11.07.34 AM.png"
+    image.write_bytes(TINY_PNG)
+
+    parsed = _parse_tui_image_input(f"what do you see : {image}", tmp_path)
+
+    assert parsed.message == "what do you see :"
+    assert parsed.warnings == ()
+    assert len(parsed.attachments) == 1
+    assert parsed.attachments[0].filename == image.name
+    assert parsed.attachments[0].path == str(image)
+
+
 def test_tui_parses_image_data_url() -> None:
     encoded = base64.b64encode(TINY_PNG).decode("ascii")
 
@@ -489,6 +502,26 @@ async def test_tui_pasted_image_only_uses_default_prompt(monkeypatch, tmp_path: 
 
     assert fake_agent.calls[0][0] == TUI_IMAGE_ATTACHMENT_PROMPT
     assert fake_agent.calls[0][1][0].filename == "shot.png"  # type: ignore[attr-defined]
+
+
+async def test_tui_sends_unquoted_absolute_image_path_with_spaces(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    image = tmp_path / "Screenshot 2026-06-04 at 11.07.34 AM.png"
+    image.write_bytes(TINY_PNG)
+    app = LibreClawApp(config=load_config())
+    fake_agent = FakeAttachmentAgent()
+
+    async with app.run_test(size=(120, 45)):
+        app.agent = fake_agent  # type: ignore[assignment]
+        await app.handle_user_input(f"what do you see : {image}")
+        assert app._active_task is not None
+        await app._active_task
+
+    assert fake_agent.calls[0][0] == "what do you see :"
+    assert fake_agent.calls[0][1][0].filename == image.name  # type: ignore[attr-defined]
+    assert not any(entry.role == "system" and "Unknown command" in entry.content for entry in app.transcript)
 
 
 def test_heartbeat_suggestions(monkeypatch, tmp_path: Path) -> None:
