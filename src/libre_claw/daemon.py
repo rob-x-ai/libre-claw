@@ -17,9 +17,12 @@ from aiohttp import web
 
 from libre_claw.config import (
     ConfigError,
+    FallbackConfig,
+    FallbackRouteConfig,
     GeneralConfig,
     LibreClawConfig,
     global_config_path,
+    set_global_fallback_config,
     set_global_default_model,
     set_global_theme,
 )
@@ -154,6 +157,8 @@ class DaemonServer:
                 web.get("/health", self.health),
                 web.get("/config/model", self.current_model),
                 web.patch("/config/model", self.update_model),
+                web.get("/config/fallback", self.current_fallback),
+                web.patch("/config/fallback", self.update_fallback),
                 web.patch("/config/theme", self.update_theme),
                 web.post("/shutdown", self.shutdown),
                 web.get("/runs", self.list_runs),
@@ -375,6 +380,35 @@ class DaemonServer:
         response = _model_payload(self.config)
         response["persisted_path"] = persisted_path
         response["automations_updated"] = automations_updated
+        return web.json_response(response)
+
+    async def current_fallback(self, _request: web.Request) -> web.Response:
+        return web.json_response(_fallback_payload(self.config.fallback))
+
+    async def update_fallback(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _json_error("Request body must be JSON.")
+        if not isinstance(payload, Mapping):
+            return _json_error("Request body must be a JSON object.")
+
+        try:
+            fallback = _fallback_from_payload(payload, default_recheck=self.config.fallback.recheck_after_attempts)
+        except ValueError as exc:
+            return _json_error(str(exc))
+
+        persisted_path: str | None = None
+        if bool(payload.get("persist_global", False)):
+            try:
+                path = set_global_fallback_config(fallback, config_path=global_config_path(self.config))
+            except ConfigError as exc:
+                return _json_error(str(exc), status=400)
+            persisted_path = str(path)
+
+        self.config = replace(self.config, fallback=fallback)
+        response = _fallback_payload(self.config.fallback)
+        response["persisted_path"] = persisted_path
         return web.json_response(response)
 
     async def update_theme(self, request: web.Request) -> web.Response:
@@ -934,6 +968,7 @@ class DaemonServer:
             soul_provider=soul_store.soul_texts,
             memory_provider=lambda user_message: self._relevant_memory_texts(config, user_message),
             fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
+            fallback_recheck_after_attempts=config.fallback.recheck_after_attempts,
         )
 
     async def _with_openrouter_model_limits(self, config: LibreClawConfig) -> LibreClawConfig:
@@ -1138,6 +1173,16 @@ class DaemonClient:
             "PATCH",
             "/config/model",
             json={"provider": provider, "model": model, "persist_global": persist_global},
+        )
+
+    async def current_fallback(self) -> dict[str, Any]:
+        return await self._request("GET", "/config/fallback")
+
+    async def update_fallback(self, fallback: FallbackConfig, *, persist_global: bool = False) -> dict[str, Any]:
+        return await self._request(
+            "PATCH",
+            "/config/fallback",
+            json={**_fallback_payload(fallback), "persist_global": persist_global},
         )
 
     async def list_automations(self, limit: int = 50) -> dict[str, Any]:
@@ -1488,6 +1533,55 @@ def _model_payload(config: LibreClawConfig) -> dict[str, Any]:
             if value not in (None, ""):
                 payload[payload_key] = value
     return payload
+
+
+def _fallback_payload(fallback: FallbackConfig) -> dict[str, Any]:
+    return {
+        "enabled": bool(fallback.enabled and fallback.routes),
+        "recheck_after_attempts": fallback.recheck_after_attempts,
+        "routes": [
+            {
+                "provider": "ollama" if route.provider.lower() == "local" else route.provider,
+                "model": route.model,
+                "api_key_env": route.api_key_env,
+            }
+            for route in fallback.routes[:3]
+        ],
+    }
+
+
+def _fallback_from_payload(payload: Mapping[str, Any], *, default_recheck: int) -> FallbackConfig:
+    raw_routes = payload.get("routes", [])
+    if not isinstance(raw_routes, list):
+        raise ValueError("Field 'routes' must be a list.")
+    if len(raw_routes) > 3:
+        raise ValueError("Libre Claw supports at most 3 fallback slots.")
+
+    routes: list[FallbackRouteConfig] = []
+    for index, raw_route in enumerate(raw_routes, start=1):
+        if not isinstance(raw_route, Mapping):
+            raise ValueError(f"Fallback route {index} must be an object.")
+        provider = str(raw_route.get("provider", "")).strip().lower()
+        model = str(raw_route.get("model", "")).strip()
+        api_key_env = str(raw_route.get("api_key_env", "")).strip()
+        if provider == "local":
+            provider = "ollama"
+        if not provider:
+            raise ValueError(f"Fallback route {index} provider is required.")
+        if not model:
+            raise ValueError(f"Fallback route {index} model is required.")
+        routes.append(FallbackRouteConfig(provider=provider, model=model, api_key_env=api_key_env))
+
+    recheck = payload.get("recheck_after_attempts", default_recheck)
+    if isinstance(recheck, bool):
+        raise ValueError("Field 'recheck_after_attempts' must be an integer.")
+    try:
+        recheck_after_attempts = max(1, int(recheck))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Field 'recheck_after_attempts' must be an integer.") from exc
+
+    enabled = bool(payload.get("enabled", bool(routes))) and bool(routes)
+    return FallbackConfig(enabled=enabled, routes=tuple(routes), recheck_after_attempts=recheck_after_attempts)
 
 
 def _run_payload(run: RunRecord) -> dict[str, Any]:

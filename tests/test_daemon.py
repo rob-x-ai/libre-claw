@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from libre_claw.config import load_config
+from libre_claw.config import FallbackConfig, FallbackRouteConfig, load_config
 from libre_claw.core.automations import AutomationStore
 from libre_claw.core.runs import RunStore
 from libre_claw.core.session import ChatMessage
@@ -377,6 +377,42 @@ async def test_daemon_global_model_update_updates_scheduled_automations(monkeypa
     assert updated.model == "xiaomi/mimo-v2.5-pro"
 
 
+async def test_daemon_updates_runtime_fallback_and_persists_global_config(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    server = DaemonServer(
+        load_config(),
+        run_store=RunStore(tmp_path / "runs"),
+        provider_factory=lambda _config: ScriptedProvider([[TextDelta("ok"), Done()]]),
+        registry_factory=lambda _config, _memory: ToolRegistry(),
+    )
+
+    response = await server.update_fallback(  # type: ignore[arg-type]
+        RequestStub(
+            body={
+                "enabled": True,
+                "recheck_after_attempts": 2,
+                "persist_global": True,
+                "routes": [
+                    {"provider": "openrouter", "model": "openrouter/auto", "api_key_env": "OPENROUTER_BACKUP_KEY"},
+                    {"provider": "ollama", "model": "kimi-k2.6:cloud"},
+                ],
+            }
+        )
+    )
+    payload = _response_payload(response)
+    config_path = tmp_path / ".libre-claw" / "config.toml"
+
+    assert response.status == 200
+    assert payload["enabled"] is True
+    assert payload["recheck_after_attempts"] == 2
+    assert payload["routes"][0]["provider"] == "openrouter"
+    assert payload["routes"][1]["model"] == "kimi-k2.6:cloud"
+    assert payload["persisted_path"] == str(config_path)
+    assert server.config.fallback.routes[0].model == "openrouter/auto"
+    assert load_config().fallback.routes[1].provider == "ollama"
+
+
 async def test_daemon_serves_packaged_dashboard_lobster_icon(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -598,6 +634,10 @@ async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> Non
             response = await server.current_model(RequestStub())  # type: ignore[arg-type]
         elif request.method == "PATCH" and request.url.path == "/config/model":
             response = await server.update_model(RequestStub(body=json.loads(request.content)))  # type: ignore[arg-type]
+        elif request.method == "GET" and request.url.path == "/config/fallback":
+            response = await server.current_fallback(RequestStub())  # type: ignore[arg-type]
+        elif request.method == "PATCH" and request.url.path == "/config/fallback":
+            response = await server.update_fallback(RequestStub(body=json.loads(request.content)))  # type: ignore[arg-type]
         elif request.method == "POST" and request.url.path == "/runs":
             response = await server.start_run(RequestStub(body=json.loads(request.content)))  # type: ignore[arg-type]
         else:
@@ -608,6 +648,14 @@ async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> Non
     health = await client.health()
     model_before = await client.current_model()
     model_after = await client.update_model("openrouter", "deepseek/deepseek-v4-pro")
+    fallback_before = await client.current_fallback()
+    fallback_after = await client.update_fallback(
+        FallbackConfig(
+            enabled=True,
+            routes=(FallbackRouteConfig(provider="openrouter", model="openrouter/auto", api_key_env=""),),
+            recheck_after_attempts=3,
+        )
+    )
     started = await client.start_run("hello")
     await _wait_for_state(server, started["run"]["run_id"], "done")
 
@@ -617,6 +665,9 @@ async def test_daemon_client_builds_requests(monkeypatch, tmp_path: Path) -> Non
     assert model_after["provider"] == "openrouter"
     assert model_after["model"] == "deepseek/deepseek-v4-pro"
     assert model_after["context_window_tokens"] == 524_288
+    assert fallback_before["enabled"] is False
+    assert fallback_after["enabled"] is True
+    assert fallback_after["routes"][0]["model"] == "openrouter/auto"
     assert started["run"]["state"] == "queued"
 
 

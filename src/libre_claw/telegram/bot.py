@@ -71,6 +71,7 @@ class TelegramBot:
         application.add_handler(CommandHandler("steer", handlers.steer))
         application.add_handler(CommandHandler("model", handlers.model))
         application.add_handler(CommandHandler("models", handlers.model))
+        application.add_handler(CommandHandler("fallback", handlers.fallback))
         application.add_handler(CommandHandler("provider", handlers.provider))
         application.add_handler(CommandHandler("schedule", handlers.schedule))
         application.add_handler(CommandHandler("heartbeat", handlers.heartbeat))

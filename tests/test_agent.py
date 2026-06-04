@@ -101,6 +101,7 @@ def make_agent(
     soul_provider=None,
     memory_provider: MemoryProvider | None = None,
     fallback_providers=None,
+    fallback_recheck_after_attempts: int = 3,
     provider_retry_attempts: int = 0,
     provider_retry_initial_delay: float = 0.0,
 ) -> Agent:
@@ -117,6 +118,7 @@ def make_agent(
         soul_provider=soul_provider,
         memory_provider=memory_provider,
         fallback_providers=fallback_providers,
+        fallback_recheck_after_attempts=fallback_recheck_after_attempts,
         provider_retry_attempts=provider_retry_attempts,
         provider_retry_initial_delay=provider_retry_initial_delay,
     )
@@ -327,6 +329,60 @@ async def test_agent_falls_back_when_primary_provider_fails_before_output() -> N
         AgentDone(None),
     ]
     assert len(primary.received_messages) == 1
+    assert len(fallback.received_messages) == 1
+
+
+async def test_agent_tries_multiple_fallbacks_in_order() -> None:
+    primary = ScriptedProvider([[ProviderError("primary down")]])
+    fallback_1 = ScriptedProvider([[ProviderError("backup 1 down")]])
+    fallback_2 = ScriptedProvider([[TextDelta("ok"), Done()]])
+    agent = make_agent(
+        primary,
+        fallback_providers=(("openrouter:backup-1", fallback_1), ("ollama:backup-2", fallback_2)),
+    )
+
+    events = await collect_events(agent, "Hi")
+
+    assert events == [
+        AgentFallback("openrouter:backup-1", "primary down"),
+        AgentFallback("ollama:backup-2", "backup 1 down"),
+        AgentTextDelta("ok"),
+        AgentDone(None),
+    ]
+    assert len(primary.received_messages) == 1
+    assert len(fallback_1.received_messages) == 1
+    assert len(fallback_2.received_messages) == 1
+
+
+async def test_agent_rechecks_primary_after_fallback_provider_calls() -> None:
+    primary = ScriptedProvider(
+        [
+            [ProviderError("rate limited")],
+            [TextDelta("primary back"), Done()],
+        ]
+    )
+    fallback = ScriptedProvider([[ToolCallReady("toolu_1", "echo", {"value": "ids"}), Done(stop_reason="tool_use")]])
+    registry = ToolRegistry([EchoTool(ToolContext(working_directory=Path.cwd()))])
+    agent = make_agent(
+        primary,
+        registry,
+        fallback_providers=(("openrouter:backup", fallback),),
+        fallback_recheck_after_attempts=1,
+    )
+
+    events = await collect_events(agent, "Fetch")
+
+    assert events == [
+        AgentFallback("openrouter:backup", "rate limited"),
+        AgentToolCall(ToolCall(id="toolu_1", name="echo", arguments={"value": "ids"})),
+        AgentToolResult(
+            ToolCall(id="toolu_1", name="echo", arguments={"value": "ids"}),
+            ToolResult(content="echo:ids"),
+        ),
+        AgentTextDelta("primary back"),
+        AgentDone(None),
+    ]
+    assert len(primary.received_messages) == 2
     assert len(fallback.received_messages) == 1
 
 

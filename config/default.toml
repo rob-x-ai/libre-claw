@@ -130,6 +130,7 @@ judge_max_tokens = 1024
 
 [fallback]
 enabled = false
+recheck_after_attempts = 3 # while using a fallback, retry higher-priority providers after this many provider calls
 routes = []
 # Example:
 # [[fallback.routes]]

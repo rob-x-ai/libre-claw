@@ -135,6 +135,21 @@ Key lookup order:
 /model codex:gpt-5.5 --global
 ```
 
+Fallback slots let Libre Claw keep working if the primary provider is rate-limited
+or down before it starts streaming. Configure up to three ordered backups:
+
+```text
+/fallback list
+/fallback set 1 openrouter:openrouter/auto --global
+/fallback set 2 ollama:kimi-k2.6:cloud --key-env OLLAMA_BACKUP_API_KEY --global
+/fallback set 3 anthropic:claude-sonnet-4-6 --global
+/fallback recheck 3 --global
+/fallback clear all --global
+```
+
+While running on a fallback, Libre Claw retries the primary after the configured
+number of fallback provider calls. The default is `3`.
+
 Use `/provider` when you only want to switch providers:
 
 ```text
@@ -390,6 +405,7 @@ limit is reached.
 /cost
 /compact
 /model [provider:]<model> [--global]
+/fallback list|set|clear|recheck
 /provider <name>
 /setup status
 /tools list

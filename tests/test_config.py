@@ -6,11 +6,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from libre_claw.config import (
+    FallbackConfig,
+    FallbackRouteConfig,
     configure_telegram,
     default_config_path,
     global_config_path,
     load_config,
     packaged_default_config_text,
+    set_global_fallback_config,
     set_global_default_model,
     set_global_working_directory,
     user_config_path,
@@ -38,6 +41,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.agent.context_window_tokens == 200000
     assert config.agent.provider_retry_attempts == 2
     assert config.agent.provider_retry_initial_delay == 1.0
+    assert config.fallback.recheck_after_attempts == 3
     assert config.goal.max_turns == 20
     assert config.goal.judge_provider == "current"
     assert config.goal.judge_model == ""
@@ -169,6 +173,7 @@ def test_config_loads_fallback_and_heartbeat_sections(monkeypatch, tmp_path: Pat
     assert config.fallback.routes[0].provider == "openrouter"
     assert config.fallback.routes[0].model == "openrouter/auto"
     assert config.fallback.routes[0].api_key_env == "OPENROUTER_BACKUP_API_KEY"
+    assert config.fallback.recheck_after_attempts == 3
     assert config.heartbeat.enabled is True
     assert config.heartbeat.interval_minutes == 15
     assert config.heartbeat.route == "telegram"
@@ -182,6 +187,48 @@ def test_config_loads_fallback_and_heartbeat_sections(monkeypatch, tmp_path: Pat
     assert config.memory.max_injected_items == 3
     assert config.memory.max_injected_tokens == 500
     assert config.memory.archive_sessions is False
+
+
+def test_set_global_fallback_config_persists_ordered_slots(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[general]",
+                'default_provider = "openrouter"',
+                "",
+                "[fallback]",
+                "enabled = false",
+                "routes = []",
+                "",
+                "[telegram]",
+                "enabled = true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    path = set_global_fallback_config(
+        FallbackConfig(
+            enabled=True,
+            routes=(
+                FallbackRouteConfig(provider="openrouter", model="openrouter/auto", api_key_env="OPENROUTER_BACKUP_KEY"),
+                FallbackRouteConfig(provider="ollama", model="kimi-k2.6:cloud", api_key_env=""),
+            ),
+            recheck_after_attempts=2,
+        ),
+        config_path=config_path,
+    )
+    config = load_config(config_path=path)
+
+    assert config.fallback.enabled is True
+    assert config.fallback.recheck_after_attempts == 2
+    assert [route.provider for route in config.fallback.routes] == ["openrouter", "ollama"]
+    assert [route.model for route in config.fallback.routes] == ["openrouter/auto", "kimi-k2.6:cloud"]
+    assert config.fallback.routes[0].api_key_env == "OPENROUTER_BACKUP_KEY"
+    assert config.telegram.enabled is True
 
 
 def test_heartbeat_prompt_and_interval_parser(monkeypatch, tmp_path: Path) -> None:

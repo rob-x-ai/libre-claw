@@ -10,11 +10,18 @@ import re
 import time
 from collections.abc import Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from libre_claw.config import ConfigError, global_config_path, set_global_default_model
+from libre_claw.config import (
+    ConfigError,
+    FallbackConfig,
+    FallbackRouteConfig,
+    global_config_path,
+    set_global_default_model,
+    set_global_fallback_config,
+)
 from libre_claw.core.automations import AutomationError
 from libre_claw.core.heartbeat import HeartbeatError, heartbeat_prompt, parse_heartbeat_interval
 from libre_claw.core.permissions import PermissionResolution
@@ -257,6 +264,12 @@ class TelegramHandlers:
         if daemon_note:
             response += f"\n{daemon_note}"
         await update.effective_message.reply_text(response)
+
+    async def fallback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        response = await self._fallback_command_text(" ".join(context.args or []))
+        await _reply_text_chunks(update.effective_message, response, self.bridge.config.telegram.max_message_length)
 
     async def provider(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
@@ -697,6 +710,82 @@ class TelegramHandlers:
         if persist_global and automations_updated:
             note += f" Updated {automations_updated} scheduled automation(s)."
         return note
+
+    async def _fallback_command_text(self, argument: str) -> str:
+        try:
+            tokens = argument.strip().split()
+        except ValueError as exc:
+            return f"Could not parse fallback command: {exc}"
+        action = tokens.pop(0).lower() if tokens else "list"
+        persist_global = "--global" in tokens
+        tokens = [token for token in tokens if token != "--global"]
+        if action in {"", "list", "status", "help"}:
+            return _telegram_fallback_help_text(self.bridge.config)
+
+        routes = list(self.bridge.config.fallback.routes)
+        recheck_after_attempts = self.bridge.config.fallback.recheck_after_attempts
+        if action == "set":
+            if len(tokens) < 2:
+                return "Usage: /fallback set 1|2|3 <provider>:<model> [--key-env ENV] [--global]"
+            slot = _parse_telegram_fallback_slot(tokens.pop(0))
+            if slot is None:
+                return "Fallback slot must be 1, 2, or 3."
+            if slot > len(routes) + 1:
+                return f"Set fallback {len(routes) + 1} before setting fallback {slot}."
+            provider, selected_model, _ = _parse_telegram_model_argument(tokens.pop(0), self.bridge.config.general.default_provider)
+            if not selected_model:
+                return "Fallback route must look like openrouter:openrouter/auto or ollama:kimi-k2.6:cloud."
+            api_key_env, parse_error = _parse_telegram_fallback_key_env(tokens)
+            if parse_error is not None:
+                return parse_error
+            route = FallbackRouteConfig(provider=provider, model=selected_model, api_key_env=api_key_env)
+            if slot <= len(routes):
+                routes[slot - 1] = route
+            else:
+                routes.append(route)
+        elif action == "clear":
+            if not tokens or tokens[0].lower() in {"all", "*"}:
+                routes = []
+            else:
+                slot = _parse_telegram_fallback_slot(tokens[0])
+                if slot is None:
+                    return "Usage: /fallback clear [1|2|3|all] [--global]"
+                if slot > len(routes):
+                    return f"Fallback {slot} is already empty."
+                routes.pop(slot - 1)
+        elif action in {"recheck", "retry-primary", "primary"}:
+            if not tokens or not tokens[0].isdigit():
+                return "Usage: /fallback recheck <provider-calls> [--global]"
+            recheck_after_attempts = max(1, int(tokens[0]))
+        else:
+            return _telegram_fallback_help_text(self.bridge.config)
+
+        fallback = FallbackConfig(
+            enabled=bool(routes),
+            routes=tuple(routes[:3]),
+            recheck_after_attempts=recheck_after_attempts,
+        )
+        self.bridge.config = replace(self.bridge.config, fallback=fallback)
+        notes: list[str] = []
+        if persist_global:
+            try:
+                path = set_global_fallback_config(fallback, config_path=global_config_path(self.bridge.config))
+                notes.append(f"Saved in {path}.")
+            except ConfigError as exc:
+                notes.append(f"Fallback updated for this Telegram session, but global config was not updated: {exc}")
+        daemon_note = await self._sync_daemon_fallback(fallback, persist_global=persist_global)
+        if daemon_note:
+            notes.append(daemon_note)
+        return "\n".join([_telegram_fallback_status_text(self.bridge.config), *notes])
+
+    async def _sync_daemon_fallback(self, fallback: FallbackConfig, *, persist_global: bool = False) -> str:
+        if self.bridge.daemon_client is None:
+            return ""
+        try:
+            await self.bridge.daemon_client.update_fallback(fallback, persist_global=persist_global)
+        except Exception as exc:
+            return f"Daemon fallback chain was not updated: {exc}"
+        return "Daemon fallback chain updated for new daemon-backed runs."
 
     async def _authorized(self, update: Update) -> bool:
         user_id = update.effective_user.id if update.effective_user else None
@@ -1344,6 +1433,7 @@ def _telegram_help_text() -> str:
             "/model - Open provider/model buttons",
             "/model <provider>:<name> - Switch model by text",
             "/models - Open provider/model buttons",
+            "/fallback list|set|clear - Manage fallback provider/model slots",
             "/provider - Open provider buttons",
             "/cost - Show model, context, token, and cost usage",
             "/usage [provider] - Show provider usage analytics",
@@ -1374,6 +1464,7 @@ def telegram_command_specs() -> Sequence[tuple[str, str]]:
         ("restart", "Start a fresh chat session"),
         ("model", "Open model configuration"),
         ("models", "Open model configuration"),
+        ("fallback", "Manage fallback models"),
         ("provider", "Open provider selector"),
         ("cost", "Show model, context, tokens, and cost"),
         ("usage", "Show provider usage analytics"),
@@ -1426,6 +1517,64 @@ def _strip_telegram_global_flag(argument: str) -> tuple[str, bool]:
         return argument.strip(), False
     cleaned = " ".join(part for part in parts if part != "--global")
     return cleaned, True
+
+
+def _parse_telegram_fallback_slot(value: str) -> int | None:
+    if not value.isdigit():
+        return None
+    slot = int(value)
+    if 1 <= slot <= 3:
+        return slot
+    return None
+
+
+def _parse_telegram_fallback_key_env(tokens: Sequence[str]) -> tuple[str, str | None]:
+    api_key_env = ""
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"--key-env", "--api-key-env"}:
+            if index + 1 >= len(tokens):
+                return "", f"{token} requires an environment variable name."
+            api_key_env = tokens[index + 1].strip()
+            index += 2
+            continue
+        return "", f"Unknown fallback option: {token}"
+    return api_key_env, None
+
+
+def _telegram_fallback_status_text(config: Any) -> str:
+    provider = _canonical_telegram_provider(str(config.general.default_provider))
+    lines = [
+        "Provider fallback chain",
+        f"Enabled: {bool(config.fallback.enabled and config.fallback.routes)}",
+        f"Primary: {provider}:{config.general.default_model}",
+        f"Recheck primary after: {config.fallback.recheck_after_attempts} fallback provider call(s)",
+    ]
+    if not config.fallback.routes:
+        lines.append("Fallback slots: none")
+        return "\n".join(lines)
+    lines.append("Fallback slots:")
+    for index, route in enumerate(config.fallback.routes[:3], start=1):
+        suffix = f" via {route.api_key_env}" if route.api_key_env else ""
+        lines.append(f"{index}. {_canonical_telegram_provider(route.provider)}:{route.model}{suffix}")
+    return "\n".join(lines)
+
+
+def _telegram_fallback_help_text(config: Any) -> str:
+    return "\n".join(
+        [
+            _telegram_fallback_status_text(config),
+            "",
+            "Examples:",
+            "/fallback set 1 openrouter:openrouter/auto --global",
+            "/fallback set 2 ollama:kimi-k2.6:cloud --key-env OLLAMA_BACKUP_API_KEY --global",
+            "/fallback set 3 anthropic:claude-sonnet-4-6 --global",
+            "/fallback clear 2 --global",
+            "/fallback clear all --global",
+            "/fallback recheck 3 --global",
+        ]
+    )
 
 
 def _provider_usage_text() -> str:

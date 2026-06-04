@@ -543,12 +543,15 @@ class TelegramBridge:
             max_tool_calls_per_turn=self.config.agent.max_tool_calls_per_turn,
             auto_compact_threshold=self.config.agent.auto_compact_threshold,
             context_window_tokens=self.config.agent.context_window_tokens,
+            provider_retry_attempts=self.config.agent.provider_retry_attempts,
+            provider_retry_initial_delay=self.config.agent.provider_retry_initial_delay,
             memory_facts=self._memory_facts,
             system_prompt_extra=_combine_prompt_extra(self.config.agent.system_prompt_extra, TELEGRAM_SYSTEM_PROMPT_EXTRA),
             skill_provider=self.skill_store.relevant_skill_texts,
             soul_provider=self.soul_store.soul_texts,
             memory_provider=lambda user_message: self.relevant_memory_texts(user_message),
             fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
+            fallback_recheck_after_attempts=self.config.fallback.recheck_after_attempts,
         )
 
     async def _with_openrouter_model_limits(self, config: LibreClawConfig) -> LibreClawConfig:

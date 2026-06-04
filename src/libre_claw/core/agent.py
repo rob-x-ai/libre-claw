@@ -105,6 +105,7 @@ class Agent:
         soul_provider: SoulProvider | None = None,
         memory_provider: MemoryProvider | None = None,
         fallback_providers: Sequence[tuple[str, LLMProvider]] | None = None,
+        fallback_recheck_after_attempts: int = 3,
     ) -> None:
         self.session = session
         self.provider = provider
@@ -122,6 +123,7 @@ class Agent:
         self.soul_provider = soul_provider
         self.memory_provider = memory_provider
         self.fallback_providers = tuple(fallback_providers or ())
+        self.fallback_recheck_after_attempts = max(1, fallback_recheck_after_attempts)
         self._active_skills: list[str] = []
         self._active_soul: list[str] = []
         self._active_memory: list[str] = []
@@ -138,15 +140,21 @@ class Agent:
         self._active_memory = await self._load_memory(user_message)
         total_tool_calls = 0
         turn_usage: Usage | None = None
-        active_provider = self.provider
-        fallback_queue = list(self.fallback_providers)
+        provider_chain = (("primary", self.provider), *self.fallback_providers)
+        active_provider_index = 0
+        fallback_calls_since_recheck = 0
 
         while True:
+            if active_provider_index > 0 and fallback_calls_since_recheck >= self.fallback_recheck_after_attempts:
+                active_provider_index = 0
+                fallback_calls_since_recheck = 0
             assistant_chunks: list[str] = []
             tool_calls: list[ToolCall] = []
             provider_failed = False
             provider_error = ""
             provider_attempt = 0
+            provider_index = active_provider_index
+            active_provider = provider_chain[provider_index][1]
 
             while True:
                 try:
@@ -202,19 +210,27 @@ class Agent:
                     provider_error = ""
                     continue
 
-                if assistant_chunks or tool_calls or not fallback_queue:
+                next_provider_index = provider_index + 1
+                if assistant_chunks or tool_calls or next_provider_index >= len(provider_chain):
                     self._save_assistant_text(assistant_chunks)
                     yield AgentError(provider_error)
                     break
 
-                fallback = fallback_queue.pop(0)
-                active_provider = fallback[1]
-                yield AgentFallback(provider_label=fallback[0], reason=provider_error)
+                provider_index = next_provider_index
+                active_provider_index = provider_index
+                active_provider = provider_chain[provider_index][1]
+                provider_attempt = 0
+                fallback_calls_since_recheck = 0
+                yield AgentFallback(provider_label=provider_chain[provider_index][0], reason=provider_error)
                 provider_failed = False
                 provider_error = ""
 
             if provider_failed:
                 return
+
+            active_provider_index = provider_index
+            if active_provider_index > 0:
+                fallback_calls_since_recheck += 1
 
             if not tool_calls:
                 self._save_assistant_text(assistant_chunks)

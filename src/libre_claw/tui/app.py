@@ -37,10 +37,13 @@ from libre_claw.auth.api_keys import ApiKeyStore, KeyStorageError
 from libre_claw.auth.codex import CodexCliError, CodexCommandResult, codex_logout, codex_status, stream_codex_command
 from libre_claw.config import (
     ConfigError,
+    FallbackConfig,
+    FallbackRouteConfig,
     GeneralConfig,
     LibreClawConfig,
     global_config_path,
     load_config,
+    set_global_fallback_config,
     set_global_default_model,
     set_global_theme,
     set_global_working_directory,
@@ -246,6 +249,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/usage", "/usage openrouter|attribution|presets", "Show provider usage analytics"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
     SlashCommand("/models", "/models", "Show model presets"),
+    SlashCommand("/fallback", "/fallback list|set|clear", "Manage fallback provider/model slots"),
     SlashCommand("/theme", "/theme list|<name> [--global]", "Switch or persist the TUI/dashboard theme"),
     SlashCommand("/provider", "/provider anthropic|openai|openrouter|ollama|codex", "Switch provider for new turns"),
     SlashCommand("/setup", "/setup status|provider|key|model|openrouter|ollama-cloud|codex", "First-run provider and key setup"),
@@ -1153,6 +1157,9 @@ class LibreClawApp(App[None]):
             return
         if command == "/models":
             self._append_system(_model_help_text(self.config))
+            return
+        if command == "/fallback":
+            await self._handle_fallback_command(argument)
             return
         if command == "/theme":
             self._handle_theme_command(argument)
@@ -2146,6 +2153,93 @@ class LibreClawApp(App[None]):
         suffix = f"\nSaved as global default in {persisted_path}." if persisted_path is not None else ""
         self._append_system(f"Theme set to {THEME_PALETTES[theme_id].label}.{suffix}")
 
+    async def _handle_fallback_command(self, argument: str) -> None:
+        try:
+            tokens = shlex.split(argument)
+        except ValueError as exc:
+            self._append_system(f"Could not parse fallback command: {exc}")
+            return
+
+        action = tokens.pop(0).lower() if tokens else "list"
+        persist_global = "--global" in tokens
+        tokens = [token for token in tokens if token != "--global"]
+
+        if action in {"", "list", "status", "help"}:
+            self._append_system(_fallback_help_text(self.config))
+            return
+
+        routes = list(self.config.fallback.routes)
+        recheck_after_attempts = self.config.fallback.recheck_after_attempts
+
+        if action == "set":
+            if len(tokens) < 2:
+                self._append_system("Usage: /fallback set 1|2|3 <provider>:<model> [--key-env ENV] [--global]")
+                return
+            slot = _parse_fallback_slot(tokens.pop(0))
+            if slot is None:
+                self._append_system("Fallback slot must be 1, 2, or 3.")
+                return
+            if slot > len(routes) + 1:
+                self._append_system(f"Set fallback {len(routes) + 1} before setting fallback {slot}.")
+                return
+            parsed = _parse_model_argument(tokens.pop(0), self.config.general.default_provider)
+            if parsed is None:
+                self._append_system("Fallback route must look like openrouter:openrouter/auto or ollama:kimi-k2.6:cloud.")
+                return
+            api_key_env, parse_error = _parse_fallback_key_env(tokens)
+            if parse_error is not None:
+                self._append_system(parse_error)
+                return
+            provider, model = parsed
+            route = FallbackRouteConfig(provider=provider, model=model, api_key_env=api_key_env or "")
+            if slot <= len(routes):
+                routes[slot - 1] = route
+            else:
+                routes.append(route)
+        elif action == "clear":
+            if not tokens or tokens[0].lower() in {"all", "*"}:
+                routes = []
+            else:
+                slot = _parse_fallback_slot(tokens[0])
+                if slot is None:
+                    self._append_system("Usage: /fallback clear [1|2|3|all] [--global]")
+                    return
+                if slot > len(routes):
+                    self._append_system(f"Fallback {slot} is already empty.")
+                    return
+                routes.pop(slot - 1)
+        elif action in {"recheck", "retry-primary", "primary"}:
+            if not tokens or not tokens[0].isdigit():
+                self._append_system("Usage: /fallback recheck <provider-calls> [--global]")
+                return
+            recheck_after_attempts = max(1, int(tokens[0]))
+        else:
+            self._append_system(_fallback_help_text(self.config))
+            return
+
+        fallback = FallbackConfig(
+            enabled=bool(routes),
+            routes=tuple(routes[:3]),
+            recheck_after_attempts=recheck_after_attempts,
+        )
+        self.config = replace(self.config, fallback=fallback)
+        persisted_path: Path | None = None
+        if persist_global:
+            try:
+                persisted_path = set_global_fallback_config(fallback, config_path=global_config_path(self.config))
+                self._global_model_config_path = persisted_path
+                self._global_model_config_mtime_ns = _path_mtime_ns(persisted_path)
+            except ConfigError as exc:
+                self._append_system(f"Fallback updated for this session, but global config was not updated: {exc}")
+
+        daemon_note = await self._sync_daemon_fallback_after_selection(fallback, persist_global=persist_global)
+        self._rebuild_agent()
+        self._update_status()
+        suffix = f"\nSaved in {persisted_path}." if persisted_path is not None else ""
+        if daemon_note:
+            suffix += f"\n{daemon_note}"
+        self._append_system(_fallback_status_text(self.config) + suffix)
+
     def _set_tui_theme(self, theme_id: str) -> None:
         for known_theme in THEME_PALETTES:
             self.remove_class(known_theme)
@@ -2218,6 +2312,20 @@ class LibreClawApp(App[None]):
             if automations_updated:
                 self._append_system(f"Updated {automations_updated} scheduled automation(s) to {provider}:{model}.")
         self._apply_daemon_model_payload(payload, announce_model_change=False)
+
+    async def _sync_daemon_fallback_after_selection(
+        self,
+        fallback: FallbackConfig,
+        *,
+        persist_global: bool = False,
+    ) -> str:
+        if self.daemon_client is None:
+            return ""
+        try:
+            await self.daemon_client.update_fallback(fallback, persist_global=persist_global)
+        except Exception as exc:
+            return f"Daemon fallback chain was not updated: {exc}"
+        return "Daemon fallback chain updated for new daemon-backed runs."
 
     async def _refresh_openrouter_model_limits(self) -> None:
         if _canonical_tui_provider(self.config.general.default_provider) != "openrouter":
@@ -3456,12 +3564,15 @@ class LibreClawApp(App[None]):
             max_tool_calls_per_turn=self.config.agent.max_tool_calls_per_turn,
             auto_compact_threshold=self.config.agent.auto_compact_threshold,
             context_window_tokens=self.config.agent.context_window_tokens,
+            provider_retry_attempts=self.config.agent.provider_retry_attempts,
+            provider_retry_initial_delay=self.config.agent.provider_retry_initial_delay,
             memory_facts=self.memory_facts,
             system_prompt_extra=self.config.agent.system_prompt_extra,
             skill_provider=self.skill_store.relevant_skill_texts,
             soul_provider=self.soul_store.soul_texts,
             memory_provider=self._relevant_memory_texts,
             fallback_providers=tuple((fallback.label, fallback.provider) for fallback in fallbacks),
+            fallback_recheck_after_attempts=self.config.fallback.recheck_after_attempts,
         )
 
     async def _initialize_memory(self) -> None:
@@ -3648,6 +3759,17 @@ class LibreClawApp(App[None]):
         if lowered.startswith("/model "):
             query = lowered.removeprefix("/model ").strip()
             suggestions = _model_suggestion_commands(self.config)
+            if not query:
+                return suggestions[:6]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
+
+        if lowered.startswith("/fallback "):
+            query = lowered.removeprefix("/fallback ").strip()
+            suggestions = _fallback_suggestion_commands(self.config)
             if not query:
                 return suggestions[:6]
             return [
@@ -4360,6 +4482,30 @@ def _strip_global_flag(argument: str) -> tuple[str, bool]:
     return cleaned.strip(), True
 
 
+def _parse_fallback_slot(value: str) -> int | None:
+    if not value.isdigit():
+        return None
+    slot = int(value)
+    if 1 <= slot <= 3:
+        return slot
+    return None
+
+
+def _parse_fallback_key_env(tokens: Sequence[str]) -> tuple[str, str | None]:
+    api_key_env = ""
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"--key-env", "--api-key-env"}:
+            if index + 1 >= len(tokens):
+                return "", f"{token} requires an environment variable name."
+            api_key_env = tokens[index + 1].strip()
+            index += 2
+            continue
+        return "", f"Unknown fallback option: {token}"
+    return api_key_env, None
+
+
 def _canonical_tui_provider(provider: str) -> str:
     normalized = provider.strip().lower()
     if normalized == "local":
@@ -4392,6 +4538,40 @@ def _model_help_text(config: LibreClawConfig) -> str:
     lines.append("Suggested models:")
     for suggestion in _model_suggestion_commands(config):
         lines.append(f"- {suggestion.name} - {suggestion.description}")
+    return "\n".join(lines)
+
+
+def _fallback_status_text(config: LibreClawConfig) -> str:
+    lines = [
+        "Provider fallback chain",
+        f"Enabled: {config.fallback.enabled and bool(config.fallback.routes)}",
+        f"Primary: {_canonical_tui_provider(config.general.default_provider)}:{_effective_model(config)}",
+        f"Recheck primary after: {config.fallback.recheck_after_attempts} fallback provider call(s)",
+    ]
+    if not config.fallback.routes:
+        lines.append("Fallback slots: none")
+        return "\n".join(lines)
+    lines.append("Fallback slots:")
+    for index, route in enumerate(config.fallback.routes[:3], start=1):
+        suffix = f" via {route.api_key_env}" if route.api_key_env else ""
+        lines.append(f"{index}. {_canonical_tui_provider(route.provider)}:{route.model}{suffix}")
+    return "\n".join(lines)
+
+
+def _fallback_help_text(config: LibreClawConfig) -> str:
+    lines = [
+        _fallback_status_text(config),
+        "",
+        "Commands:",
+        "/fallback set 1 openrouter:openrouter/auto --global",
+        "/fallback set 2 ollama:kimi-k2.6:cloud --key-env OLLAMA_BACKUP_API_KEY --global",
+        "/fallback set 3 anthropic:claude-sonnet-4-6 --global",
+        "/fallback clear 2 --global",
+        "/fallback clear all --global",
+        "/fallback recheck 3 --global",
+        "",
+        "Libre Claw tries fallback slots in order only when the active provider fails before producing text or tool calls.",
+    ]
     return "\n".join(lines)
 
 
@@ -5101,6 +5281,25 @@ def _model_suggestion_commands(config: LibreClawConfig) -> list[SlashCommand]:
                 )
             )
     return suggestions
+
+
+def _fallback_suggestion_commands(config: LibreClawConfig) -> list[SlashCommand]:
+    presets = _model_suggestion_commands(config)
+    route_examples = [
+        SlashCommand("/fallback list", "/fallback list", "Show fallback slots"),
+        SlashCommand("/fallback clear all --global", "/fallback clear all --global", "Disable all fallback slots globally"),
+        SlashCommand("/fallback recheck 3 --global", "/fallback recheck 3 --global", "Retry primary after 3 fallback provider calls"),
+    ]
+    for slot, suggestion in enumerate(presets[:3], start=1):
+        model = suggestion.name.removeprefix("/model ").strip()
+        route_examples.append(
+            SlashCommand(
+                f"/fallback set {slot} {model} --global",
+                f"/fallback set {slot} {model} --global",
+                f"Use {suggestion.description} as fallback {slot}",
+            )
+        )
+    return route_examples
 
 
 def _bounded_menu_index(index: int, size: int) -> int:

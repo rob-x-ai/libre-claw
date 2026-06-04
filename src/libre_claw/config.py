@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from importlib import resources
 import json
@@ -113,6 +113,7 @@ class FallbackRouteConfig:
 class FallbackConfig:
     enabled: bool
     routes: tuple[FallbackRouteConfig, ...]
+    recheck_after_attempts: int
 
 
 @dataclass(frozen=True)
@@ -352,6 +353,31 @@ def set_global_theme(
     return path
 
 
+def set_global_fallback_config(
+    fallback: FallbackConfig,
+    config_path: Path | str | None = None,
+) -> Path:
+    """Persist ordered provider fallback routes in the user-level config file."""
+    path = Path(config_path).expanduser() if config_path is not None else user_config_path()
+    routes = tuple(_clean_fallback_route(route, index) for index, route in enumerate(fallback.routes))
+    enabled = bool(fallback.enabled and routes)
+    recheck_after_attempts = max(1, fallback.recheck_after_attempts)
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        updated = _replace_fallback_section(existing, enabled, routes, recheck_after_attempts)
+        tomllib.loads(updated)
+        path.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        msg = f"Could not write config file {path}: {exc}"
+        raise ConfigError(msg) from exc
+    except tomllib.TOMLDecodeError as exc:
+        msg = f"Could not update config file {path}: {exc}"
+        raise ConfigError(msg) from exc
+    return path
+
+
 def configure_telegram(
     allowed_user_ids: tuple[int, ...],
     *,
@@ -546,6 +572,7 @@ def _load_default_config() -> ConfigTable:
         "fallback": {
             "enabled": False,
             "routes": [],
+            "recheck_after_attempts": 3,
         },
         "heartbeat": {
             "enabled": False,
@@ -630,6 +657,7 @@ def _resolve_user_config_path(config_path: Path | str | None) -> Path | None:
 
 
 _SECTION_RE = re.compile(r"^\s*\[([A-Za-z0-9_.-]+)\]\s*(?:#.*)?$")
+_ANY_SECTION_RE = re.compile(r"^\s*(\[\[?)([A-Za-z0-9_.-]+)(\]?\])\s*(?:#.*)?$")
 _KEY_RE = re.compile(r"^(\s*)([A-Za-z0-9_-]+)(\s*=).*$")
 
 
@@ -690,6 +718,76 @@ def _toml_value(value: Any) -> str:
     if isinstance(value, tuple | list):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     return json.dumps(value)
+
+
+def _replace_fallback_section(
+    text: str,
+    enabled: bool,
+    routes: Sequence[FallbackRouteConfig],
+    recheck_after_attempts: int,
+) -> str:
+    lines = text.splitlines()
+    output: list[str] = []
+    skipping_fallback = False
+
+    for line in lines:
+        section_match = _ANY_SECTION_RE.match(line)
+        if section_match:
+            section_name = section_match.group(2)
+            if section_name in {"fallback", "fallback.routes"}:
+                skipping_fallback = True
+                continue
+            skipping_fallback = False
+        if skipping_fallback:
+            continue
+        output.append(line)
+
+    while output and output[-1] == "":
+        output.pop()
+    if output:
+        output.append("")
+    output.extend(_fallback_section_lines(enabled, routes, recheck_after_attempts))
+    return "\n".join(output).rstrip() + "\n"
+
+
+def _fallback_section_lines(
+    enabled: bool,
+    routes: Sequence[FallbackRouteConfig],
+    recheck_after_attempts: int,
+) -> list[str]:
+    lines = [
+        "[fallback]",
+        f"enabled = {_toml_value(enabled)}",
+        f"recheck_after_attempts = {_toml_value(max(1, recheck_after_attempts))}",
+        "routes = []" if not routes else "",
+    ]
+    if routes:
+        lines.pop()
+    for route in routes:
+        lines.extend(
+            [
+                "",
+                "[[fallback.routes]]",
+                f"provider = {_toml_value(route.provider)}",
+                f"model = {_toml_value(route.model)}",
+            ]
+        )
+        if route.api_key_env:
+            lines.append(f"api_key_env = {_toml_value(route.api_key_env)}")
+    return lines
+
+
+def _clean_fallback_route(route: FallbackRouteConfig, index: int) -> FallbackRouteConfig:
+    provider = route.provider.strip().lower()
+    model = route.model.strip()
+    api_key_env = route.api_key_env.strip()
+    if provider == "local":
+        provider = "ollama"
+    if not provider:
+        raise ConfigError(f"Fallback route {index + 1} provider cannot be empty.")
+    if not model:
+        raise ConfigError(f"Fallback route {index + 1} model cannot be empty.")
+    return FallbackRouteConfig(provider=provider, model=model, api_key_env=api_key_env)
 
 
 def _read_toml(path: Path) -> ConfigTable:
@@ -825,6 +923,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
         fallback=FallbackConfig(
             enabled=_bool(fallback, "enabled"),
             routes=_fallback_routes(fallback),
+            recheck_after_attempts=max(1, _int(fallback, "recheck_after_attempts")),
         ),
         heartbeat=HeartbeatConfig(
             enabled=_bool(heartbeat, "enabled"),
