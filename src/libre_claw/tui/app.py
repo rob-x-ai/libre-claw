@@ -239,6 +239,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/btw", "/btw <note>", "Add a side note for future turns"),
     SlashCommand("/steer", "/steer <instruction>", "Steer future agent turns"),
     SlashCommand("/attach", "/attach <image-path>|list|clear", "Attach images to the next TUI message"),
+    SlashCommand("/paste-image", "/paste-image", "Attach an image from the OS clipboard"),
     SlashCommand("/cost", "/cost", "Show token and cost summary"),
     SlashCommand("/usage", "/usage openrouter|attribution|presets", "Show provider usage analytics"),
     SlashCommand("/model", "/model [provider:]<name>|list [--global]", "Choose or persist models"),
@@ -315,6 +316,7 @@ RUN_ARTIFACT_STDERR_MAX_CHARS = 20_000
 TUI_IMAGE_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
 TUI_IMAGE_ATTACHMENT_PROMPT = "Please inspect the attached image."
 TUI_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+TUI_CLIPBOARD_IMAGE_DIR = Path.home() / ".libre-claw" / "tui" / "uploads"
 STARTUP_ASCII = r"""
  █████        ███  █████                             █████████  ████
 ░░███        ░░░  ░░███                             ███░░░░░███░░███
@@ -1034,6 +1036,9 @@ class LibreClawApp(App[None]):
         if command == "/attach":
             self._handle_attach_command(argument)
             return
+        if command == "/paste-image":
+            self._handle_clipboard_image_command()
+            return
         if command == "/help":
             self._append_system(self._help_text())
             return
@@ -1128,7 +1133,10 @@ class LibreClawApp(App[None]):
         normalized = argument.strip().lower()
         if normalized in {"", "list", "status"}:
             if not self._pending_attachments:
-                self._append_system("No pending image attachments. Use `/attach <image-path>` or paste an image path in a message.")
+                self._append_system(
+                    "No pending image attachments. Use `/attach <image-path>`, "
+                    "`/attach paste`, or paste an image path in a message."
+                )
                 return
             lines = ["Pending image attachments for the next message:"]
             lines.extend(f"- {attachment.filename or attachment.path or attachment.media_type}" for attachment in self._pending_attachments)
@@ -1138,6 +1146,9 @@ class LibreClawApp(App[None]):
             count = len(self._pending_attachments)
             self._pending_attachments.clear()
             self._append_system(f"Cleared {count} pending image attachment{'s' if count != 1 else ''}.")
+            return
+        if normalized in {"paste", "clipboard", "clip"}:
+            self._handle_clipboard_image_command()
             return
 
         parsed = _parse_tui_image_input(argument, self.config.general.working_directory)
@@ -1153,6 +1164,15 @@ class LibreClawApp(App[None]):
         self._append_system(f"Attached {len(parsed.attachments)} image{'s' if len(parsed.attachments) != 1 else ''}.{suffix}")
         if parsed.message:
             self._append_system(f"Ignored non-image text after /attach: {parsed.message}")
+
+    def _handle_clipboard_image_command(self) -> None:
+        attachment, warning = _load_tui_clipboard_image(TUI_CLIPBOARD_IMAGE_DIR)
+        if attachment is None:
+            self._append_system(warning or "Clipboard does not contain an attachable image.")
+            return
+        self._pending_attachments.append(attachment)
+        self._append_attachment(attachment, pending=True)
+        self._append_system("Attached clipboard image. It will be sent with your next message.")
 
     def _handle_steering_note(self, kind: Literal["btw", "steer"], argument: str) -> None:
         note = argument.strip()
@@ -3578,6 +3598,19 @@ class LibreClawApp(App[None]):
                 if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
             ][:6]
 
+        if lowered.startswith("/attach "):
+            query = lowered.removeprefix("/attach ").strip()
+            suggestions = [
+                SlashCommand("/attach paste", "/attach paste", "Attach image from the OS clipboard"),
+                SlashCommand("/attach list", "/attach list", "List pending image attachments"),
+                SlashCommand("/attach clear", "/attach clear", "Clear pending image attachments"),
+            ]
+            return [
+                suggestion
+                for suggestion in suggestions
+                if not query or query in suggestion.name.lower() or query in suggestion.description.lower()
+            ][:6]
+
         if lowered.startswith("/goal "):
             query = lowered.removeprefix("/goal ").strip()
             suggestions = [
@@ -5298,6 +5331,52 @@ def _load_tui_image_attachment(path: Path) -> tuple[UserAttachment | None, str |
         filename=path.name,
         path=str(path),
     ), None
+
+
+def _load_tui_clipboard_image(target_dir: Path) -> tuple[UserAttachment | None, str | None]:
+    try:
+        from PIL import Image, ImageGrab
+    except Exception as exc:
+        return None, f"Clipboard image support requires Pillow/ImageGrab: {exc}"
+
+    try:
+        clipboard = ImageGrab.grabclipboard()
+    except Exception as exc:
+        return None, f"Could not read an image from the OS clipboard: {exc}"
+
+    if clipboard is None:
+        return None, (
+            "Clipboard does not contain an image. Copy an image, drag an image path "
+            "into the terminal, or use `/attach <image-path>`."
+        )
+
+    if isinstance(clipboard, Image.Image):
+        return _save_clipboard_image(clipboard, target_dir)
+
+    if isinstance(clipboard, list):
+        for item in clipboard:
+            path = Path(str(item)).expanduser()
+            try:
+                resolved = path.resolve()
+            except OSError:
+                resolved = path
+            if resolved.is_file() and resolved.suffix.lower() in TUI_IMAGE_EXTENSIONS:
+                return _load_tui_image_attachment(resolved)
+        return None, "Clipboard contains files, but none are supported images."
+
+    return None, "Clipboard content is not an image."
+
+
+def _save_clipboard_image(image: Any, target_dir: Path) -> tuple[UserAttachment | None, str | None]:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / f"clipboard-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.png"
+    try:
+        if getattr(image, "mode", "") not in {"RGB", "RGBA"}:
+            image = image.convert("RGBA")
+        image.save(path, format="PNG")
+    except Exception as exc:
+        return None, f"Could not save clipboard image: {exc}"
+    return _load_tui_image_attachment(path)
 
 
 def _attachment_metadata(attachment: UserAttachment) -> dict[str, str]:

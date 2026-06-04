@@ -76,9 +76,10 @@ launch with `libre-claw tui --mouse` or set `[tui].mouse = true`.
 
 You can attach images in the TUI by dragging an image into the terminal or
 pasting its local path into a message. Use `/attach <image-path>` to queue an
-image for the next prompt, `/attach list` to inspect queued images, and
-`/attach clear` to reset them. Libre Claw renders a small terminal preview and
-sends the image to vision-capable providers.
+image for the next prompt, `/attach paste` or `/paste-image` to pull an image
+from the OS clipboard, `/attach list` to inspect queued images, and `/attach
+clear` to reset them. Libre Claw renders a small terminal preview and sends the
+image to vision-capable providers.
 
 Inside the app, run:
 

@@ -49,6 +49,7 @@ from libre_claw.tui.app import (
     _format_token_count,
     _collect_run_artifacts,
     _model_help_text,
+    _load_tui_clipboard_image,
     _parse_tui_image_input,
     _parse_compact_options,
     _parse_schedule_command,
@@ -397,6 +398,35 @@ def test_tui_parses_image_data_url() -> None:
     assert parsed.attachments[0].media_type == "image/png"
 
 
+def test_tui_loads_clipboard_image_with_imagegrab(monkeypatch, tmp_path: Path) -> None:
+    from PIL import Image
+
+    image_path = tmp_path / "clipboard-source.png"
+    image_path.write_bytes(TINY_PNG)
+    image = Image.open(image_path)
+    monkeypatch.setattr("PIL.ImageGrab.grabclipboard", lambda: image)
+
+    attachment, warning = _load_tui_clipboard_image(tmp_path / "uploads")
+
+    assert warning is None
+    assert attachment is not None
+    assert attachment.media_type == "image/png"
+    assert attachment.filename.startswith("clipboard-")
+    assert Path(attachment.path).exists()
+
+
+def test_tui_loads_clipboard_image_file_list(monkeypatch, tmp_path: Path) -> None:
+    image = tmp_path / "finder-copy.png"
+    image.write_bytes(TINY_PNG)
+    monkeypatch.setattr("PIL.ImageGrab.grabclipboard", lambda: [str(image)])
+
+    attachment, warning = _load_tui_clipboard_image(tmp_path / "uploads")
+
+    assert warning is None
+    assert attachment is not None
+    assert attachment.filename == "finder-copy.png"
+
+
 async def test_tui_attach_command_queues_image_for_next_prompt(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -419,6 +449,27 @@ async def test_tui_attach_command_queues_image_for_next_prompt(monkeypatch, tmp_
     assert user_message == "what is this?"
     assert attachments[0].filename == "shot.png"  # type: ignore[attr-defined]
     assert any(entry.role == "attachment" and "shot.png" in (entry.title or "") for entry in app.transcript)
+
+
+async def test_tui_attach_paste_command_queues_clipboard_image(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    image = tmp_path / "clip.png"
+    image.write_bytes(TINY_PNG)
+    attachment = _parse_tui_image_input(str(image), tmp_path).attachments[0]
+    monkeypatch.setattr(
+        "libre_claw.tui.app._load_tui_clipboard_image",
+        lambda _target_dir: (attachment, None),
+    )
+    app = LibreClawApp(config=load_config())
+
+    async with app.run_test(size=(120, 45)):
+        await app._handle_command("/attach paste")
+
+    assert len(app._pending_attachments) == 1
+    assert app._pending_attachments[0].filename == "clip.png"
+    assert any("Attached clipboard image" in entry.content for entry in app.transcript)
 
 
 async def test_tui_pasted_image_only_uses_default_prompt(monkeypatch, tmp_path: Path) -> None:

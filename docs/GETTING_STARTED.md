@@ -90,8 +90,10 @@ paste its local path in a message, or queue one explicitly:
 What is wrong in this UI?
 ```
 
-Use `/attach list` and `/attach clear` to manage queued images. Vision-capable
-providers receive the image block; Codex CLI currently receives text only.
+If the image is already copied to the OS clipboard, use `/attach paste` or
+`/paste-image` before your next prompt. Use `/attach list` and `/attach clear`
+to manage queued images. Vision-capable providers receive the image block;
+Codex CLI currently receives text only.
 
 Libre Claw automatically keeps local persistent memory. Raw session archives
 stay in `~/.libre-claw/sessions/`, durable runs stay in `~/.libre-claw/runs/`,
