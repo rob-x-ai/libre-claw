@@ -225,6 +225,48 @@ def test_cli_start_detached_uses_background_daemon(monkeypatch, tmp_path) -> Non
     assert "Log:" in result.output
 
 
+def test_cli_start_uses_configured_detach(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[daemon]",
+                'host = "0.0.0.0"',
+                "port = 8766",
+                "poll_interval = 0.5",
+                "detach = true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    selected: list[tuple[str, str | None, int | None, str]] = []
+    monkeypatch.setattr("libre_claw.cli._running_daemon_url", lambda config, host, port: None)
+
+    def fake_start(ctx, config, mode, host, port):  # type: ignore[no-untyped-def]
+        del ctx
+        base_url = f"http://{config.daemon.host}:{config.daemon.port}"
+        selected.append((mode, host, port, base_url))
+        return type(
+            "Started",
+            (),
+            {"pid": 5000, "base_url": base_url, "log_path": tmp_path / "daemon.log", "mode": mode},
+        )()
+
+    monkeypatch.setattr("libre_claw.cli._start_background_process", fake_start)
+    monkeypatch.setattr("libre_claw.cli._wait_for_daemon_health", lambda base_url, timeout: True)
+
+    result = runner.invoke(main, ["--config", str(config_path), "start"])
+
+    assert result.exit_code == 0
+    assert selected == [("daemon", None, None, "http://0.0.0.0:8766")]
+    assert "Started Libre Claw daemon with pid 5000" in result.output
+    assert "Dashboard: http://0.0.0.0:8766/dashboard" in result.output
+
+
 def test_cli_start_reports_port_conflict_without_traceback(monkeypatch, tmp_path) -> None:
     class PortConflictServer:
         def __init__(self, config):  # type: ignore[no-untyped-def]

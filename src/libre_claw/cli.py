@@ -347,11 +347,16 @@ def daemon_command(ctx: click.Context, host: str | None, port: int | None) -> No
 @main.command("start")
 @click.option("--host", help="Host interface for the local daemon API.")
 @click.option("--port", type=int, help="Port for the local daemon API.")
-@click.option("-d", "--detach", is_flag=True, help="Start the daemon in the background and return immediately.")
+@click.option(
+    "-d",
+    "--detach",
+    is_flag=True,
+    help="Start in the background and return immediately. Also configurable as [daemon].detach.",
+)
 @click.pass_context
 def start_command(ctx: click.Context, host: str | None, port: int | None, detach: bool) -> None:
     """Start the local background runner daemon."""
-    _run_daemon_process(ctx, host=host, port=port, detach=detach)
+    _run_daemon_process(ctx, host=host, port=port, detach=detach, allow_config_detach=True)
 
 
 def _run_daemon_process(
@@ -360,8 +365,10 @@ def _run_daemon_process(
     host: str | None,
     port: int | None,
     detach: bool = False,
+    allow_config_detach: bool = False,
 ) -> None:
     config = _load_context_config(ctx)
+    effective_detach = detach or (allow_config_detach and config.daemon.detach)
     base_url = daemon_base_url(config, host=host, port=port)
     running_url = _running_daemon_url(config, host=host, port=port)
     if running_url is not None:
@@ -369,7 +376,7 @@ def _run_daemon_process(
         click.echo(f"Dashboard: {running_url}/dashboard")
         return
 
-    if detach:
+    if effective_detach:
         started = _start_background_process(ctx, config, "daemon", host=host, port=port)
         healthy = _wait_for_daemon_health(started.base_url, timeout=10.0)
         if healthy:

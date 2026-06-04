@@ -167,6 +167,7 @@ archive_sessions = true
 host = "127.0.0.1"
 port = 8766
 poll_interval = 0.5
+detach = false
 
 [automations]
 enabled = true

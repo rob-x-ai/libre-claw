@@ -66,6 +66,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.daemon.host == "127.0.0.1"
     assert config.daemon.port == 8766
     assert config.daemon.poll_interval == 0.5
+    assert config.daemon.detach is False
     assert config.automations.enabled is True
     assert config.automations.root == tmp_path / ".libre-claw" / "automations"
     assert config.automations.poll_interval == 30.0
@@ -126,6 +127,32 @@ def test_config_normalizes_legacy_local_provider(monkeypatch, tmp_path: Path) ->
     assert config.general.default_provider == "ollama"
     assert "local" not in config.providers
     assert config.providers["ollama"]["base_url"] == "https://ollama.com"
+
+
+def test_config_loads_daemon_detach_override(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[daemon]",
+                'host = "0.0.0.0"',
+                "port = 8766",
+                "poll_interval = 0.25",
+                "detach = true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config(config_path=config_path)
+
+    assert config.daemon.host == "0.0.0.0"
+    assert config.daemon.port == 8766
+    assert config.daemon.poll_interval == 0.25
+    assert config.daemon.detach is True
 
 
 def test_config_loads_fallback_and_heartbeat_sections(monkeypatch, tmp_path: Path) -> None:

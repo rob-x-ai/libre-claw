@@ -145,6 +145,7 @@ class DaemonConfig:
     host: str
     port: int
     poll_interval: float
+    detach: bool
 
 
 @dataclass(frozen=True)
@@ -603,6 +604,7 @@ def _load_default_config() -> ConfigTable:
             "host": "127.0.0.1",
             "port": 8766,
             "poll_interval": 0.5,
+            "detach": False,
         },
         "automations": {
             "enabled": True,
@@ -949,6 +951,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             host=_str(daemon, "host"),
             port=_int(daemon, "port"),
             poll_interval=_float(daemon, "poll_interval"),
+            detach=_bool(daemon, "detach"),
         ),
         automations=AutomationsConfig(
             enabled=_bool(automations, "enabled"),
