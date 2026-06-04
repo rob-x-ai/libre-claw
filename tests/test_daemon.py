@@ -227,6 +227,9 @@ async def test_daemon_serves_local_dashboard(monkeypatch, tmp_path: Path) -> Non
     assert "/usage?limit=250" in response.text
     assert "/config/theme" in response.text
     assert "/assets/lobster-icon.svg" in response.text
+    assert "https://github.com/kroonen-ai/libre-claw" in response.text
+    assert "https://git.kroonen.ai/kroonen-ai/libre-claw" in response.text
+    assert "GitLab mirror" in response.text
     assert "Edit Schedule" in response.text
     assert 'method = editingId ? "PUT" : "POST"' in response.text
     assert "libre-claw-dashboard-theme" in response.text
