@@ -11,7 +11,7 @@ when the terminal closes.
 
 Current release: Version `0.1.0`.
 
-![Libre Claw terminal UI demo](docs/assets/libre-claw-tui-demo.gif)
+![Libre Claw terminal UI](docs/assets/libre-claw-terminal-screenshot.png)
 
 ## Highlights
 
