@@ -204,6 +204,8 @@ The daemon owns active runs, keeps them alive after the TUI exits, exposes a
 local dashboard, supervises schedules, and can start Telegram automatically
 when Telegram is enabled and a stored bot token exists.
 
+![Libre Claw dashboard GUI](docs/assets/libre-claw-dashboard-screenshot.png)
+
 Lifecycle helpers:
 
 ```bash
@@ -258,7 +260,7 @@ Useful Telegram commands:
 /steer
 ```
 
-![Libre Claw Telegram bot](docs/assets/libre-claw-telegram-screenshot.jpeg)
+![Libre Claw Telegram bot](docs/assets/libre-claw-telegram-screenshot.png)
 
 ## What The Agent Can Do
 
