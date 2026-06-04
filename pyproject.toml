@@ -79,7 +79,7 @@ include = [
     "/config",
     "/pyproject.toml",
     "/scripts",
-    "/soul.md",
+    "/SOUL.md",
     "/src",
     "/tests",
 ]

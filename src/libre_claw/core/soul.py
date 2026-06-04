@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+SOUL_FILENAME = "SOUL.md"
+LEGACY_SOUL_FILENAME = SOUL_FILENAME.lower()
+
 DEFAULT_SOUL_TEMPLATE = """# Libre Claw Soul
 
 Use this file to personalize how Libre Claw feels when it works with you.
@@ -29,6 +32,26 @@ class SoulError(Exception):
     """Raised when a soul file cannot be managed safely."""
 
 
+def existing_soul_path(path: Path) -> Path:
+    if _has_exact_name(path):
+        return path
+    legacy_path = path.with_name(LEGACY_SOUL_FILENAME)
+    return legacy_path if _has_exact_name(legacy_path) else path
+
+
+def canonicalize_soul_path(path: Path) -> Path:
+    legacy_path = path.with_name(LEGACY_SOUL_FILENAME)
+    if _has_exact_name(path) or not _has_exact_name(legacy_path):
+        return path
+    temporary_path = _temporary_rename_path(path)
+    try:
+        legacy_path.rename(temporary_path)
+        temporary_path.rename(path)
+    except OSError:
+        return legacy_path
+    return path
+
+
 @dataclass(frozen=True)
 class SoulFragment:
     scope: str
@@ -49,15 +72,15 @@ class SoulStore:
 
     @property
     def user_path(self) -> Path:
-        return self.home / ".libre-claw" / "soul.md"
+        return self.home / ".libre-claw" / SOUL_FILENAME
 
     @property
     def project_path(self) -> Path:
-        return self.working_directory / ".libre-claw" / "soul.md"
+        return self.working_directory / ".libre-claw" / SOUL_FILENAME
 
     @property
     def project_root_path(self) -> Path:
-        return self.working_directory / "soul.md"
+        return self.working_directory / SOUL_FILENAME
 
     def paths(self) -> tuple[tuple[str, Path], ...]:
         return (
@@ -70,6 +93,7 @@ class SoulStore:
         fragments: list[SoulFragment] = []
         seen: set[Path] = set()
         for scope, path in self.paths():
+            path = self._upgrade_legacy_path(path)
             resolved = path.expanduser().resolve()
             if resolved in seen or not resolved.is_file():
                 continue
@@ -86,6 +110,7 @@ class SoulStore:
         loaded = {fragment.path for fragment in self.load()}
         lines = ["Libre Claw soul files:"]
         for scope, path in self.paths():
+            path = self._upgrade_legacy_path(path)
             resolved = path.expanduser().resolve()
             state = "loaded" if resolved in loaded else "missing"
             lines.append(f"- {scope}: {resolved} ({state})")
@@ -110,8 +135,28 @@ class SoulStore:
         else:
             raise SoulError("Usage: /soul init --user|--project|--root")
 
+        path = self._upgrade_legacy_path(path)
         if path.exists():
             return path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(DEFAULT_SOUL_TEMPLATE, encoding="utf-8")
         return path
+
+    def _upgrade_legacy_path(self, path: Path) -> Path:
+        return canonicalize_soul_path(path)
+
+
+def _has_exact_name(path: Path) -> bool:
+    try:
+        return any(child.name == path.name for child in path.parent.iterdir())
+    except OSError:
+        return path.exists()
+
+
+def _temporary_rename_path(path: Path) -> Path:
+    for index in range(100):
+        suffix = "" if index == 0 else f"-{index}"
+        candidate = path.with_name(f".{path.name}.rename-tmp{suffix}")
+        if not candidate.exists():
+            return candidate
+    raise SoulError(f"Could not find a temporary rename path for {path}")

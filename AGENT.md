@@ -118,7 +118,7 @@ For Markdown files, use the same information in an HTML comment.
 - Raw run/session archives are the source of truth.
 - SQLite memory is the searchable layer and must redact likely secrets.
 - Inject only relevant, capped memory into prompts.
-- `soul.md` provides persona context and should be loaded without overriding system safety rules.
+- `SOUL.md` provides persona context and should be loaded without overriding system safety rules.
 - Skills live in global and project-local `.libre-claw/skills/` directories.
 - Skills should contain reusable operating instructions, not private one-off history.
 - If the agent repeatedly performs a workflow, consider proposing or creating a skill.

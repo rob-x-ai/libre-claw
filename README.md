@@ -21,7 +21,7 @@ Current release: Version `0.1.0`.
 | Telegram bridge | Talk to the same agent from Telegram, approve tools inline, and receive scheduled reports. |
 | Durable runs | Every task gets a run ID, JSONL event log, summary, verification notes, and optional diff. |
 | Local dashboard | Start, inspect, cancel, and approve daemon-owned runs from a browser on localhost. |
-| Memory and skills | Local persistent memory, `soul.md` persona files, and user/project `SKILL.md` workflows. |
+| Memory and skills | Local persistent memory, `SOUL.md` persona files, and user/project `SKILL.md` workflows. |
 | Real tools | File edits, shell, search, git, HTTP requests, browser actions, screenshots, MCP tools, and more. |
 | Provider routing | OpenRouter, Ollama/Ollama Cloud, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
 | Safe defaults | API keys stay out of project config, dangerous commands are blocked, and writes require approval. |
@@ -323,9 +323,9 @@ AgentSkills-style packages with `SKILL.md` are supported.
 Persona files are loaded from:
 
 ```text
-~/.libre-claw/soul.md
-<project>/.libre-claw/soul.md
-<project>/soul.md
+~/.libre-claw/SOUL.md
+<project>/.libre-claw/SOUL.md
+<project>/SOUL.md
 ```
 
 Useful commands:

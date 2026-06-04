@@ -1191,7 +1191,7 @@ async def test_telegram_bridge_injects_skills(monkeypatch, tmp_path: Path) -> No
 async def test_telegram_bridge_injects_soul(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.chdir(tmp_path)
-    soul_path = tmp_path / "soul.md"
+    soul_path = tmp_path / "SOUL.md"
     soul_path.write_text("# Telegram Soul\n\nSound like Libre Claw on mobile.", encoding="utf-8")
     config = load_config()
     bridge = TelegramBridge(config)

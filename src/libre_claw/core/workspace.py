@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from libre_claw.config import set_global_working_directory
-from libre_claw.core.soul import DEFAULT_SOUL_TEMPLATE
+from libre_claw.core.soul import DEFAULT_SOUL_TEMPLATE, SOUL_FILENAME, canonicalize_soul_path, existing_soul_path
 
 
 WORKSPACE_README = """# Libre Claw Workspace
@@ -21,7 +21,7 @@ repositories outside this directory unless you intentionally want the agent to
 operate on them from here.
 
 ## Files
-- `soul.md` shapes Libre Claw's persona and collaboration style.
+- `SOUL.md` shapes Libre Claw's persona and collaboration style.
 - `goals.md` can hold active priorities, checklists, or recurring work.
 - `memory.md` can hold human-readable pinned memory notes.
 - `.libre-claw/skills/` can hold project-scoped skills for this workspace.
@@ -77,13 +77,21 @@ def initialize_claw_workspace(
     _write_template(workspace / "goals.md", GOALS_TEMPLATE, overwrite=overwrite, created=created, skipped=skipped)
     _write_template(workspace / "memory.md", MEMORY_TEMPLATE, overwrite=overwrite, created=created, skipped=skipped)
 
-    _copy_markdown_file(source / "soul.md", workspace / "soul.md", overwrite=overwrite, copied=copied, skipped=skipped)
-    if not (workspace / "soul.md").exists():
-        _write_template(workspace / "soul.md", DEFAULT_SOUL_TEMPLATE, overwrite=overwrite, created=created, skipped=skipped)
+    workspace_soul_path = workspace / SOUL_FILENAME
+    workspace_soul_path = canonicalize_soul_path(workspace_soul_path)
+    _copy_markdown_file(
+        existing_soul_path(source / SOUL_FILENAME),
+        workspace_soul_path,
+        overwrite=overwrite,
+        copied=copied,
+        skipped=skipped,
+    )
+    if not workspace_soul_path.exists():
+        _write_template(workspace_soul_path, DEFAULT_SOUL_TEMPLATE, overwrite=overwrite, created=created, skipped=skipped)
 
     _copy_markdown_file(
-        source / ".libre-claw" / "soul.md",
-        workspace / ".libre-claw" / "soul.md",
+        existing_soul_path(source / ".libre-claw" / SOUL_FILENAME),
+        workspace / ".libre-claw" / SOUL_FILENAME,
         overwrite=overwrite,
         copied=copied,
         skipped=skipped,

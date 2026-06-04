@@ -640,7 +640,7 @@ async def test_daemon_injects_project_skills(monkeypatch, tmp_path: Path) -> Non
 async def test_daemon_injects_soul_files(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.chdir(tmp_path)
-    soul_path = tmp_path / ".libre-claw" / "soul.md"
+    soul_path = tmp_path / ".libre-claw" / "SOUL.md"
     soul_path.parent.mkdir(parents=True)
     soul_path.write_text("# Project Soul\n\nBe unmistakably Libre Claw.", encoding="utf-8")
     provider = ScriptedProvider([[TextDelta("ok"), Done()]])

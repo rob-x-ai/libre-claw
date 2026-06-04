@@ -504,14 +504,14 @@ def test_cli_workspace_init_creates_workspace_and_updates_config(monkeypatch, tm
     monkeypatch.chdir(tmp_path)
     source = tmp_path / "project"
     source.mkdir()
-    (source / "soul.md").write_text("# Project Soul\n\nKnow the project.", encoding="utf-8")
+    (source / "SOUL.md").write_text("# Project Soul\n\nKnow the project.", encoding="utf-8")
     target = tmp_path / "Documents" / ".workspace" / "libre-claw"
 
     result = runner.invoke(main, ["--working-directory", str(source), "workspace", "init", "--path", str(target)])
 
     assert result.exit_code == 0
     assert "Libre Claw workspace initialized" in result.output
-    assert (target / "soul.md").exists()
+    assert (target / "SOUL.md").exists()
     config_text = (tmp_path / ".libre-claw" / "config.toml").read_text(encoding="utf-8")
     assert f'working_directory = "{target}"' in config_text
 

@@ -247,7 +247,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("/approvals", "/approvals", "Show blocked tool approvals"),
     SlashCommand("/changes", "/changes [id]", "Show what changed since your last review"),
     SlashCommand("/skills", "/skills list|add|edit|delete", "Manage Libre Claw skills"),
-    SlashCommand("/soul", "/soul status|show|init|reload", "Manage soul.md persona injection"),
+    SlashCommand("/soul", "/soul status|show|init|reload", "Manage SOUL.md persona injection"),
     SlashCommand("/schedule", "/schedule list|add|pause|resume|delete|examples", "Manage recurring local runs"),
     SlashCommand("/heartbeat", "/heartbeat status|once|start [every 30 minutes]|stop", "Run recurring check-ins"),
     SlashCommand("/memory", "/memory status|list|search|add|forget|summarize", "Manage persistent memory"),
@@ -3437,11 +3437,11 @@ class LibreClawApp(App[None]):
         if lowered.startswith("/soul "):
             query = lowered.removeprefix("/soul ").strip()
             suggestions = [
-                SlashCommand("/soul status", "/soul status", "Show loaded soul.md files"),
+                SlashCommand("/soul status", "/soul status", "Show loaded SOUL.md files"),
                 SlashCommand("/soul show", "/soul show", "Show active persona text"),
-                SlashCommand("/soul init --user", "/soul init --user", "Create ~/.libre-claw/soul.md"),
-                SlashCommand("/soul init --project", "/soul init --project", "Create .libre-claw/soul.md"),
-                SlashCommand("/soul init --root", "/soul init --root", "Create ./soul.md"),
+                SlashCommand("/soul init --user", "/soul init --user", "Create ~/.libre-claw/SOUL.md"),
+                SlashCommand("/soul init --project", "/soul init --project", "Create .libre-claw/SOUL.md"),
+                SlashCommand("/soul init --root", "/soul init --root", "Create ./SOUL.md"),
                 SlashCommand("/soul reload", "/soul reload", "Reload persona files"),
             ]
             return [
