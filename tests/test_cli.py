@@ -63,6 +63,7 @@ def test_cli_exposes_telegram_command() -> None:
     assert "chat" in result.output
     assert "telegram" in result.output
     assert "workspace" in result.output
+    assert "searx" in result.output
     assert "auth" in result.output
     assert "config" in result.output
 
@@ -174,6 +175,20 @@ def test_cli_start_exposes_daemon_options() -> None:
     assert "--port" in result.output
     assert "--detach" in result.output
     assert "-d" in result.output
+
+
+def test_cli_searx_init_writes_local_files(tmp_path) -> None:
+    runner = CliRunner()
+    target = tmp_path / "searxng"
+
+    result = runner.invoke(main, ["searx", "init", "--path", str(target)])
+
+    assert result.exit_code == 0
+    assert (target / "docker-compose.yml").exists()
+    assert (target / "settings.yml").exists()
+    assert (target / ".env").exists()
+    assert "json" in (target / "settings.yml").read_text(encoding="utf-8")
+    assert "127.0.0.1:8888:8080" in (target / "docker-compose.yml").read_text(encoding="utf-8")
 
 
 def test_cli_start_reports_already_running_daemon(monkeypatch, tmp_path) -> None:

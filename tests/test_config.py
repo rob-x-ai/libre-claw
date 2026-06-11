@@ -72,6 +72,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.automations.poll_interval == 30.0
     assert config.automations.max_due_per_tick == 5
     assert "bash" in config.automations.auto_approve_tools
+    assert "web_search" in config.automations.auto_approve_tools
     assert "write_file" not in config.automations.auto_approve_tools
     assert config.automations.finalizer_max_tokens == 3000
     assert config.automations.finalizer_max_context_chars == 70000
@@ -82,6 +83,13 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.browser.screenshots_dir == tmp_path / ".libre-claw" / "browser" / "screenshots"
     assert config.browser.default_timeout_ms == 30000
     assert config.browser.headless is True
+    assert config.web_search.enabled is True
+    assert config.web_search.provider == "searxng"
+    assert config.web_search.base_url == "http://127.0.0.1:8888"
+    assert config.web_search.timeout == 15
+    assert config.web_search.max_results == 10
+    assert config.web_search.default_categories == ("general",)
+    assert config.web_search.default_engines == ()
     assert config.mcp.enabled is False
     assert config.mcp.allowlist == ()
     assert config.mcp.permission_level == "ask"
@@ -89,6 +97,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert "search_files" in config.agent.system_prompt
     assert "browser_download" in config.agent.system_prompt
     assert "browser_execute" in config.agent.system_prompt
+    assert "web_search" in config.agent.system_prompt
     assert "http_request" in config.agent.system_prompt
     assert config.agent.system_prompt_extra == ""
     assert "curl | bash" in config.sandbox.blocked_patterns

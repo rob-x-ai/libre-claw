@@ -80,6 +80,7 @@ def test_read_tools_auto_allowed_by_config() -> None:
         "browser_wait",
         "browser_screenshot",
         "browser_dismiss_cookies",
+        "web_search",
     ):
         assert manager.check(ToolCall(id=name, name=name), AskTool(context)) == "allow"
 

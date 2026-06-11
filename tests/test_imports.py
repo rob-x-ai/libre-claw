@@ -24,6 +24,7 @@ def test_phase_one_modules_import() -> None:
         "libre_claw.core.review",
         "libre_claw.core.runs",
         "libre_claw.core.sandbox",
+        "libre_claw.core.searxng",
         "libre_claw.core.skills",
         "libre_claw.core.soul",
         "libre_claw.core.tools",
@@ -50,6 +51,7 @@ def test_phase_one_modules_import() -> None:
         "libre_claw.tools_builtin.search",
         "libre_claw.tools_builtin.shell",
         "libre_claw.tools_builtin.think",
+        "libre_claw.tools_builtin.web_search",
         "libre_claw.tui.app",
     ):
         assert importlib.import_module(module_name)

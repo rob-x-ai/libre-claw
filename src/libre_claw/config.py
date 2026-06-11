@@ -171,6 +171,19 @@ class BrowserConfig:
 
 
 @dataclass(frozen=True)
+class WebSearchConfig:
+    enabled: bool
+    provider: str
+    base_url: str
+    timeout: int
+    max_results: int
+    default_language: str
+    default_safesearch: int
+    default_categories: tuple[str, ...]
+    default_engines: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class MCPConfig:
     enabled: bool
     allowlist: tuple[str, ...]
@@ -197,6 +210,19 @@ class LibreClawConfig:
     browser: BrowserConfig
     mcp: MCPConfig
     providers: Mapping[str, Mapping[str, Any]]
+    web_search: WebSearchConfig = field(
+        default_factory=lambda: WebSearchConfig(
+            enabled=True,
+            provider="searxng",
+            base_url="http://127.0.0.1:8888",
+            timeout=15,
+            max_results=10,
+            default_language="auto",
+            default_safesearch=0,
+            default_categories=("general",),
+            default_engines=(),
+        )
+    )
     source_paths: tuple[Path, ...] = field(default_factory=tuple)
 
 
@@ -460,7 +486,8 @@ def _load_default_config() -> ConfigTable:
                 "(https://kroonen.ai) running in the user's terminal.\n"
                 "You have access to tools for reading files, writing files, editing files, "
                 "listing directories, searching code, inspecting git, browsing web pages, "
-                "extracting browser data, running browser JavaScript, fetching HTTP URLs/APIs, "
+                "extracting browser data, running browser JavaScript, searching the web through SearXNG, "
+                "fetching HTTP URLs/APIs, "
                 "clicking and typing in browser pages, downloading browser files, "
                 "thinking through plans, and running shell commands.\n\n"
                 "RULES:\n"
@@ -475,7 +502,7 @@ def _load_default_config() -> ConfigTable:
                 "glob, search_files, git_status, git_commit, think, browser_navigate, "
                 "browser_read, browser_extract, browser_execute, browser_dismiss_cookies, "
                 "browser_click, browser_type, browser_wait, browser_download, browser_screenshot, "
-                "http_request, and bash."
+                "web_search, http_request, and bash."
             ),
             "system_prompt_extra": "",
         },
@@ -613,6 +640,7 @@ def _load_default_config() -> ConfigTable:
             "max_due_per_tick": 5,
             "auto_approve_tools": [
                 "bash",
+                "web_search",
                 "http_request",
                 "read_file",
                 "list_directory",
@@ -633,6 +661,17 @@ def _load_default_config() -> ConfigTable:
             "screenshots_dir": ".libre-claw/browser/screenshots",
             "default_timeout_ms": 30000,
             "headless": True,
+        },
+        "web_search": {
+            "enabled": True,
+            "provider": "searxng",
+            "base_url": "http://127.0.0.1:8888",
+            "timeout": 15,
+            "max_results": 10,
+            "default_language": "auto",
+            "default_safesearch": 0,
+            "default_categories": ["general"],
+            "default_engines": [],
         },
         "mcp": {
             "enabled": False,
@@ -859,6 +898,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
     daemon = _section(data, "daemon")
     automations = _section(data, "automations")
     browser = _section(data, "browser")
+    web_search = _section(data, "web_search")
     mcp = _section(data, "mcp")
 
     return LibreClawConfig(
@@ -979,6 +1019,17 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             servers=_mcp_servers(mcp),
         ),
         providers=_providers(data),
+        web_search=WebSearchConfig(
+            enabled=_bool(web_search, "enabled"),
+            provider=_str(web_search, "provider"),
+            base_url=_str(web_search, "base_url"),
+            timeout=_int(web_search, "timeout"),
+            max_results=_int(web_search, "max_results"),
+            default_language=_str(web_search, "default_language"),
+            default_safesearch=_int(web_search, "default_safesearch"),
+            default_categories=tuple(_list(web_search, "default_categories", str)),
+            default_engines=tuple(_list(web_search, "default_engines", str)),
+        ),
         source_paths=source_paths,
     )
 

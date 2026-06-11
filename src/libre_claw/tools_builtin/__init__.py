@@ -18,6 +18,7 @@ from libre_claw.tools_builtin import mcp as _mcp
 from libre_claw.tools_builtin import search as _search  # noqa: F401
 from libre_claw.tools_builtin import shell as _shell  # noqa: F401
 from libre_claw.tools_builtin import think as _think  # noqa: F401
+from libre_claw.tools_builtin import web_search as _web_search  # noqa: F401
 
 
 def create_builtin_registry(config: LibreClawConfig, memory_store: MemoryStore | None = None) -> ToolRegistry:
@@ -35,6 +36,15 @@ def create_builtin_registry(config: LibreClawConfig, memory_store: MemoryStore |
         browser_screenshots_dir=config.browser.screenshots_dir,
         browser_default_timeout_ms=config.browser.default_timeout_ms,
         browser_headless=config.browser.headless,
+        web_search_enabled=config.web_search.enabled,
+        web_search_provider=config.web_search.provider,
+        web_search_base_url=config.web_search.base_url,
+        web_search_timeout=config.web_search.timeout,
+        web_search_max_results=config.web_search.max_results,
+        web_search_default_language=config.web_search.default_language,
+        web_search_default_safesearch=config.web_search.default_safesearch,
+        web_search_default_categories=config.web_search.default_categories,
+        web_search_default_engines=config.web_search.default_engines,
     )
     tools = [tool_type(context) for tool_type in registered_tool_types()]
     tools.extend(_mcp.mcp_tools(config, context))

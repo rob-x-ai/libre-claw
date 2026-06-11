@@ -930,6 +930,9 @@ def _combine_prompt_extra(existing: str, addition: str) -> str:
 def _tool_call_notice(name: str, arguments: dict[str, Any]) -> str:
     if name == "http_request":
         return _http_request_call_notice(arguments)
+    if name == "web_search":
+        query = str(arguments.get("query", "")).strip()
+        return f"🔎 Search {_compact_text(query, 320)}" if query else "🔎 web_search"
     summary = _arguments_summary(arguments, limit=TELEGRAM_ARGUMENT_LIMIT)
     if not summary:
         return f"🔧 {name}"
@@ -955,6 +958,8 @@ def _tool_result_notice(
 ) -> str:
     if name == "http_request":
         return _http_request_result_notice(is_error=is_error, content=content, metadata=metadata or {})
+    if name == "web_search":
+        return _web_search_result_notice(is_error=is_error, content=content, metadata=metadata or {})
     icon = "⚠️" if is_error else "✅"
     status = "failed" if is_error else "done"
     compact = _compact_text(content, TELEGRAM_NOTICE_LIMIT)
@@ -1004,6 +1009,18 @@ def _http_request_result_notice(*, is_error: bool, content: str, metadata: dict[
     if header:
         return "✅ http_request done\n" + _compact_text(header, TELEGRAM_HTTP_ERROR_LIMIT)
     return "✅ http_request done"
+
+
+def _web_search_result_notice(*, is_error: bool, content: str, metadata: dict[str, Any]) -> str:
+    if is_error:
+        compact = _compact_text(content, TELEGRAM_HTTP_ERROR_LIMIT)
+        return f"⚠️ web_search failed\n{compact}" if compact else "⚠️ web_search failed"
+    query = str(metadata.get("query", "")).strip()
+    count = metadata.get("returned_results")
+    result_text = f"{count} result(s)" if count not in (None, "") else "done"
+    if query:
+        return f"✅ web_search {result_text}\n{_compact_text(query, 320)}"
+    return f"✅ web_search {result_text}"
 
 
 def _arguments_summary(arguments: dict[str, Any], *, limit: int) -> str:

@@ -42,6 +42,7 @@ class PermissionManager:
             "browser_wait",
             "browser_screenshot",
             "browser_dismiss_cookies",
+            "web_search",
         }:
             return "allow"
 

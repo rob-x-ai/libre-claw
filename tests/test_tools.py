@@ -34,6 +34,7 @@ from libre_claw.tools_builtin.http import HTTPRequestTool
 from libre_claw.tools_builtin.search import GlobTool, SearchFilesTool
 from libre_claw.tools_builtin.shell import BashTool
 from libre_claw.tools_builtin.think import ThinkTool
+from libre_claw.tools_builtin.web_search import WebSearchTool
 
 
 class ExampleTool(BaseTool):
@@ -108,6 +109,7 @@ def test_builtin_registry_exposes_production_toolset(tmp_path: Path) -> None:
         "browser_wait",
         "browser_download",
         "browser_screenshot",
+        "web_search",
         "http_request",
         "bash",
     }.issubset(names)
@@ -465,6 +467,65 @@ async def test_http_request_validates_inputs_and_sandbox(monkeypatch, tmp_path: 
     assert "outside the working directory" in outside.error
 
 
+async def test_web_search_returns_normalized_searxng_results(monkeypatch, tmp_path: Path) -> None:
+    response = FakeWebSearchResponse(
+        {
+            "results": [
+                {
+                    "title": "Libre Claw",
+                    "url": "https://libreclaw.sh",
+                    "content": "Terminal native agent harness",
+                    "engine": "duckduckgo",
+                    "score": 1.0,
+                },
+                {
+                    "title": "Kroonen AI",
+                    "url": "https://kroonen.ai",
+                    "content": "Builder of Libre Claw",
+                    "engine": "brave",
+                },
+            ]
+        }
+    )
+    client = FakeWebSearchClient(response)
+    monkeypatch.setattr("libre_claw.tools_builtin.web_search.httpx.AsyncClient", lambda **kwargs: client)
+
+    result = await WebSearchTool(context(tmp_path)).execute(
+        query="libre claw",
+        max_results=1,
+        categories=["general", "it"],
+    )
+
+    assert result.error is None
+    assert "web_search: libre claw" in result.content
+    assert "https://libreclaw.sh" in result.content
+    assert "https://kroonen.ai" not in result.content
+    assert result.metadata["returned_results"] == 1
+    assert result.metadata["result_count"] == 2
+    assert client.last_request["params"]["categories"] == "general,it"
+
+
+async def test_web_search_reports_json_disabled(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "libre_claw.tools_builtin.web_search.httpx.AsyncClient",
+        lambda **kwargs: FakeWebSearchClient(FakeWebSearchResponse({}, status_code=403, text="Forbidden")),
+    )
+
+    result = await WebSearchTool(context(tmp_path)).execute(query="libre claw")
+
+    assert result.error is not None
+    assert "JSON search output" in result.error
+
+
+async def test_web_search_validates_inputs(tmp_path: Path) -> None:
+    tool = WebSearchTool(context(tmp_path))
+
+    assert (await tool.execute(query="")).error == "query must not be empty"
+    assert (await tool.execute(query="x", max_results=0)).error == "max_results must be >= 1"
+    assert (await tool.execute(query="x", max_results=99)).error == "max_results must be <= 50"
+    assert (await tool.execute(query="x", page=0)).error == "page must be >= 1"
+
+
 async def test_browser_tools_gracefully_handle_missing_session_or_dependency(monkeypatch, tmp_path: Path) -> None:
     def missing_playwright(name: str):
         raise ModuleNotFoundError(name)
@@ -609,6 +670,32 @@ class FakeHTTPClient:
 
     async def request(self, method: str, url: str, **kwargs: object) -> FakeHTTPResponse:
         self.last_request = {"method": method, "url": url, **kwargs}
+        return self.response
+
+
+class FakeWebSearchResponse:
+    def __init__(self, payload: dict[str, object], status_code: int = 200, text: str = "") -> None:
+        self._payload = payload
+        self.status_code = status_code
+        self.text = text
+
+    def json(self) -> dict[str, object]:
+        return self._payload
+
+
+class FakeWebSearchClient:
+    def __init__(self, response: FakeWebSearchResponse) -> None:
+        self.response = response
+        self.last_request: dict[str, object] = {}
+
+    async def __aenter__(self) -> "FakeWebSearchClient":
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        del exc_type, exc, traceback
+
+    async def get(self, url: str, **kwargs: object) -> FakeWebSearchResponse:
+        self.last_request = {"url": url, **kwargs}
         return self.response
 
 

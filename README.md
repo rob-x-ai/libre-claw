@@ -22,7 +22,7 @@ Current release: Version `0.1.0`.
 | Durable runs | Every task gets a run ID, JSONL event log, summary, verification notes, and optional diff. |
 | Local dashboard | Start, inspect, cancel, and approve daemon-owned runs from a browser on localhost. |
 | Memory and skills | Local persistent memory, `SOUL.md` persona files, and user/project `SKILL.md` workflows. |
-| Real tools | File edits, shell, search, git, HTTP requests, browser actions, screenshots, MCP tools, and more. |
+| Real tools | File edits, shell, code search, web search, git, HTTP requests, browser actions, screenshots, MCP tools, and more. |
 | Provider routing | OpenRouter, Ollama/Ollama Cloud, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
 | Safe defaults | API keys stay out of project config, dangerous commands are blocked, and writes require approval. |
 
@@ -51,6 +51,18 @@ For browser tools:
 python -m pip install -e ".[browser]"
 python -m playwright install chromium
 ```
+
+For local web search, run a private SearXNG instance:
+
+```bash
+libre-claw searx init
+libre-claw searx up
+libre-claw searx test
+```
+
+Libre Claw uses `http://127.0.0.1:8888` by default through the `web_search`
+tool. The generated SearXNG settings enable JSON output, which is required for
+agent searches.
 
 ## First Run
 
@@ -151,6 +163,30 @@ or down before it starts streaming. Configure up to three ordered backups:
 
 While running on a fallback, Libre Claw retries the primary after the configured
 number of fallback provider calls. The default is `3`.
+
+## Local Web Search
+
+`web_search` is backed by SearXNG so the agent can search the web without
+scraping a commercial search page through `bash` or the browser. The default
+config is:
+
+```toml
+[web_search]
+enabled = true
+provider = "searxng"
+base_url = "http://127.0.0.1:8888"
+max_results = 10
+```
+
+Useful commands:
+
+```bash
+libre-claw searx init      # write compose/settings files
+libre-claw searx up        # start local SearXNG with Docker Compose
+libre-claw searx status    # show container status
+libre-claw searx test      # verify JSON search output
+libre-claw searx down      # stop local SearXNG
+```
 
 Use `/provider` when you only want to switch providers:
 

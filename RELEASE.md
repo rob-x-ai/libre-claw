@@ -60,6 +60,9 @@ First shippable Libre Claw release, built by Kroonen AI.
   state pool so sessions survive follow-up tool calls and registry rebuilds.
 - Direct `http_request` tool for API calls, image/file fetches, sandboxed
   downloads, and HTTP GET/POST-style workflows without shelling out to `bash`.
+- SearXNG-backed `web_search` tool for compact web results without shelling out
+  to scraper commands, plus `libre-claw searx init|up|status|test|down` helpers
+  for running a private local SearXNG instance with JSON output enabled.
 - MCP stdio bridge with `[mcp]` config, explicit server/tool allowlisting,
   `mcp__server__tool` wrappers, `/tools list` visibility, and normal Libre Claw
   permission policies for external tools.
@@ -121,7 +124,7 @@ First shippable Libre Claw release, built by Kroonen AI.
   `search_files`, `git_status`, `git_commit`, `think`, `browser_navigate`,
   `browser_read`, `browser_extract`, `browser_execute`,
   `browser_dismiss_cookies`, `browser_click`, `browser_type`, `browser_wait`,
-  `browser_download`, `browser_screenshot`, `http_request`, and `bash` tools,
+  `browser_download`, `browser_screenshot`, `web_search`, `http_request`, and `bash` tools,
   with bounded reads/listing/search, atomic writes/edits, occurrence targeting,
   diffs, git inspection/commit support, persistent browser profiles, browser
   artifact capture with graceful dependency errors, direct HTTP fetches,

@@ -34,6 +34,15 @@ class ToolContext:
     browser_screenshots_dir: Path = Path(".libre-claw/browser/screenshots")
     browser_default_timeout_ms: int = 30000
     browser_headless: bool = True
+    web_search_enabled: bool = True
+    web_search_provider: str = "searxng"
+    web_search_base_url: str = "http://127.0.0.1:8888"
+    web_search_timeout: int = 15
+    web_search_max_results: int = 10
+    web_search_default_language: str = "auto"
+    web_search_default_safesearch: int = 0
+    web_search_default_categories: tuple[str, ...] = ("general",)
+    web_search_default_engines: tuple[str, ...] = ()
     shared_state: dict[str, Any] = field(default_factory=dict)
 
     def sandbox_policy(self) -> SandboxPolicy:

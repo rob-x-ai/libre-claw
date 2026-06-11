@@ -34,6 +34,7 @@ from libre_claw.config import (
     set_global_default_model,
     user_config_path,
 )
+from libre_claw.core.searxng import default_searxng_path, ensure_searxng_files, searxng_compose_command
 from libre_claw.core.workspace import (
     default_claw_workspace_path,
     initialize_claw_workspace,
@@ -985,6 +986,139 @@ def workspace_init_command(
     except ConfigError as exc:
         _raise_click_error(str(exc))
     click.echo(workspace_result_text(result))
+
+
+@main.group("searx", invoke_without_command=True)
+@click.pass_context
+def searx_command(ctx: click.Context) -> None:
+    """Manage Libre Claw's optional local SearXNG search instance."""
+    if ctx.invoked_subcommand is not None:
+        return
+    config = _load_context_config(ctx)
+    click.echo(f"configured_base_url: {config.web_search.base_url}")
+    click.echo(f"local_files: {default_searxng_path()}")
+    click.echo("Run `libre-claw searx init` then `libre-claw searx up` to start local search.")
+
+
+@searx_command.command("init")
+@click.option(
+    "--path",
+    "root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory for docker-compose.yml and settings.yml. Defaults to ~/.libre-claw/searxng.",
+)
+def searx_init_command(root: Path | None) -> None:
+    """Write local SearXNG compose/settings files with JSON search enabled."""
+    files = ensure_searxng_files(root)
+    click.echo(f"Wrote local SearXNG files in {files.root}")
+    click.echo(f"compose: {files.compose_path}")
+    click.echo(f"settings: {files.settings_path}")
+    click.echo("Next: run `libre-claw searx up` and keep [web_search].base_url pointed at http://127.0.0.1:8888.")
+
+
+@searx_command.command("up")
+@click.option(
+    "--path",
+    "root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory containing the SearXNG docker-compose.yml.",
+)
+def searx_up_command(root: Path | None) -> None:
+    """Start the optional local SearXNG container."""
+    files = ensure_searxng_files(root)
+    _run_searxng_compose(files.root, "up", "-d")
+    click.echo("SearXNG is starting at http://127.0.0.1:8888")
+    click.echo("Test it with `libre-claw searx test`.")
+
+
+@searx_command.command("down")
+@click.option(
+    "--path",
+    "root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory containing the SearXNG docker-compose.yml.",
+)
+def searx_down_command(root: Path | None) -> None:
+    """Stop the optional local SearXNG container."""
+    files = ensure_searxng_files(root)
+    _run_searxng_compose(files.root, "down")
+
+
+@searx_command.command("status")
+@click.option(
+    "--path",
+    "root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory containing the SearXNG docker-compose.yml.",
+)
+def searx_status_command(root: Path | None) -> None:
+    """Show Docker Compose status for the optional local SearXNG container."""
+    files = ensure_searxng_files(root)
+    _run_searxng_compose(files.root, "ps")
+
+
+@searx_command.command("test")
+@click.option("--base-url", help="SearXNG base URL. Defaults to [web_search].base_url.")
+@click.option("--query", default="Libre Claw", show_default=True, help="Search query to test.")
+@click.pass_context
+def searx_test_command(ctx: click.Context, base_url: str | None, query: str) -> None:
+    """Verify that SearXNG JSON search is reachable."""
+    config = _load_context_config(ctx)
+    target = (base_url or config.web_search.base_url).rstrip("/")
+    try:
+        response = httpx.get(
+            f"{target}/search",
+            params={"q": query, "format": "json"},
+            headers={"accept": "application/json"},
+            timeout=max(1.0, float(config.web_search.timeout)),
+            follow_redirects=True,
+        )
+    except httpx.HTTPError as exc:
+        _raise_click_error(f"Could not reach SearXNG at {target}: {exc}")
+
+    if response.status_code == 403:
+        _raise_click_error("SearXNG is reachable, but JSON output is disabled. Add `json` to search.formats.")
+    if response.status_code < 200 or response.status_code >= 300:
+        _raise_click_error(f"SearXNG returned HTTP {response.status_code}: {response.text[:500]}")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        _raise_click_error(f"SearXNG did not return JSON: {exc}")
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list):
+        _raise_click_error("SearXNG JSON response did not include a results list.")
+    click.echo(f"OK: {len(results)} result(s) from {target}")
+    if results and isinstance(results[0], dict):
+        title = str(results[0].get("title") or "Untitled").strip()
+        url = str(results[0].get("url") or "").strip()
+        click.echo(f"first: {title} {url}".rstrip())
+
+
+def _run_searxng_compose(root: Path, *args: str) -> None:
+    command = searxng_compose_command(root, *args)
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed docker compose executable with generated compose file.
+            command,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=120,
+        )
+    except FileNotFoundError:
+        _raise_click_error("Docker was not found. Install Docker Desktop or Docker Engine to run local SearXNG.")
+    except subprocess.TimeoutExpired as exc:
+        _raise_click_error(f"Docker Compose timed out: {exc}")
+
+    if result.stdout:
+        click.echo(result.stdout, nl=False)
+    if result.stderr:
+        click.echo(result.stderr, nl=False, err=True)
+    if result.returncode != 0:
+        _raise_click_error(f"Docker Compose exited with {result.returncode}.")
 
 
 @main.group("config")
