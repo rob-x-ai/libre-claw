@@ -704,7 +704,13 @@ def _domain_matches(host: str, pattern: str) -> bool:
 
 
 def _resolve_browser_output_dir(tool: BaseTool, path: Path) -> Path:
-    return tool.resolve_path(str(path))
+    try:
+        return tool.resolve_path(str(path))
+    except SandboxViolation:
+        relocated = _browser_workspace_storage_path(tool, path)
+        if relocated is None:
+            raise
+        return tool.resolve_path(str(relocated))
 
 
 def _resolve_browser_file(tool: BaseTool, path: str, default_dir: Path, default_name: str) -> Path:
@@ -715,7 +721,35 @@ def _resolve_browser_file(tool: BaseTool, path: str, default_dir: Path, default_
             candidate = candidate / default_name
     else:
         candidate = default_dir / default_name
-    return tool.resolve_path(str(candidate))
+    try:
+        return tool.resolve_path(str(candidate))
+    except SandboxViolation:
+        relocated = _browser_workspace_storage_path(tool, candidate)
+        if relocated is None:
+            raise
+        return tool.resolve_path(str(relocated))
+
+
+def _browser_workspace_storage_path(tool: BaseTool, path: Path) -> Path | None:
+    """Relocate default browser artifact dirs into the active run workspace.
+
+    Config paths are resolved at config-load time, but daemon-backed Telegram runs
+    may execute in a different workspace. Keep explicit arbitrary absolute paths
+    sandboxed, while moving Libre Claw's own `.libre-claw/browser/...` storage
+    under the active tool working directory.
+    """
+    candidate = path.expanduser()
+    if not candidate.is_absolute():
+        return None
+    parts = candidate.parts
+    try:
+        marker_index = parts.index(".libre-claw")
+    except ValueError:
+        return None
+    suffix = Path(*parts[marker_index:])
+    if len(suffix.parts) < 3 or suffix.parts[0] != ".libre-claw" or suffix.parts[1] != "browser":
+        return None
+    return tool.context.working_directory / suffix
 
 
 def _safe_profile(profile: str) -> str:

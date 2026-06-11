@@ -502,6 +502,31 @@ async def test_browser_policy_blocks_denied_domains(tmp_path: Path) -> None:
     assert "denied" in result.error
 
 
+def test_browser_artifact_dirs_relocate_to_active_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    app_root = tmp_path / "app"
+    workspace.mkdir()
+    app_root.mkdir()
+    ctx = ToolContext(
+        working_directory=workspace,
+        restrict_to_working_dir=True,
+        command_timeout=120,
+        allow_sudo=False,
+        blocked_patterns=(),
+        browser_downloads_dir=app_root / ".libre-claw" / "browser" / "downloads",
+        browser_screenshots_dir=app_root / ".libre-claw" / "browser" / "screenshots",
+    )
+    tool = BrowserReadTool(ctx)
+
+    downloads = browser_tools._resolve_browser_output_dir(tool, ctx.browser_downloads_dir)
+    download_file = browser_tools._resolve_browser_file(tool, "", ctx.browser_downloads_dir, "system-card.pdf")
+    screenshot_file = browser_tools._resolve_browser_file(tool, "", ctx.browser_screenshots_dir, "page.png")
+
+    assert downloads == workspace / ".libre-claw" / "browser" / "downloads"
+    assert download_file == workspace / ".libre-claw" / "browser" / "downloads" / "system-card.pdf"
+    assert screenshot_file == workspace / ".libre-claw" / "browser" / "screenshots" / "page.png"
+
+
 async def test_browser_selector_actions_and_artifacts_use_shared_profile(tmp_path: Path) -> None:
     ctx = context(tmp_path)
     page = FakePage()

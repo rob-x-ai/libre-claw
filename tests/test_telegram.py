@@ -39,7 +39,9 @@ from libre_claw.telegram.handlers import (
     _safe_edit_text_preview,
     _stream_preview,
     _telegram_image_attachments,
+    _looks_like_file_send_request,
     _telegram_help_text,
+    _telegram_document_paths_from_text,
     _tool_log_formatted_chunk,
     _tool_log_preview,
     _typing_indicator_loop,
@@ -277,6 +279,82 @@ def test_telegram_html_chunks_keep_messages_under_limit() -> None:
     assert len(chunks) > 1
     assert all(chunk.parse_mode == "HTML" for chunk in chunks)
     assert all(len(chunk.text) <= 300 for chunk in chunks)
+
+
+def test_telegram_document_path_extraction_is_workspace_scoped(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    pdf = workspace / "Claude Fable 5 system card.pdf"
+    outside = tmp_path / "outside.pdf"
+    pdf.write_bytes(b"%PDF-1.7")
+    outside.write_bytes(b"%PDF-1.7")
+
+    text = f"Saved here: `{pdf}`\nDo not send {outside}"
+
+    assert _telegram_document_paths_from_text(text, workspace) == [pdf.resolve()]
+    assert _looks_like_file_send_request("send it over to telegram here") is True
+    assert _looks_like_file_send_request("summarize it") is False
+
+
+async def test_telegram_message_can_send_remembered_workspace_document(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    pdf = workspace / "anthropic_fable5_system_card.pdf"
+    pdf.write_bytes(b"%PDF-1.7")
+    config = load_config(working_directory=workspace)
+
+    class State:
+        task: asyncio.Task[None] | None = None
+
+    class Bridge:
+        def __init__(self) -> None:
+            self.config = config
+            self.state = State()
+
+        def state_for(self, chat_id: int) -> State:
+            assert chat_id == 123
+            return self.state
+
+    class EffectiveMessage:
+        text = "send it over"
+        caption = ""
+
+        def __init__(self) -> None:
+            self.replies: list[str] = []
+            self.documents: list[tuple[str, bytes]] = []
+
+        async def reply_text(self, text: str, **kwargs: object) -> None:
+            del kwargs
+            self.replies.append(text)
+
+        async def reply_document(self, document: object, **kwargs: object) -> None:
+            filename = str(kwargs.get("filename", ""))
+            payload = document.read()  # type: ignore[attr-defined]
+            self.documents.append((filename, payload))
+
+    class User:
+        id = 123
+
+    class Chat:
+        id = 123
+
+    class Update:
+        effective_user = User()
+        effective_chat = Chat()
+
+        def __init__(self) -> None:
+            self.effective_message = EffectiveMessage()
+
+    handlers = TelegramHandlers(Bridge(), TelegramAuth(allowed_user_ids=frozenset({123})))  # type: ignore[arg-type]
+    handlers._remember_document_paths(123, [pdf])
+    update = Update()
+
+    await handlers.message(update, object())  # type: ignore[arg-type]
+
+    assert update.effective_message.documents == [(pdf.name, b"%PDF-1.7")]
+    assert update.effective_message.replies == []
 
 
 async def test_telegram_finish_text_response_sends_all_final_chunks() -> None:

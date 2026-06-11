@@ -93,7 +93,10 @@ TELEGRAM_HTTP_ERROR_LIMIT = 500
 TELEGRAM_SYSTEM_PROMPT_EXTRA = (
     "Telegram output policy: keep mobile replies compact. Do not narrate intermediate "
     "tool steps such as 'let me fetch' or 'now I will check'. Use tools silently and "
-    "send only the final useful result, unless you need approval or hit an error."
+    "send only the final useful result, unless you need approval or hit an error. "
+    "When a Telegram user asks for a file, create or download it inside the configured "
+    "working directory and include its absolute path in the final answer; the Telegram "
+    "bridge can upload safe existing workspace files from that path."
 )
 
 

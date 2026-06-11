@@ -54,6 +54,27 @@ TELEGRAM_TYPING_INTERVAL_SECONDS = 4.0
 TELEGRAM_TOOL_LOG_UPDATE_INTERVAL_SECONDS = 8.0
 TELEGRAM_TOOL_LOG_UPDATE_EVENT_INTERVAL = 12
 TELEGRAM_MAX_IMAGE_BYTES = 8 * 1024 * 1024
+TELEGRAM_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+TELEGRAM_DOCUMENT_EXTENSIONS = frozenset(
+    {
+        ".csv",
+        ".gif",
+        ".html",
+        ".jpeg",
+        ".jpg",
+        ".json",
+        ".md",
+        ".pdf",
+        ".png",
+        ".txt",
+        ".webp",
+        ".zip",
+    }
+)
+TELEGRAM_DOCUMENT_PATH_RE = re.compile(
+    r"(?P<path>(?:~|/)[^`'\"<>]*?\.(?:csv|gif|html|jpeg|jpg|json|md|pdf|png|txt|webp|zip))\b",
+    re.IGNORECASE,
+)
 PERMISSION_CALLBACKS: dict[str, tuple[PermissionResolution, str, str]] = {
     "p:y:": ("allow_once", "Approved.", "✅ Approved"),
     "p:t:": (
@@ -131,6 +152,7 @@ class TelegramHandlers:
         self._permission_callback_counter = 0
         self._expand_callback_ids: dict[str, TelegramExpandablePayload] = {}
         self._expand_callback_counter = 0
+        self._recent_document_paths: dict[int, list[Path]] = {}
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
@@ -363,6 +385,10 @@ class TelegramHandlers:
             await _reply_text_chunks(update.effective_message, _telegram_help_text(), self.bridge.config.telegram.max_message_length)
             return
         chat_id = update.effective_chat.id
+        if _looks_like_file_send_request(text) and not attachments:
+            sent = await self._send_remembered_documents(update.effective_message, chat_id)
+            if sent:
+                return
         state = self.bridge.state_for(chat_id)
         if state.task is not None and not state.task.done():
             await self.bridge.cancel_async(chat_id)
@@ -489,6 +515,7 @@ class TelegramHandlers:
                                     self.bridge.config.telegram.max_message_length,
                                     clean_final=True,
                                 )
+                                await self._send_documents_from_text(update.effective_message, chat_id, accumulated)
                             else:
                                 await _finish_text_response(
                                     placeholder,
@@ -496,6 +523,7 @@ class TelegramHandlers:
                                     accumulated,
                                     self.bridge.config.telegram.max_message_length,
                                 )
+                                await self._send_documents_from_text(update.effective_message, chat_id, accumulated)
                         else:
                             await _edit_text_preview(placeholder, "Done.", self.bridge.config.telegram.max_message_length)
                         continue
@@ -822,6 +850,36 @@ class TelegramHandlers:
         except Exception as exc:
             await self._deny_unrenderable_permission(event.prompt_id, exc, bot=bot, chat_id=chat_id)
 
+    async def _send_remembered_documents(self, message: Any, chat_id: int) -> bool:
+        paths = [
+            path
+            for path in self._recent_document_paths.get(chat_id, [])
+            if _telegram_document_path_is_sendable(path, self.bridge.config.general.working_directory)
+        ]
+        if not paths:
+            return False
+        sent = await _reply_document_paths(message, paths[:3])
+        if sent == 0:
+            await message.reply_text("I found a recent file path, but Telegram could not upload it.")
+            return True
+        return True
+
+    async def _send_documents_from_text(self, message: Any, chat_id: int, text: str) -> None:
+        paths = _telegram_document_paths_from_text(text, self.bridge.config.general.working_directory)
+        if not paths:
+            return
+        self._remember_document_paths(chat_id, paths)
+        await _reply_document_paths(message, paths[:3])
+
+    def _remember_document_paths(self, chat_id: int, paths: Sequence[Path]) -> None:
+        existing = self._recent_document_paths.get(chat_id, [])
+        combined: list[Path] = []
+        for path in [*paths, *existing]:
+            resolved = path.resolve(strict=False)
+            if resolved not in combined:
+                combined.append(resolved)
+        self._recent_document_paths[chat_id] = combined[:10]
+
     def _permission_reply_markup(self, prompt_id: str) -> Any:
         token = self._register_permission_prompt(prompt_id)
         return InlineKeyboardMarkup(
@@ -1002,6 +1060,86 @@ async def _download_telegram_file(telegram_file: Any, destination: Path) -> None
         await download_to_drive(custom_path=destination)
     except TypeError:
         await download_to_drive(destination)
+
+
+def _looks_like_file_send_request(text: str) -> bool:
+    normalized = " ".join(text.strip().lower().split())
+    if not normalized:
+        return False
+    return any(
+        phrase in normalized
+        for phrase in (
+            "send it",
+            "send the file",
+            "send me the file",
+            "send the pdf",
+            "send me the pdf",
+            "send it over",
+            "upload it",
+            "upload the file",
+            "attach it",
+            "attach the file",
+        )
+    )
+
+
+def _telegram_document_paths_from_text(text: str, working_directory: Path) -> list[Path]:
+    root = working_directory.expanduser().resolve(strict=False)
+    paths: list[Path] = []
+    for line in text.splitlines():
+        for match in TELEGRAM_DOCUMENT_PATH_RE.finditer(line):
+            raw_path = match.group("path").strip("`'\"<>[]().,;:")
+            if not raw_path:
+                continue
+            path = Path(raw_path).expanduser().resolve(strict=False)
+            if path in paths:
+                continue
+            if _telegram_document_path_is_sendable(path, root):
+                paths.append(path)
+    return paths
+
+
+def _telegram_document_path_is_sendable(path: Path, working_directory: Path) -> bool:
+    root = working_directory.expanduser().resolve(strict=False)
+    resolved = path.expanduser().resolve(strict=False)
+    try:
+        if not resolved.is_file():
+            return False
+        if resolved.suffix.lower() not in TELEGRAM_DOCUMENT_EXTENSIONS:
+            return False
+        if not _path_is_relative_to(resolved, root):
+            return False
+        return resolved.stat().st_size <= TELEGRAM_MAX_DOCUMENT_BYTES
+    except OSError:
+        return False
+
+
+async def _reply_document_paths(message: Any, paths: Sequence[Path]) -> int:
+    sent = 0
+    for path in paths:
+        try:
+            with path.open("rb") as handle:
+                await message.reply_document(
+                    document=handle,
+                    filename=path.name,
+                    caption=f"📎 {path.name}",
+                )
+            sent += 1
+        except TypeError:
+            with path.open("rb") as handle:
+                await message.reply_document(handle)
+            sent += 1
+        except Exception:
+            continue
+    return sent
+
+
+def _path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _image_media_type(payload: bytes, path: Path) -> str:
