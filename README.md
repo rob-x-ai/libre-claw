@@ -62,7 +62,8 @@ libre-claw searx test
 
 Libre Claw uses `http://127.0.0.1:8888` by default through the `web_search`
 tool. The generated SearXNG settings enable JSON output, which is required for
-agent searches.
+agent searches. The implementation walkthrough lives in
+[docs/SEARXNG_INTEGRATION.md](docs/SEARXNG_INTEGRATION.md).
 
 ## First Run
 
@@ -187,6 +188,9 @@ libre-claw searx status    # show container status
 libre-claw searx test      # verify JSON search output
 libre-claw searx down      # stop local SearXNG
 ```
+
+Implementation notes and debugging tips:
+[docs/SEARXNG_INTEGRATION.md](docs/SEARXNG_INTEGRATION.md).
 
 Use `/provider` when you only want to switch providers:
 
@@ -571,6 +575,7 @@ api_key_env = ""
 - Website: [libreclaw.sh](https://libreclaw.sh)
 - Docs: [libreclaw.sh/docs](https://libreclaw.sh/docs/)
 - Getting started: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
+- SearXNG integration: [docs/SEARXNG_INTEGRATION.md](docs/SEARXNG_INTEGRATION.md)
 - Security: [SECURITY.md](SECURITY.md)
 - Roadmap: [ROADMAP.md](ROADMAP.md)
 - Demos: [docs/DEMOS.md](docs/DEMOS.md)
