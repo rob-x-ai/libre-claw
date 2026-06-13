@@ -100,12 +100,10 @@ def test_codex_oauth_presets_include_current_cli_model_names() -> None:
 def test_anthropic_presets_include_current_api_model_names() -> None:
     preset_names = {preset.model for preset in ANTHROPIC_MODEL_PRESETS}
 
-    assert "claude-fable-5" in preset_names
     assert "claude-opus-4-8" in preset_names
     assert "claude-sonnet-4-6" in preset_names
     assert "claude-haiku-4-5-20251001" in preset_names
     assert "anthropic/claude-opus-4.8" not in preset_names
-    assert "anthropic/claude-fable-5" not in preset_names
 
 
 def test_openrouter_presets_include_recommended_models() -> None:
@@ -121,7 +119,6 @@ def test_openrouter_presets_include_recommended_models() -> None:
         "z-ai/glm-5.1",
         "xiaomi/mimo-v2.5-pro",
         "qwen/qwen3.6-plus",
-        "anthropic/claude-fable-5",
         "anthropic/claude-opus-4.8",
         "anthropic/claude-sonnet-4.6",
         "minimax/minimax-m3",

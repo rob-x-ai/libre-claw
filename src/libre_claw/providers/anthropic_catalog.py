@@ -18,11 +18,6 @@ class AnthropicModelPreset:
 # like OpenRouter/Hermes, not Anthropic's first-party Messages API.
 ANTHROPIC_MODEL_PRESETS: tuple[AnthropicModelPreset, ...] = (
     AnthropicModelPreset(
-        "claude-fable-5",
-        "Claude Fable 5 (Mythos)",
-        "Anthropic's public Mythos-class model for deep reasoning, science, analysis, and long-context work.",
-    ),
-    AnthropicModelPreset(
         "claude-opus-4-8",
         "Claude Opus 4.8",
         "Anthropic's most capable model for complex reasoning, long-horizon agentic coding, and high-autonomy work.",
