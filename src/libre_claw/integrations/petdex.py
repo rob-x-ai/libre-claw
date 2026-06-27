@@ -15,11 +15,15 @@ from libre_claw.config import PetdexConfig
 PETDEX_KNOWN_STATES = frozenset(
     {
         "idle",
-        "ready",
+        "waiting",
         "thinking",
         "running",
+        "running-left",
+        "running-right",
         "working",
         "command",
+        "review",
+        "jumping",
         "success",
         "failed",
         "error",
@@ -75,6 +79,7 @@ class PetdexClient:
             return PetdexUpdateResult(ok=False, skipped=True, message="Petdex integration is disabled.")
         if not clean_state:
             return PetdexUpdateResult(ok=False, skipped=True, message="Petdex state is empty.")
+        petdex_state = _to_petdex_state(clean_state)
 
         try:
             token = self.config.token_path.read_text(encoding="utf-8").strip()
@@ -83,30 +88,43 @@ class PetdexClient:
         if not token:
             return PetdexUpdateResult(ok=False, skipped=True, message=f"Petdex token is empty at {self.config.token_path}.")
 
-        payload: dict[str, Any] = {
-            "state": clean_state,
-            "source": self.config.source or "libre-claw",
+        state_payload: dict[str, Any] = {
+            "state": petdex_state,
+            "agent_source": self.config.source or "libre-claw",
         }
-        if message:
-            payload["message"] = _truncate_text(message, 300)
-        if details:
-            payload["details"] = _compact_details(details)
+        bubble_text = _bubble_text(message, details)
+        auth_headers = {"x-petdex-update-token": token}
 
         try:
             if self._http_client is not None:
                 response = await self._http_client.post(
                     f"{self.config.base_url}/state",
-                    headers={"Authorization": f"Bearer {token}"},
-                    json=payload,
+                    headers=auth_headers,
+                    json=state_payload,
                 )
+                response.raise_for_status()
+                if bubble_text:
+                    bubble_response = await self._http_client.post(
+                        f"{self.config.base_url}/bubble",
+                        headers=auth_headers,
+                        json={"text": bubble_text, "agent_source": self.config.source or "libre-claw"},
+                    )
+                    bubble_response.raise_for_status()
             else:
                 async with httpx.AsyncClient(timeout=self.config.timeout) as client:
                     response = await client.post(
                         f"{self.config.base_url}/state",
-                        headers={"Authorization": f"Bearer {token}"},
-                        json=payload,
+                        headers=auth_headers,
+                        json=state_payload,
                     )
-            response.raise_for_status()
+                    response.raise_for_status()
+                    if bubble_text:
+                        bubble_response = await client.post(
+                            f"{self.config.base_url}/bubble",
+                            headers=auth_headers,
+                            json={"text": bubble_text, "agent_source": self.config.source or "libre-claw"},
+                        )
+                        bubble_response.raise_for_status()
         except httpx.HTTPError as exc:
             return PetdexUpdateResult(ok=False, message=f"Petdex update failed: {exc}")
         return PetdexUpdateResult(ok=True)
@@ -149,6 +167,35 @@ def _compact_details(details: Mapping[str, Any]) -> dict[str, Any]:
         else:
             compact[str(key)] = _truncate_text(str(value), 300)
     return compact
+
+
+def _to_petdex_state(state: str) -> str:
+    if state in {"idle", "running", "waving", "jumping", "failed", "review", "waiting"}:
+        return state
+    if state in {"ready"}:
+        return "waiting"
+    if state in {"thinking", "working", "command"}:
+        return "running"
+    if state in {"success"}:
+        return "jumping"
+    if state in {"error"}:
+        return "failed"
+    return "running"
+
+
+def _bubble_text(message: str, details: Mapping[str, Any] | None) -> str:
+    parts: list[str] = []
+    if message:
+        parts.append(message)
+    if details:
+        compact = _compact_details(details)
+        target = compact.get("command") or compact.get("path") or compact.get("url") or compact.get("target")
+        tool = compact.get("tool")
+        if tool and target:
+            parts.append(f"{tool}: {target}")
+        elif tool:
+            parts.append(str(tool))
+    return _truncate_text(" · ".join(parts), 200)
 
 
 def _truncate_text(text: str, limit: int) -> str:

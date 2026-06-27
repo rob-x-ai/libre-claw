@@ -64,16 +64,21 @@ async def test_petdex_posts_authenticated_state(tmp_path: Path) -> None:
         result = await client.send_state("working", message="Inspecting files", details={"tool": "read_file"})
 
     assert result.ok is True
-    assert len(requests) == 1
+    assert len(requests) == 2
     request = requests[0]
     assert str(request.url) == "http://127.0.0.1:7777/state"
-    assert request.headers["Authorization"] == "Bearer secret-token"
+    assert request.headers["x-petdex-update-token"] == "secret-token"
     payload = json.loads(request.content)
     assert payload == {
-        "state": "working",
-        "source": "libre-claw-test",
-        "message": "Inspecting files",
-        "details": {"tool": "read_file"},
+        "state": "running",
+        "agent_source": "libre-claw-test",
+    }
+    bubble_request = requests[1]
+    assert str(bubble_request.url) == "http://127.0.0.1:7777/bubble"
+    assert bubble_request.headers["x-petdex-update-token"] == "secret-token"
+    assert json.loads(bubble_request.content) == {
+        "text": "Inspecting files · read_file",
+        "agent_source": "libre-claw-test",
     }
 
 
