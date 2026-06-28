@@ -25,6 +25,11 @@ OPENROUTER_MODEL_PRESETS: tuple[OpenRouterModelPreset, ...] = (
         "Tencent preview model for broad agent tasks.",
     ),
     OpenRouterModelPreset(
+        "sakana/fugu-ultra",
+        "Sakana Fugu Ultra",
+        "Sakana multi-agent orchestration model for complex reasoning, coding, and agentic workflows.",
+    ),
+    OpenRouterModelPreset(
         "qwen/qwen3.7-max",
         "Qwen3.7 Max",
         "Primary high-capacity coding preset.",
