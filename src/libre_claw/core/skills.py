@@ -4,23 +4,31 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Literal, ParamSpec, TypeVar
 from uuid import uuid4
 
+if TYPE_CHECKING:
+    from libre_claw.config import SkillsConfig
 
-SkillScope = Literal["bundled", "user", "project"]
+SkillScope = Literal["bundled", "external", "user", "project"]
 MAX_SKILL_CHARS = 6000
-SCOPE_ORDER: dict[SkillScope, int] = {"bundled": 0, "user": 1, "project": 2}
+SCOPE_ORDER: dict[SkillScope, int] = {"bundled": 0, "external": 1, "user": 2, "project": 3}
 MUTABLE_SCOPES: set[SkillScope] = {"user", "project"}
+EXTERNAL_CACHE_SENTINEL = ".libre-claw-synced-at"
+IGNORED_SKILL_DIRS = {".git", "node_modules", "dist", "build", "__pycache__", ".venv", "venv"}
 SKILL_AUTHORING_GUIDANCE = (
     "Skill authoring guidance: when asked to create or improve a skill, use an "
     "AgentSkills-compatible SKILL.md structure with YAML frontmatter (`name`, "
     "`description`) and concise sections: When to Use, Prerequisites, Procedure, "
     "Pitfalls, Verification. Keep secrets out, keep descriptions short, reference "
-    "Libre Claw tool names, and prefer deterministic scripts for fragile repeated work."
+    "Libre Claw tool names, and prefer deterministic scripts for fragile repeated work. "
+    "If external skill discovery is enabled and a task needs specialized knowledge not "
+    "covered by local skills, use `skills_search` to look for an existing open agent skill."
 )
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -64,12 +72,15 @@ class SkillStore:
         *,
         user_root: Path | str | None = None,
         include_bundled: bool = True,
+        skills_config: "SkillsConfig | None" = None,
     ) -> None:
         self.project_root = Path(project_root).expanduser().resolve()
         self.user_root = Path(user_root).expanduser() if user_root is not None else default_user_skills_path()
         self.project_skills_root = self.project_root / ".libre-claw" / "skills"
         self.bundled_root = default_bundled_skills_path()
-        self.include_bundled = include_bundled
+        self.skills_config = skills_config
+        self.include_bundled = include_bundled and _config_bool(skills_config, "include_bundled", True)
+        self._external_sync_attempted = False
 
     async def list_skills(self) -> list[Skill]:
         return await _to_thread(self._list_skills_sync)
@@ -87,14 +98,27 @@ class SkillStore:
         return await _to_thread(self._relevant_skills_sync, prompt, limit)
 
     def relevant_skill_texts(self, prompt: str, *, limit: int = 5) -> list[str]:
-        return [skill.prompt_text for skill in self._relevant_skills_sync(prompt, limit)]
+        configured_limit = _config_int(self.skills_config, "max_relevant", limit)
+        return [skill.prompt_text for skill in self._relevant_skills_sync(prompt, min(limit, configured_limit))]
+
+    async def sync_external_sources(self, *, force: bool = False) -> list[str]:
+        return await _to_thread(self._sync_external_sources_sync, force)
 
     def _list_skills_sync(self) -> list[Skill]:
+        if not _config_bool(self.skills_config, "enabled", True):
+            return []
+        if _config_bool(self.skills_config, "external_discovery_enabled", False):
+            self._maybe_sync_external_sources()
         skills = []
         if self.include_bundled:
             skills.extend(self._load_scope("bundled", self.bundled_root))
-        skills.extend(self._load_scope("user", self.user_root))
-        skills.extend(self._load_scope("project", self.project_skills_root))
+        if _config_bool(self.skills_config, "external_discovery_enabled", False):
+            for root in self._external_roots():
+                skills.extend(self._load_scope("external", root))
+        if _config_bool(self.skills_config, "include_user", True):
+            skills.extend(self._load_scope("user", self.user_root))
+        if _config_bool(self.skills_config, "include_project", True):
+            skills.extend(self._load_scope("project", self.project_skills_root))
         skills.sort(key=lambda skill: (SCOPE_ORDER[skill.scope], skill.name))
         return skills
 
@@ -102,11 +126,12 @@ class SkillStore:
         if not root.exists():
             return []
         skills: list[Skill] = []
-        for path in sorted(root.glob("*.md")):
-            skill = _load_skill_file(path, scope, path.stem)
-            if skill is not None:
-                skills.append(skill)
-        for path in sorted(root.glob("*/SKILL.md")):
+        if scope != "external":
+            for path in sorted(root.glob("*.md")):
+                skill = _load_skill_file(path, scope, path.stem)
+                if skill is not None:
+                    skills.append(skill)
+        for path in sorted(_skill_markdown_paths(root)):
             skill = _load_skill_file(path, scope, path.parent.name)
             if skill is not None:
                 skills.append(skill)
@@ -176,9 +201,49 @@ class SkillStore:
         return [skill for _, skill in ranked[: max(1, limit)]]
 
     def _root_for_scope(self, scope: SkillScope) -> Path:
-        if scope == "bundled":
-            raise SkillError("Bundled skills are read-only.")
+        if scope in {"bundled", "external"}:
+            raise SkillError(f"{scope.title()} skills are read-only.")
         return self.user_root if scope == "user" else self.project_skills_root
+
+    def _maybe_sync_external_sources(self) -> None:
+        if self._external_sync_attempted:
+            return
+        self._external_sync_attempted = True
+        if not _config_bool(self.skills_config, "external_auto_refresh", True):
+            return
+        try:
+            self._sync_external_sources_sync(force=False)
+        except SkillError:
+            return
+
+    def _sync_external_sources_sync(self, force: bool = False) -> list[str]:
+        if not _config_bool(self.skills_config, "external_discovery_enabled", False):
+            raise SkillError("External skill discovery is disabled by [skills].external_discovery_enabled.")
+        statuses: list[str] = []
+        if _config_bool(self.skills_config, "vercel_source_enabled", True):
+            root = self._vercel_cache_root()
+            statuses.append(
+                _sync_git_catalog(
+                    root=root,
+                    url=_config_str(self.skills_config, "vercel_repo_url", "https://github.com/vercel-labs/skills.git"),
+                    ref=_config_str(self.skills_config, "vercel_ref", "main"),
+                    refresh_seconds=_config_int(self.skills_config, "external_refresh_seconds", 86400),
+                    force=force,
+                )
+            )
+        return statuses
+
+    def _external_roots(self) -> list[Path]:
+        roots: list[Path] = []
+        if _config_bool(self.skills_config, "vercel_source_enabled", True):
+            root = self._vercel_cache_root()
+            if root.exists():
+                roots.append(root)
+        return roots
+
+    def _vercel_cache_root(self) -> Path:
+        cache_dir = _config_path(self.skills_config, "external_cache_dir", Path.home() / ".libre-claw" / "skills" / "catalogs")
+        return cache_dir / "vercel-labs-skills"
 
 
 def default_user_skills_path() -> Path:
@@ -187,6 +252,15 @@ def default_user_skills_path() -> Path:
 
 def default_bundled_skills_path() -> Path:
     return Path(__file__).resolve().parents[1] / "skills"
+
+
+def _skill_markdown_paths(root: Path) -> list[Path]:
+    paths: list[Path] = []
+    for path in root.rglob("SKILL.md"):
+        if any(part in IGNORED_SKILL_DIRS for part in path.parts):
+            continue
+        paths.append(path)
+    return paths
 
 
 def normalize_skill_name(name: str) -> str:
@@ -291,6 +365,66 @@ def _write_text(path: Path, text: str) -> None:
     tmp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     tmp_path.write_text(text, encoding="utf-8")
     tmp_path.replace(path)
+
+
+def _sync_git_catalog(*, root: Path, url: str, ref: str, refresh_seconds: int, force: bool) -> str:
+    now = time.time()
+    sentinel = root / EXTERNAL_CACHE_SENTINEL
+    if root.exists() and not force and sentinel.exists():
+        try:
+            age = now - float(sentinel.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            age = refresh_seconds + 1
+        if age < refresh_seconds:
+            return f"{root.name}: fresh"
+
+    root.parent.mkdir(parents=True, exist_ok=True)
+    if root.exists() and (root / ".git").exists():
+        command = ["git", "-C", str(root), "fetch", "--depth", "1", "origin", ref]
+        _run_git(command)
+        _run_git(["git", "-C", str(root), "checkout", "--quiet", "FETCH_HEAD"])
+    elif root.exists():
+        raise SkillError(f"External skills cache path exists but is not a git checkout: {root}")
+    else:
+        _run_git(["git", "clone", "--depth", "1", "--branch", ref, url, str(root)])
+
+    try:
+        sentinel.write_text(str(now), encoding="utf-8")
+    except OSError:
+        pass
+    return f"{root.name}: synced"
+
+
+def _run_git(command: list[str]) -> None:
+    try:
+        completed = subprocess.run(command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SkillError(f"Could not refresh external skills catalog: {exc}") from exc
+    if completed.returncode != 0:
+        stderr = " ".join(completed.stderr.split())
+        raise SkillError(f"Could not refresh external skills catalog: {stderr or completed.returncode}")
+
+
+def _config_bool(config: object | None, name: str, default: bool) -> bool:
+    return bool(getattr(config, name, default)) if config is not None else default
+
+
+def _config_int(config: object | None, name: str, default: int) -> int:
+    value = getattr(config, name, default) if config is not None else default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _config_str(config: object | None, name: str, default: str) -> str:
+    value = getattr(config, name, default) if config is not None else default
+    return str(value).strip() or default
+
+
+def _config_path(config: object | None, name: str, default: Path) -> Path:
+    value = getattr(config, name, default) if config is not None else default
+    return Path(value).expanduser()
 
 
 async def _to_thread(function: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:

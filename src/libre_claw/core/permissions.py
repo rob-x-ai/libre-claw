@@ -43,6 +43,7 @@ class PermissionManager:
             "browser_screenshot",
             "browser_dismiss_cookies",
             "web_search",
+            "skills_search",
         }:
             return "allow"
 

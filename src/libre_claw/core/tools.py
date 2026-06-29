@@ -43,6 +43,11 @@ class ToolContext:
     web_search_default_safesearch: int = 0
     web_search_default_categories: tuple[str, ...] = ("general",)
     web_search_default_engines: tuple[str, ...] = ()
+    skills_enabled: bool = True
+    skills_external_discovery_enabled: bool = False
+    skills_cli_enabled: bool = True
+    skills_cli_command: str = "npx -y skills@latest"
+    skills_cli_timeout: int = 45
     shared_state: dict[str, Any] = field(default_factory=dict)
 
     def sandbox_policy(self) -> SandboxPolicy:

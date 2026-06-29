@@ -90,6 +90,20 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert config.web_search.max_results == 10
     assert config.web_search.default_categories == ("general",)
     assert config.web_search.default_engines == ()
+    assert config.skills.enabled is True
+    assert config.skills.include_bundled is True
+    assert config.skills.include_user is True
+    assert config.skills.include_project is True
+    assert config.skills.max_relevant == 5
+    assert config.skills.external_discovery_enabled is False
+    assert config.skills.external_auto_refresh is True
+    assert config.skills.external_cache_dir == tmp_path / ".libre-claw" / "skills" / "catalogs"
+    assert config.skills.vercel_source_enabled is True
+    assert config.skills.vercel_repo_url == "https://github.com/vercel-labs/skills.git"
+    assert config.skills.vercel_ref == "main"
+    assert config.skills.cli_enabled is True
+    assert config.skills.cli_command == "npx -y skills@latest"
+    assert config.skills.cli_timeout == 45
     assert config.petdex.enabled is False
     assert config.petdex.base_url == "http://127.0.0.1:7777"
     assert config.petdex.token_path == tmp_path / ".petdex" / "runtime" / "update-token"
@@ -109,6 +123,7 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert "browser_execute" in config.agent.system_prompt
     assert "web_search" in config.agent.system_prompt
     assert "http_request" in config.agent.system_prompt
+    assert "skills_search" in config.agent.system_prompt
     assert config.agent.system_prompt_extra == ""
     assert "curl | bash" in config.sandbox.blocked_patterns
     assert config.providers["openrouter"]["api_key_env"] == "OPENROUTER_API_KEY"

@@ -206,6 +206,45 @@ class TelegramHandlers:
             return
         await update.effective_message.reply_text("Usage: /petdex status")
 
+    async def skills(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        args = list(context.args or [])
+        action = args[0].lower() if args else "status"
+        if action in {"status", "info"}:
+            cfg = self.bridge.config.skills
+            text = "\n".join(
+                [
+                    "Skills:",
+                    f"enabled: {cfg.enabled}",
+                    f"external discovery: {cfg.external_discovery_enabled}",
+                    f"Vercel source: {cfg.vercel_repo_url}",
+                    f"cache: {cfg.external_cache_dir}",
+                    "Use /skills list or /skills sync.",
+                ]
+            )
+            await _reply_text_chunks(update.effective_message, text, self.bridge.config.telegram.max_message_length)
+            return
+        if action in {"list", "ls"}:
+            skills = await self.bridge.skill_store.list_skills()
+            text = "\n".join(f"{skill.scope}:{skill.name} - {skill.title}" for skill in skills)
+            await _reply_text_chunks(
+                update.effective_message,
+                text or "No skills found.",
+                self.bridge.config.telegram.max_message_length,
+            )
+            return
+        if action in {"sync", "refresh"}:
+            try:
+                statuses = await self.bridge.skill_store.sync_external_sources(force=True)
+            except Exception as exc:
+                await update.effective_message.reply_text(str(exc))
+                return
+            text = "External skill sources synced:\n" + "\n".join(f"- {status}" for status in statuses)
+            await _reply_text_chunks(update.effective_message, text, self.bridge.config.telegram.max_message_length)
+            return
+        await update.effective_message.reply_text("Usage: /skills status|list|sync")
+
     async def runs(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
             return
@@ -1608,6 +1647,7 @@ def _telegram_help_text() -> str:
             "/schedule examples|list|add ... - Manage recurring runs",
             "/heartbeat status|once|start|stop - Recurring check-ins",
             "/memory status|list|search|add|forget - Manage persistent memory",
+            "/skills status|list|sync - Manage skill catalogues",
             "/cancel - Cancel the active generation",
             "/stop - Cancel the active generation",
             "/shutdown - Shut down the daemon/bridge",
@@ -1640,6 +1680,7 @@ def telegram_command_specs() -> Sequence[tuple[str, str]]:
         ("schedule", "Manage recurring runs"),
         ("heartbeat", "Recurring check-ins"),
         ("memory", "Manage persistent memory"),
+        ("skills", "Manage skill catalogues"),
         ("cancel", "Cancel active generation"),
         ("stop", "Cancel active generation"),
         ("shutdown", "Shut down Libre Claw"),

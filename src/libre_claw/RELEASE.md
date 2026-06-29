@@ -77,6 +77,11 @@ First shippable Libre Claw release, built by Kroonen AI.
   daemon agent runs. Libre Claw now ships a bundled read-only
   `hacker-news-brief` skill, and generated skills use an AgentSkills-compatible
   template with prerequisites, procedure, pitfalls, and verification sections.
+- Optional Vercel Skills ecosystem integration with `[skills]` config,
+  external catalogue caching for `vercel-labs/skills`, `/skills sync`,
+  Telegram `/skills status|list|sync`, and a read-only `skills_search` tool
+  the agent can use to discover specialized AgentSkills workflows when external
+  discovery is explicitly enabled.
 - Soul/persona system with `~/.libre-claw/SOUL.md`, project
   `.libre-claw/SOUL.md`, and project-root `SOUL.md` injection across TUI,
   Telegram, and daemon agent runs, plus `/soul status|show|init|reload`.
@@ -130,7 +135,8 @@ First shippable Libre Claw release, built by Kroonen AI.
   `search_files`, `git_status`, `git_commit`, `think`, `browser_navigate`,
   `browser_read`, `browser_extract`, `browser_execute`,
   `browser_dismiss_cookies`, `browser_click`, `browser_type`, `browser_wait`,
-  `browser_download`, `browser_screenshot`, `web_search`, `http_request`, and `bash` tools,
+  `browser_download`, `browser_screenshot`, `web_search`, `http_request`,
+  `skills_search`, and `bash` tools,
   with bounded reads/listing/search, atomic writes/edits, occurrence targeting,
   diffs, git inspection/commit support, persistent browser profiles, browser
   artifact capture with graceful dependency errors, direct HTTP fetches,

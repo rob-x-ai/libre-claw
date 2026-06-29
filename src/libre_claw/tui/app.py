@@ -852,7 +852,7 @@ class LibreClawApp(App[None]):
         self._theme = tui_theme_palette(self.config.general.theme)
         self.session = Session()
         self.memory_store = MemoryStore()
-        self.skill_store = SkillStore(self.config.general.working_directory)
+        self.skill_store = SkillStore(self.config.general.working_directory, skills_config=self.config.skills)
         self.soul_store = SoulStore(self.config.general.working_directory)
         self.run_store = RunStore()
         self.automation_store = AutomationStore(self.config.automations.root)
@@ -2843,6 +2843,15 @@ class LibreClawApp(App[None]):
             self._append_system(_skills_list_text(skills))
             return
 
+        if action == "sync":
+            try:
+                statuses = await self.skill_store.sync_external_sources(force=True)
+            except SkillError as exc:
+                self._append_system(str(exc))
+                return
+            self._append_system("External skill sources synced:\n" + "\n".join(f"- {status}" for status in statuses))
+            return
+
         if action == "show":
             skills = await self.skill_store.list_skills()
             name = str(parsed.get("name", ""))
@@ -2857,7 +2866,8 @@ class LibreClawApp(App[None]):
                 return
             if len(matches) > 1:
                 self._append_system(
-                    f"Skill name exists in multiple scopes; use `/skills show --user {name}` "
+                    f"Skill name exists in multiple scopes; use `/skills show --bundled {name}`, "
+                    f"`/skills show --external {name}`, `/skills show --user {name}`, "
                     f"or `/skills show --project {name}`."
                 )
                 return
@@ -3527,7 +3537,7 @@ class LibreClawApp(App[None]):
 
     def _set_working_directory(self, path: Path) -> None:
         self.config = _replace_general(self.config, working_directory=path)
-        self.skill_store = SkillStore(self.config.general.working_directory)
+        self.skill_store = SkillStore(self.config.general.working_directory, skills_config=self.config.skills)
         self.soul_store = SoulStore(self.config.general.working_directory)
         self.query_one("#file-tree", DirectoryTree).path = self.config.general.working_directory
         self.query_one("#sidebar-root", Static).update(self._sidebar_root_text())
@@ -4078,6 +4088,7 @@ class LibreClawApp(App[None]):
             query = lowered.removeprefix("/skills ").strip()
             suggestions = [
                 SlashCommand("/skills list", "/skills list", "List user and project skills"),
+                SlashCommand("/skills sync", "/skills sync", "Refresh external skill catalogues"),
                 SlashCommand("/skills show ", "/skills show <name>", "Show one skill"),
                 SlashCommand("/skills add --user ", "/skills add --user <name> <markdown>", "Add a global user skill"),
                 SlashCommand("/skills add --project ", "/skills add --project <name> <markdown>", "Add a project skill"),
@@ -4529,6 +4540,7 @@ def _replace_general(config: LibreClawConfig, **changes: Any) -> LibreClawConfig
         browser=config.browser,
         petdex=config.petdex,
         mcp=config.mcp,
+        skills=config.skills,
         providers=config.providers,
         source_paths=config.source_paths,
     )
@@ -4862,26 +4874,35 @@ def _parse_skills_command(argument: str) -> dict[str, object]:
         return {"action": "list"}
     action = tokens.pop(0).lower()
     scope: SkillScope | None = None
-    if tokens and tokens[0] in {"--user", "--project"}:
-        scope = "project" if tokens.pop(0) == "--project" else "user"
+    if tokens and tokens[0] in {"--bundled", "--external", "--user", "--project"}:
+        raw_scope = tokens.pop(0)
+        scope = raw_scope.removeprefix("--")  # type: ignore[assignment]
 
     if action in {"list", "ls"}:
         return {"action": "list"}
+    if action in {"sync", "refresh"}:
+        return {"action": "sync"}
     if action == "show":
         if not tokens:
-            raise SkillError("Usage: /skills show [--user|--project] <name>")
+            raise SkillError("Usage: /skills show [--bundled|--external|--user|--project] <name>")
         return {"action": "show", "scope": scope, "name": tokens[0]}
     if action == "add":
+        if scope in {"bundled", "external"}:
+            raise SkillError("Bundled and external skills are read-only; add a user or project override.")
         if not tokens:
             raise SkillError("Usage: /skills add [--user|--project] <name> [markdown]")
         name = tokens.pop(0)
         return {"action": "add", "scope": scope or "user", "name": name, "content": " ".join(tokens)}
     if action == "edit":
+        if scope in {"bundled", "external"}:
+            raise SkillError("Bundled and external skills are read-only; edit a user or project override.")
         if len(tokens) < 2:
             raise SkillError("Usage: /skills edit [--user|--project] <name> <markdown>")
         name = tokens.pop(0)
         return {"action": "edit", "scope": scope, "name": name, "content": " ".join(tokens)}
     if action in {"delete", "del", "rm"}:
+        if scope in {"bundled", "external"}:
+            raise SkillError("Bundled and external skills are read-only.")
         if not tokens:
             raise SkillError("Usage: /skills delete [--user|--project] <name>")
         return {"action": "delete", "scope": scope, "name": tokens[0]}
@@ -4893,12 +4914,13 @@ def _skills_help_text() -> str:
         [
             "Usage:",
             "/skills list",
-            "/skills show [--user|--project] <name>",
+            "/skills sync",
+            "/skills show [--bundled|--external|--user|--project] <name>",
             "/skills add [--user|--project] <name> [markdown]",
             "/skills edit [--user|--project] <name> <markdown>",
             "/skills delete [--user|--project] <name>",
             "",
-            "Bundled skills are read-only. Add a user or project skill with the same workflow to customize behavior.",
+            "Bundled and external skills are read-only. Add a user or project skill with the same workflow to customize behavior.",
         ]
     )
 

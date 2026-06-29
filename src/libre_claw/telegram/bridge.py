@@ -144,7 +144,7 @@ class TelegramBridge:
         self.config = config
         self.memory_store = memory_store or MemoryStore()
         self.daemon_client = daemon_client
-        self.skill_store = SkillStore(config.general.working_directory)
+        self.skill_store = SkillStore(config.general.working_directory, skills_config=config.skills)
         self.soul_store = SoulStore(config.general.working_directory)
         self.automation_store = AutomationStore(config.automations.root)
         self.run_store = RunStore()

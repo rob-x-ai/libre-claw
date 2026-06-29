@@ -184,6 +184,25 @@ class WebSearchConfig:
 
 
 @dataclass(frozen=True)
+class SkillsConfig:
+    enabled: bool
+    include_bundled: bool
+    include_user: bool
+    include_project: bool
+    max_relevant: int
+    external_discovery_enabled: bool
+    external_auto_refresh: bool
+    external_cache_dir: Path
+    external_refresh_seconds: int
+    vercel_source_enabled: bool
+    vercel_repo_url: str
+    vercel_ref: str
+    cli_enabled: bool
+    cli_command: str
+    cli_timeout: int
+
+
+@dataclass(frozen=True)
 class PetdexConfig:
     enabled: bool
     base_url: str
@@ -222,6 +241,7 @@ class LibreClawConfig:
     daemon: DaemonConfig
     automations: AutomationsConfig
     browser: BrowserConfig
+    skills: SkillsConfig
     petdex: PetdexConfig
     mcp: MCPConfig
     providers: Mapping[str, Mapping[str, Any]]
@@ -522,7 +542,7 @@ def _load_default_config() -> ConfigTable:
                 "glob, search_files, git_status, git_commit, think, browser_navigate, "
                 "browser_read, browser_extract, browser_execute, browser_dismiss_cookies, "
                 "browser_click, browser_type, browser_wait, browser_download, browser_screenshot, "
-                "web_search, http_request, and bash."
+                "web_search, http_request, skills_search, and bash."
             ),
             "system_prompt_extra": "",
         },
@@ -662,6 +682,7 @@ def _load_default_config() -> ConfigTable:
                 "bash",
                 "web_search",
                 "http_request",
+                "skills_search",
                 "read_file",
                 "list_directory",
                 "search_files",
@@ -704,6 +725,23 @@ def _load_default_config() -> ConfigTable:
             "default_safesearch": 0,
             "default_categories": ["general"],
             "default_engines": [],
+        },
+        "skills": {
+            "enabled": True,
+            "include_bundled": True,
+            "include_user": True,
+            "include_project": True,
+            "max_relevant": 5,
+            "external_discovery_enabled": False,
+            "external_auto_refresh": True,
+            "external_cache_dir": "~/.libre-claw/skills/catalogs",
+            "external_refresh_seconds": 86400,
+            "vercel_source_enabled": True,
+            "vercel_repo_url": "https://github.com/vercel-labs/skills.git",
+            "vercel_ref": "main",
+            "cli_enabled": True,
+            "cli_command": "npx -y skills@latest",
+            "cli_timeout": 45,
         },
         "mcp": {
             "enabled": False,
@@ -941,6 +979,7 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
     automations = _section(data, "automations")
     browser = _section(data, "browser")
     web_search = _section(data, "web_search")
+    skills = _section(data, "skills")
     petdex = _section(data, "petdex")
     mcp = _section(data, "mcp")
 
@@ -1053,6 +1092,23 @@ def _build_config(data: Mapping[str, Any], source_paths: tuple[Path, ...]) -> Li
             screenshots_dir=_path(browser, "screenshots_dir"),
             default_timeout_ms=_int(browser, "default_timeout_ms"),
             headless=_bool(browser, "headless"),
+        ),
+        skills=SkillsConfig(
+            enabled=_bool(skills, "enabled"),
+            include_bundled=_bool(skills, "include_bundled"),
+            include_user=_bool(skills, "include_user"),
+            include_project=_bool(skills, "include_project"),
+            max_relevant=max(1, _int(skills, "max_relevant")),
+            external_discovery_enabled=_bool(skills, "external_discovery_enabled"),
+            external_auto_refresh=_bool(skills, "external_auto_refresh"),
+            external_cache_dir=_path(skills, "external_cache_dir"),
+            external_refresh_seconds=max(60, _int(skills, "external_refresh_seconds")),
+            vercel_source_enabled=_bool(skills, "vercel_source_enabled"),
+            vercel_repo_url=_str(skills, "vercel_repo_url"),
+            vercel_ref=_str(skills, "vercel_ref"),
+            cli_enabled=_bool(skills, "cli_enabled"),
+            cli_command=_str(skills, "cli_command"),
+            cli_timeout=max(5, _int(skills, "cli_timeout")),
         ),
         petdex=PetdexConfig(
             enabled=_bool(petdex, "enabled"),

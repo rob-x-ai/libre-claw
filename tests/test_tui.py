@@ -825,6 +825,12 @@ async def test_goal_commands_update_session_limit_and_report_status(monkeypatch,
 
 def test_skills_command_parser_handles_scopes_and_content() -> None:
     assert _parse_skills_command("") == {"action": "list"}
+    assert _parse_skills_command("sync") == {"action": "sync"}
+    assert _parse_skills_command("show --external find-skills") == {
+        "action": "show",
+        "scope": "external",
+        "name": "find-skills",
+    }
     assert _parse_skills_command("add --project release-flow run pytest") == {
         "action": "add",
         "scope": "project",

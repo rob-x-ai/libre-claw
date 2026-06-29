@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from libre_claw.config import SkillsConfig
 from libre_claw.core.skills import SkillError, SkillStore, normalize_skill_name
 
 
@@ -170,3 +171,72 @@ async def test_project_skill_overrides_bundled_even_when_template_scores_higher(
     assert len(matches) == 1
     assert "Private Server Monitor" in matches[0]
     assert "<LATITUDE>,<LONGITUDE>" not in matches[0]
+
+
+async def test_external_vercel_style_catalog_is_loaded_from_cache(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    cache = tmp_path / "catalogs"
+    skill_path = cache / "vercel-labs-skills" / "skills" / "find-skills" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text(
+        "\n".join(
+            [
+                "---",
+                "description: Find installable agent skills.",
+                "---",
+                "# Find Skills",
+                "",
+                "Use this when a specialized task needs an existing skill.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config = SkillsConfig(
+        enabled=True,
+        include_bundled=False,
+        include_user=False,
+        include_project=False,
+        max_relevant=5,
+        external_discovery_enabled=True,
+        external_auto_refresh=False,
+        external_cache_dir=cache,
+        external_refresh_seconds=86400,
+        vercel_source_enabled=True,
+        vercel_repo_url="https://github.com/vercel-labs/skills.git",
+        vercel_ref="main",
+        cli_enabled=True,
+        cli_command="npx -y skills@latest",
+        cli_timeout=45,
+    )
+    store = SkillStore(tmp_path / "project", skills_config=config)
+
+    skills = await store.list_skills()
+    matches = store.relevant_skill_texts("find an installable skill for react performance", limit=2)
+
+    assert [skill.scope for skill in skills] == ["external"]
+    assert skills[0].name == "find-skills"
+    assert "Find Skills" in matches[0]
+
+
+async def test_external_catalog_sync_requires_opt_in(tmp_path: Path) -> None:
+    config = SkillsConfig(
+        enabled=True,
+        include_bundled=False,
+        include_user=False,
+        include_project=False,
+        max_relevant=5,
+        external_discovery_enabled=False,
+        external_auto_refresh=True,
+        external_cache_dir=tmp_path / "catalogs",
+        external_refresh_seconds=86400,
+        vercel_source_enabled=True,
+        vercel_repo_url="https://github.com/vercel-labs/skills.git",
+        vercel_ref="main",
+        cli_enabled=True,
+        cli_command="npx -y skills@latest",
+        cli_timeout=45,
+    )
+    store = SkillStore(tmp_path / "project", skills_config=config)
+
+    with pytest.raises(SkillError, match="external_discovery_enabled"):
+        await store.sync_external_sources(force=True)

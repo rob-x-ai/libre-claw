@@ -674,6 +674,7 @@ class DaemonServer:
             browser=self.config.browser,
             petdex=self.config.petdex,
             mcp=self.config.mcp,
+            skills=self.config.skills,
             providers=self.config.providers,
             source_paths=self.config.source_paths,
         )
@@ -984,6 +985,7 @@ class DaemonServer:
             browser=self.config.browser,
             petdex=self.config.petdex,
             mcp=self.config.mcp,
+            skills=self.config.skills,
             providers=self.config.providers,
             source_paths=self.config.source_paths,
         )
@@ -1018,7 +1020,7 @@ class DaemonServer:
         provider = self.provider_factory(config)
         fallbacks = create_fallback_providers(config)
         memory_facts = await self.memory_store.list_always_injected_memories()
-        skill_store = SkillStore(config.general.working_directory)
+        skill_store = SkillStore(config.general.working_directory, skills_config=config.skills)
         soul_store = SoulStore(config.general.working_directory)
         permission_manager = PermissionManager(config.permissions)
         if surface.startswith("automation:"):

@@ -34,6 +34,7 @@ from libre_claw.tools_builtin.git import GitCommitTool, GitStatusTool
 from libre_claw.tools_builtin.http import HTTPRequestTool
 from libre_claw.tools_builtin.search import GlobTool, SearchFilesTool
 from libre_claw.tools_builtin.shell import BashTool
+from libre_claw.tools_builtin.skills import SkillsSearchTool
 from libre_claw.tools_builtin.think import ThinkTool
 from libre_claw.tools_builtin.web_search import WebSearchTool
 
@@ -112,6 +113,7 @@ def test_builtin_registry_exposes_production_toolset(tmp_path: Path) -> None:
         "browser_screenshot",
         "web_search",
         "http_request",
+        "skills_search",
         "bash",
     }.issubset(names)
 
@@ -527,6 +529,39 @@ async def test_web_search_validates_inputs(tmp_path: Path) -> None:
     assert (await tool.execute(query="x", page=0)).error == "page must be >= 1"
 
 
+async def test_skills_search_uses_configured_cli(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_create_subprocess_exec(*args: str, **kwargs: object) -> "FakeSkillSearchProcess":
+        calls.append(args)
+        assert kwargs["cwd"] == tmp_path
+        return FakeSkillSearchProcess(stdout=b"web-design-guidelines 120000 installs\n")
+
+    monkeypatch.setattr("libre_claw.tools_builtin.skills.asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+    ctx = ToolContext(
+        working_directory=tmp_path,
+        restrict_to_working_dir=True,
+        command_timeout=120,
+        allow_sudo=False,
+        blocked_patterns=(),
+        skills_external_discovery_enabled=True,
+        skills_cli_command="npx -y skills@latest",
+    )
+
+    result = await SkillsSearchTool(ctx).execute(query="web design", owner="vercel-labs")
+
+    assert result.error is None
+    assert "skills_search: web design" in result.content
+    assert "web-design-guidelines" in result.content
+    assert calls == [("npx", "-y", "skills@latest", "find", "web design", "--owner", "vercel-labs")]
+
+
+async def test_skills_search_requires_external_discovery(tmp_path: Path) -> None:
+    result = await SkillsSearchTool(context(tmp_path)).execute(query="react")
+
+    assert result.error == "skills_search is disabled by [skills].external_discovery_enabled"
+
+
 async def test_browser_tools_gracefully_handle_missing_session_or_dependency(monkeypatch, tmp_path: Path) -> None:
     def missing_playwright(name: str):
         raise ModuleNotFoundError(name)
@@ -698,6 +733,22 @@ class FakeWebSearchClient:
     async def get(self, url: str, **kwargs: object) -> FakeWebSearchResponse:
         self.last_request = {"url": url, **kwargs}
         return self.response
+
+
+class FakeSkillSearchProcess:
+    def __init__(self, stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0) -> None:
+        self._stdout = stdout
+        self._stderr = stderr
+        self.returncode = returncode
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        return self._stdout, self._stderr
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+    async def wait(self) -> int:
+        return self.returncode
 
 
 class FakePage:

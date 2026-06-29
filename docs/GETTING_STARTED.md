@@ -101,6 +101,29 @@ and searchable memory lives in `~/.libre-claw/memory.db`. Use `/memory list`,
 `/memory search <query>`, `/memory add <text>`, and `/memory forget <id>` when
 you want to inspect or steer what gets remembered.
 
+Skills are loaded from bundled, global, and project-local `SKILL.md` files. For
+specialized workflows you can add project skills under
+`<project>/.libre-claw/skills/`, or opt into the Vercel Skills ecosystem so the
+agent can discover relevant external skills when local playbooks are not enough:
+
+```toml
+[skills]
+external_discovery_enabled = true
+cli_command = "npx -y skills@latest"
+```
+
+Then sync and inspect from the TUI or Telegram:
+
+```text
+/skills sync
+/skills list
+/skills show --external find-skills
+```
+
+External skills are cached locally under `~/.libre-claw/skills/catalogs/` and
+remain read-only until you copy or adapt one into your own global/project skill
+folder.
+
 ## 6. Optional: Telegram
 
 Create a bot with BotFather, then set up Libre Claw with your numeric Telegram

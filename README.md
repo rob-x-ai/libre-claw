@@ -21,7 +21,7 @@ Current release: Version `0.1.0`.
 | Telegram bridge | Talk to the same agent from Telegram, approve tools inline, and receive scheduled reports. |
 | Durable runs | Every task gets a run ID, JSONL event log, summary, verification notes, and optional diff. |
 | Local dashboard | Start, inspect, cancel, and approve daemon-owned runs from a browser on localhost. |
-| Memory and skills | Local persistent memory, `SOUL.md` persona files, and user/project `SKILL.md` workflows. |
+| Memory and skills | Local persistent memory, `SOUL.md` persona files, user/project `SKILL.md` workflows, and optional Vercel Skills discovery. |
 | Real tools | File edits, shell, code search, web search, git, HTTP requests, browser actions, screenshots, MCP tools, and more. |
 | Provider routing | OpenRouter, Ollama/Ollama Cloud, Anthropic, OpenAI, Codex OAuth, and local-compatible endpoints. |
 | Petdex companion | Optional local state updates for the Petdex desktop companion app. |
@@ -405,7 +405,21 @@ Libre Claw loads reusable skills from:
 <project>/.libre-claw/skills/
 ```
 
-AgentSkills-style packages with `SKILL.md` are supported.
+AgentSkills-style packages with `SKILL.md` are supported. Libre Claw can also
+opt into the open Vercel Skills ecosystem by caching
+[`vercel-labs/skills`](https://github.com/vercel-labs/skills) and exposing a
+read-only `skills_search` tool to the agent.
+
+Enable external skill discovery in `~/.libre-claw/config.toml`:
+
+```toml
+[skills]
+enabled = true
+external_discovery_enabled = true
+external_auto_refresh = true
+vercel_source_enabled = true
+cli_command = "npx -y skills@latest"
+```
 
 Persona files are loaded from:
 
@@ -419,12 +433,17 @@ Useful commands:
 
 ```text
 /skills list
+/skills sync
 /skills show <name>
+/skills show --external find-skills
 /skills add --project <name>
 /soul status
 /soul init --project
 /soul show
 ```
+
+See [docs/VERCEL_SKILLS_INTEGRATION.md](docs/VERCEL_SKILLS_INTEGRATION.md) for
+the full Vercel Skills setup and maintenance notes.
 
 ### Scheduled Work And Heartbeats
 
@@ -597,6 +616,7 @@ api_key_env = ""
 - Docs: [libreclaw.sh/docs](https://libreclaw.sh/docs/)
 - Getting started: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
 - SearXNG integration: [docs/SEARXNG_INTEGRATION.md](docs/SEARXNG_INTEGRATION.md)
+- Vercel Skills integration: [docs/VERCEL_SKILLS_INTEGRATION.md](docs/VERCEL_SKILLS_INTEGRATION.md)
 - Security: [SECURITY.md](SECURITY.md)
 - Roadmap: [ROADMAP.md](ROADMAP.md)
 - Demos: [docs/DEMOS.md](docs/DEMOS.md)

@@ -32,7 +32,7 @@ RULES:
 - Never delete files or run destructive commands without explicit user approval.
 - When you're done, summarize what you changed and why.
 
-Current toolset: read_file, write_file, edit_file, list_directory, glob, search_files, git_status, git_commit, think, browser_navigate, browser_read, browser_extract, browser_execute, browser_dismiss_cookies, browser_click, browser_type, browser_wait, browser_download, browser_screenshot, web_search, http_request, and bash.
+Current toolset: read_file, write_file, edit_file, list_directory, glob, search_files, git_status, git_commit, think, browser_navigate, browser_read, browser_extract, browser_execute, browser_dismiss_cookies, browser_click, browser_type, browser_wait, browser_download, browser_screenshot, web_search, http_request, skills_search, and bash.
 """
 system_prompt_extra = ""
 # Persona customization is loaded from ~/.libre-claw/SOUL.md,
@@ -163,6 +163,25 @@ max_injected_tokens = 1200
 redact_secrets = true
 archive_sessions = true
 
+[skills]
+enabled = true
+include_bundled = true
+include_user = true
+include_project = true
+max_relevant = 5
+# When true, Libre Claw can refresh a local Vercel Skills-compatible catalogue
+# and expose the read-only skills_search tool to the agent.
+external_discovery_enabled = false
+external_auto_refresh = true
+external_cache_dir = "~/.libre-claw/skills/catalogs"
+external_refresh_seconds = 86400
+vercel_source_enabled = true
+vercel_repo_url = "https://github.com/vercel-labs/skills.git"
+vercel_ref = "main"
+cli_enabled = true
+cli_command = "npx -y skills@latest"
+cli_timeout = 45
+
 [daemon]
 host = "127.0.0.1"
 port = 8766
@@ -178,6 +197,7 @@ auto_approve_tools = [
   "bash",
   "web_search",
   "http_request",
+  "skills_search",
   "read_file",
   "list_directory",
   "search_files",
