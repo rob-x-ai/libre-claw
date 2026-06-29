@@ -528,6 +528,7 @@ def _load_default_config() -> ConfigTable:
                 "listing directories, searching code, inspecting git, browsing web pages, "
                 "extracting browser data, running browser JavaScript, searching the web through SearXNG, "
                 "fetching HTTP URLs/APIs, "
+                "creating and updating Libre Claw schedules, "
                 "clicking and typing in browser pages, downloading browser files, "
                 "thinking through plans, and running shell commands.\n\n"
                 "RULES:\n"
@@ -542,7 +543,7 @@ def _load_default_config() -> ConfigTable:
                 "glob, search_files, git_status, git_commit, think, browser_navigate, "
                 "browser_read, browser_extract, browser_execute, browser_dismiss_cookies, "
                 "browser_click, browser_type, browser_wait, browser_download, browser_screenshot, "
-                "web_search, http_request, skills_search, and bash."
+                "web_search, http_request, schedule_list, schedule, skills_search, and bash."
             ),
             "system_prompt_extra": "",
         },

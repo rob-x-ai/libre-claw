@@ -123,6 +123,8 @@ def test_config_defaults_load_successfully(monkeypatch, tmp_path: Path) -> None:
     assert "browser_execute" in config.agent.system_prompt
     assert "web_search" in config.agent.system_prompt
     assert "http_request" in config.agent.system_prompt
+    assert "schedule_list" in config.agent.system_prompt
+    assert "schedule" in config.agent.system_prompt
     assert "skills_search" in config.agent.system_prompt
     assert config.agent.system_prompt_extra == ""
     assert "curl | bash" in config.sandbox.blocked_patterns

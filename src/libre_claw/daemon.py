@@ -478,10 +478,19 @@ class DaemonServer:
             state="queued",
         )
         surface = str(payload.get("surface", "daemon")).strip() or "daemon"
+        telegram_chat_id = _optional_int(payload.get("telegram_chat_id")) if "telegram_chat_id" in payload else None
         session = session_from_payload(payload.get("session"))
         attachments = _attachments_from_payload(payload.get("attachments"))
         task = asyncio.create_task(
-            self._run_agent(run, message, run_config, surface=surface, session=session, attachments=attachments)
+            self._run_agent(
+                run,
+                message,
+                run_config,
+                surface=surface,
+                session=session,
+                attachments=attachments,
+                telegram_chat_id=telegram_chat_id,
+            )
         )
         active = ActiveRun(run_id=run.run_id, task=task)
         self.active_runs[run.run_id] = active
@@ -690,6 +699,7 @@ class DaemonServer:
         hold_final_state: bool = False,
         session: Session | None = None,
         attachments: tuple[UserAttachment, ...] = (),
+        telegram_chat_id: int | None = None,
     ) -> RunState:
         assistant_chunks: list[str] = []
         state: RunState = "done"
@@ -710,6 +720,7 @@ class DaemonServer:
                     "model": run.model,
                     "working_directory": run.working_directory,
                     "surface": surface,
+                    "telegram_chat_id": telegram_chat_id,
                 },
             )
             await self.run_store.append_event(
@@ -720,7 +731,7 @@ class DaemonServer:
                     "attachments": [_attachment_metadata(attachment) for attachment in attachments],
                 },
             )
-            agent = await self._create_agent(config, session=session, surface=surface)
+            agent = await self._create_agent(config, session=session, surface=surface, telegram_chat_id=telegram_chat_id)
             async for event in agent.run(message, attachments=attachments):
                 if isinstance(event, AgentTextDelta):
                     assistant_chunks.append(event.text)
@@ -1016,7 +1027,14 @@ class DaemonServer:
             browser="",
         )
 
-    async def _create_agent(self, config: LibreClawConfig, *, session: Session | None = None, surface: str = "daemon") -> Agent:
+    async def _create_agent(
+        self,
+        config: LibreClawConfig,
+        *,
+        session: Session | None = None,
+        surface: str = "daemon",
+        telegram_chat_id: int | None = None,
+    ) -> Agent:
         provider = self.provider_factory(config)
         fallbacks = create_fallback_providers(config)
         memory_facts = await self.memory_store.list_always_injected_memories()
@@ -1037,7 +1055,11 @@ class DaemonServer:
             provider_retry_attempts=config.agent.provider_retry_attempts,
             provider_retry_initial_delay=config.agent.provider_retry_initial_delay,
             memory_facts=memory_facts,
-            system_prompt_extra=_surface_prompt_extra(config.agent.system_prompt_extra, surface),
+            system_prompt_extra=_surface_prompt_extra(
+                config.agent.system_prompt_extra,
+                surface,
+                telegram_chat_id=telegram_chat_id,
+            ),
             skill_provider=skill_store.relevant_skill_texts,
             soul_provider=soul_store.soul_texts,
             memory_provider=lambda user_message: self._relevant_memory_texts(config, user_message),
@@ -1329,12 +1351,18 @@ def _telegram_token_available(config: LibreClawConfig) -> bool:
     return bool(lookup.value)
 
 
-def _surface_prompt_extra(existing: str, surface: str) -> str:
+def _surface_prompt_extra(existing: str, surface: str, *, telegram_chat_id: int | None = None) -> str:
     parts = [existing.strip()] if existing.strip() else []
     if surface.startswith("automation:"):
         parts.append(AUTOMATION_DAEMON_PROMPT_EXTRA)
     if surface.startswith("telegram") or surface == "automation:telegram":
         parts.append(TELEGRAM_DAEMON_PROMPT_EXTRA)
+        if telegram_chat_id is not None:
+            parts.append(
+                "Current Telegram chat id: "
+                f"{telegram_chat_id}. When creating a schedule that should notify this chat, "
+                "use route='telegram' and this telegram_chat_id."
+            )
     return "\n\n".join(parts)
 
 

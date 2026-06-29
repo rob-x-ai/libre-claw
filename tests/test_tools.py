@@ -32,6 +32,7 @@ from libre_claw.tools_builtin.browser import (
 from libre_claw.tools_builtin.filesystem import EditFileTool, ListDirectoryTool, ReadFileTool, WriteFileTool
 from libre_claw.tools_builtin.git import GitCommitTool, GitStatusTool
 from libre_claw.tools_builtin.http import HTTPRequestTool
+from libre_claw.tools_builtin.schedule import ScheduleListTool, ScheduleTool
 from libre_claw.tools_builtin.search import GlobTool, SearchFilesTool
 from libre_claw.tools_builtin.shell import BashTool
 from libre_claw.tools_builtin.skills import SkillsSearchTool
@@ -113,6 +114,8 @@ def test_builtin_registry_exposes_production_toolset(tmp_path: Path) -> None:
         "browser_screenshot",
         "web_search",
         "http_request",
+        "schedule_list",
+        "schedule",
         "skills_search",
         "bash",
     }.issubset(names)
@@ -560,6 +563,85 @@ async def test_skills_search_requires_external_discovery(tmp_path: Path) -> None
     result = await SkillsSearchTool(context(tmp_path)).execute(query="react")
 
     assert result.error == "skills_search is disabled by [skills].external_discovery_enabled"
+
+
+async def test_schedule_tool_creates_updates_and_deletes_automation(tmp_path: Path) -> None:
+    automations_root = tmp_path / "automations"
+    tool_context = ToolContext(
+        working_directory=tmp_path,
+        automations_root=automations_root,
+        default_provider="openrouter",
+        default_model="openrouter/auto",
+    )
+    tool = ScheduleTool(tool_context)
+
+    created = await tool.execute(
+        action="create",
+        name="Daily forecast",
+        schedule="daily 08:00",
+        prompt="Send a compact weather forecast.",
+        route="report",
+    )
+
+    assert created.error is None
+    automation = created.metadata["automation"]
+    automation_id = automation["automation_id"]
+    assert automation["provider"] == "openrouter"
+    assert automation["model"] == "openrouter/auto"
+    assert automation["schedule"] == "daily 08:00"
+
+    listed = await ScheduleListTool(tool_context).execute()
+    assert listed.error is None
+    assert automation_id in listed.content
+    assert listed.metadata["count"] == 1
+
+    updated = await tool.execute(
+        action="update",
+        automation_id=automation_id,
+        schedule="0 8 * * *",
+        model="deepseek/deepseek-v4-flash",
+    )
+
+    assert updated.error is None
+    assert updated.metadata["automation"]["schedule"] == "0 8 * * *"
+    assert updated.metadata["automation"]["model"] == "deepseek/deepseek-v4-flash"
+    assert updated.metadata["automation"]["route"] == "report"
+
+    paused = await tool.execute(action="pause", automation_id=automation_id)
+    assert paused.error is None
+    assert paused.metadata["automation"]["status"] == "paused"
+
+    resumed = await tool.execute(action="resume", automation_id=automation_id)
+    assert resumed.error is None
+    assert resumed.metadata["automation"]["status"] == "active"
+
+    deleted = await tool.execute(action="delete", automation_id=automation_id)
+    assert deleted.error is None
+    assert deleted.metadata["deleted"] is True
+
+
+async def test_schedule_tool_requires_telegram_chat_for_telegram_route(tmp_path: Path) -> None:
+    tool = ScheduleTool(ToolContext(working_directory=tmp_path, automations_root=tmp_path / "automations"))
+
+    missing_chat = await tool.execute(
+        action="create",
+        name="Telegram forecast",
+        schedule="daily 08:00",
+        prompt="Send the forecast.",
+        route="telegram",
+    )
+    with_chat = await tool.execute(
+        action="create",
+        name="Telegram forecast",
+        schedule="daily 08:00",
+        prompt="Send the forecast.",
+        route="telegram",
+        telegram_chat_id="42",
+    )
+
+    assert missing_chat.error == "telegram_chat_id is required when route is telegram"
+    assert with_chat.error is None
+    assert with_chat.metadata["automation"]["telegram_chat_id"] == 42
 
 
 async def test_browser_tools_gracefully_handle_missing_session_or_dependency(monkeypatch, tmp_path: Path) -> None:

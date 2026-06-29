@@ -49,6 +49,9 @@ First shippable Libre Claw release, built by Kroonen AI.
 - Recurring local automations with `[automations]` config, `/schedule`
   commands, daemon due-run execution, cron-like schedules, saved Markdown
   reports, and route metadata for TUI, Telegram, or report workflows.
+- Agent-facing `schedule_list` and `schedule` tools let the model create,
+  update, pause, resume, and delete Libre Claw automations directly instead of
+  asking the user to install host cron, launchd, or systemd timers.
 - `/schedule examples` ships ready-made daily repo health check, weekly
   dependency review, and morning brief automation prompts.
 - Browser/computer-use upgrade with persistent Playwright profiles,
@@ -136,7 +139,7 @@ First shippable Libre Claw release, built by Kroonen AI.
   `browser_read`, `browser_extract`, `browser_execute`,
   `browser_dismiss_cookies`, `browser_click`, `browser_type`, `browser_wait`,
   `browser_download`, `browser_screenshot`, `web_search`, `http_request`,
-  `skills_search`, and `bash` tools,
+  `schedule_list`, `schedule`, `skills_search`, and `bash` tools,
   with bounded reads/listing/search, atomic writes/edits, occurrence targeting,
   diffs, git inspection/commit support, persistent browser profiles, browser
   artifact capture with graceful dependency errors, direct HTTP fetches,

@@ -335,6 +335,8 @@ Libre Claw ships with production-oriented tools for:
 - Browsing pages with persistent Playwright profiles.
 - Clicking, typing, waiting, extracting page data, dismissing cookie banners,
   taking screenshots, and saving downloads.
+- Creating, updating, pausing, resuming, deleting, and listing Libre Claw
+  schedules through the same permission system.
 - Calling configured MCP tools through the same permission system.
 
 Write/edit/shell/browser action tools ask first. Read-only tools are allowed by
@@ -456,6 +458,10 @@ Create recurring local runs:
 /schedule pause <id>
 /schedule resume <id>
 ```
+
+The agent can also create and edit Libre Claw schedules itself with the
+`schedule_list` and `schedule` tools. These are daemon automations, not host
+cron entries, so they stay portable across TUI, dashboard, and Telegram.
 
 Start lightweight periodic check-ins:
 

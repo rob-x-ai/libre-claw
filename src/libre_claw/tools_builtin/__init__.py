@@ -15,6 +15,7 @@ from libre_claw.tools_builtin import filesystem as _filesystem  # noqa: F401
 from libre_claw.tools_builtin import git as _git  # noqa: F401
 from libre_claw.tools_builtin import http as _http  # noqa: F401
 from libre_claw.tools_builtin import mcp as _mcp
+from libre_claw.tools_builtin import schedule as _schedule  # noqa: F401
 from libre_claw.tools_builtin import search as _search  # noqa: F401
 from libre_claw.tools_builtin import shell as _shell  # noqa: F401
 from libre_claw.tools_builtin import skills as _skills  # noqa: F401
@@ -46,6 +47,10 @@ def create_builtin_registry(config: LibreClawConfig, memory_store: MemoryStore |
         web_search_default_safesearch=config.web_search.default_safesearch,
         web_search_default_categories=config.web_search.default_categories,
         web_search_default_engines=config.web_search.default_engines,
+        automations_enabled=config.automations.enabled,
+        automations_root=config.automations.root,
+        default_provider=config.general.default_provider,
+        default_model=config.general.default_model,
         skills_enabled=config.skills.enabled,
         skills_external_discovery_enabled=config.skills.external_discovery_enabled,
         skills_cli_enabled=config.skills.cli_enabled,

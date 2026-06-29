@@ -43,6 +43,10 @@ class ToolContext:
     web_search_default_safesearch: int = 0
     web_search_default_categories: tuple[str, ...] = ("general",)
     web_search_default_engines: tuple[str, ...] = ()
+    automations_enabled: bool = True
+    automations_root: Path = Path("~/.libre-claw/automations")
+    default_provider: str = ""
+    default_model: str = ""
     skills_enabled: bool = True
     skills_external_discovery_enabled: bool = False
     skills_cli_enabled: bool = True
