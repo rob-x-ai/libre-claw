@@ -36,6 +36,7 @@ from libre_claw.telegram.handlers import (
     _provider_keyboard,
     _replace_general,
     _reply_text_chunks,
+    _spawn_lifecycle_restart,
     _safe_edit_text_preview,
     _stream_preview,
     _telegram_image_attachments,
@@ -203,7 +204,7 @@ def test_telegram_help_text_lists_slash_commands() -> None:
 
     assert "/help" in text
     assert "/start" in text
-    assert "/restart - Start a fresh chat session" in text
+    assert "/restart - Restart the Libre Claw daemon/Telegram stack" in text
     assert "/model - Open provider/model buttons" in text
     assert "/models - Open provider/model buttons" in text
     assert "/provider - Open provider buttons" in text
@@ -641,7 +642,7 @@ def test_telegram_command_specs_drive_bot_menu() -> None:
 
     assert commands["help"] == "Show Telegram slash commands"
     assert "start" in commands
-    assert commands["restart"] == "Start a fresh chat session"
+    assert commands["restart"] == "Restart Libre Claw"
     assert commands["models"] == "Open model configuration"
     assert commands["status"] == "Show model, context, tokens, and cost"
     assert commands["usage"] == "Show provider usage analytics"
@@ -655,6 +656,26 @@ def test_telegram_command_specs_drive_bot_menu() -> None:
     assert "schedule" in commands
     assert commands["heartbeat"] == "Recurring check-ins"
     assert commands["memory"] == "Manage persistent memory"
+
+
+def test_telegram_restart_spawns_cli_lifecycle_restart(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def fake_popen(command: list[str], **kwargs: Any) -> object:
+        calls.append((command, kwargs))
+        return object()
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("libre_claw.telegram.handlers._restart_entry_command", lambda: ["libre-claw"])
+    monkeypatch.setattr("libre_claw.telegram.handlers.subprocess.Popen", fake_popen)
+
+    log_path = _spawn_lifecycle_restart()
+
+    assert log_path == tmp_path / ".libre-claw" / "daemon.log"
+    assert calls[0][0] == ["libre-claw", "restart", "--force"]
+    assert calls[0][1]["cwd"] == tmp_path
+    assert calls[0][1]["start_new_session"] is True
 
 
 async def test_telegram_daemon_commands_report_remote_state(monkeypatch, tmp_path: Path) -> None:

@@ -41,7 +41,8 @@ First shippable Libre Claw release, built by Kroonen AI.
   daemon with `[telegram].use_daemon = true`, so approvals resume the same
   durable daemon run.
 - Telegram slash command menu now exposes daemon-aware remote commands for
-  usage, run history, run inspection, daemon health, and session restart.
+  usage, run history, run inspection, daemon health, session reset, and
+  full Libre Claw stack restart.
 - TUI and Telegram support `/btw` and `/steer` for adding steering notes to
   future agent turns without starting a new run.
 - Daemon run requests reject per-request `working_directory` overrides; the

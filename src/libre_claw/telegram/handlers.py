@@ -6,7 +6,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import mimetypes
+import os
 import re
+import subprocess
+import sys
 import time
 from collections.abc import Sequence
 from contextlib import suppress
@@ -169,6 +172,19 @@ class TelegramHandlers:
             return
         self.bridge.new_session(update.effective_chat.id)
         await update.effective_message.reply_text("Started a new Libre Claw session.")
+
+    async def restart(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._authorized(update):
+            return
+        try:
+            log_path = _spawn_lifecycle_restart()
+        except OSError as exc:
+            await update.effective_message.reply_text(f"Could not start Libre Claw restart: {exc}")
+            return
+        await update.effective_message.reply_text(
+            "Restart requested. Libre Claw will briefly disconnect and come back online.\n"
+            f"Log: {log_path}"
+        )
 
     async def cost(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._authorized(update):
@@ -1630,7 +1646,7 @@ def _telegram_help_text() -> str:
             "/start - Check that the bot is ready",
             "/help - Show this command list",
             "/new - Start a fresh chat session",
-            "/restart - Start a fresh chat session",
+            "/restart - Restart the Libre Claw daemon/Telegram stack",
             "/model - Open provider/model buttons",
             "/model <provider>:<name> - Switch model by text",
             "/models - Open provider/model buttons",
@@ -1664,7 +1680,7 @@ def telegram_command_specs() -> Sequence[tuple[str, str]]:
         ("start", "Check that Libre Claw is ready"),
         ("help", "Show Telegram slash commands"),
         ("new", "Start a fresh chat session"),
-        ("restart", "Start a fresh chat session"),
+        ("restart", "Restart Libre Claw"),
         ("model", "Open model configuration"),
         ("models", "Open model configuration"),
         ("fallback", "Manage fallback models"),
@@ -1693,6 +1709,30 @@ def _replace_general(config, **changes):
     from libre_claw.tui.app import _replace_general as replace_general
 
     return replace_general(config, **changes)
+
+
+def _spawn_lifecycle_restart() -> Path:
+    log_path = Path.home() / ".libre-claw" / "daemon.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    command = _restart_entry_command() + ["restart", "--force"]
+    with log_path.open("ab") as log_file:
+        subprocess.Popen(  # noqa: S603 - command is the current Libre Claw executable.
+            command,
+            cwd=Path.cwd(),
+            env=os.environ.copy(),
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    return log_path
+
+
+def _restart_entry_command() -> list[str]:
+    executable = Path(sys.argv[0])
+    if executable.exists() and os.access(executable, os.X_OK):
+        return [str(executable)]
+    return [sys.executable, "-m", "libre_claw"]
 
 
 def _canonical_telegram_provider(provider: str) -> str:
