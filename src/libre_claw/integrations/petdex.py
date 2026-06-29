@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from importlib import resources
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -89,17 +91,18 @@ class PetdexClient:
         if not token:
             return PetdexUpdateResult(ok=False, skipped=True, message=f"Petdex token is empty at {self.config.token_path}.")
 
+        _ensure_lobster_avatar_installed(self.config.token_path)
         state_payload: dict[str, Any] = {
             "state": petdex_state,
             "agent_source": self.config.source or "libre-claw",
         }
-        bubble_text = _bubble_text(message, details, prefix=self.config.bubble_prefix)
+        bubble_text = _bubble_text(message, details)
         auth_headers = {"x-petdex-update-token": token}
         bubble_payload = {
             "text": bubble_text,
             "agent_source": self.config.source or "libre-claw",
             "source_label": "Libre Claw",
-            "source_icon": self.config.bubble_prefix or "LC",
+            "source_icon": "agents/libre-claw.svg",
         }
 
         try:
@@ -190,7 +193,7 @@ def _to_petdex_state(state: str) -> str:
     return "running"
 
 
-def _bubble_text(message: str, details: Mapping[str, Any] | None, *, prefix: str = "") -> str:
+def _bubble_text(message: str, details: Mapping[str, Any] | None) -> str:
     parts: list[str] = []
     if message:
         parts.append(message)
@@ -203,11 +206,6 @@ def _bubble_text(message: str, details: Mapping[str, Any] | None, *, prefix: str
         elif tool:
             parts.append(str(tool))
     text = " · ".join(parts)
-    clean_prefix = prefix.strip()
-    if clean_prefix and text and not text.startswith(clean_prefix):
-        text = f"{clean_prefix} {text}"
-    elif clean_prefix and not text:
-        text = clean_prefix
     return _truncate_text(text, 200)
 
 
@@ -215,3 +213,40 @@ def _truncate_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _ensure_lobster_avatar_installed(token_path: Path) -> None:
+    """Register Libre Claw's lobster avatar in the local Petdex webview runtime."""
+
+    runtime_dir = token_path.expanduser().parent
+    webview_dir = runtime_dir / "webview"
+    agents_dir = webview_dir / "agents"
+    index_path = webview_dir / "index.html"
+    if not webview_dir.exists():
+        return
+    try:
+        agents_dir.mkdir(parents=True, exist_ok=True)
+        avatar_path = agents_dir / "libre-claw.svg"
+        if not avatar_path.exists():
+            avatar_path.write_text(_lobster_svg_text(), encoding="utf-8")
+        _patch_petdex_avatar_map(index_path)
+    except OSError:
+        return
+
+
+def _lobster_svg_text() -> str:
+    resource = resources.files("libre_claw.web.assets").joinpath("lobster-icon.svg")
+    return resource.read_text(encoding="utf-8")
+
+
+def _patch_petdex_avatar_map(index_path: Path) -> None:
+    if not index_path.exists():
+        return
+    text = index_path.read_text(encoding="utf-8")
+    if "'libre-claw':" in text or '"libre-claw":' in text:
+        return
+    marker = "const AGENT_AVATARS = {\n"
+    if marker not in text:
+        return
+    patched = text.replace(marker, marker + "    'libre-claw': 'agents/libre-claw.svg',\n", 1)
+    index_path.write_text(patched, encoding="utf-8")

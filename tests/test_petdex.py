@@ -78,11 +78,41 @@ async def test_petdex_posts_authenticated_state(tmp_path: Path) -> None:
     assert str(bubble_request.url) == "http://127.0.0.1:7777/bubble"
     assert bubble_request.headers["x-petdex-update-token"] == "secret-token"
     assert json.loads(bubble_request.content) == {
-        "text": "🦞 Inspecting files · read_file",
+        "text": "Inspecting files · read_file",
         "agent_source": "libre-claw-test",
         "source_label": "Libre Claw",
-        "source_icon": "🦞",
+        "source_icon": "agents/libre-claw.svg",
     }
+
+
+@pytest.mark.asyncio
+async def test_petdex_installs_lobster_agent_avatar(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.token_path.write_text("secret-token\n", encoding="utf-8")
+    requests: list[httpx.Request] = []
+    webview = tmp_path / "webview"
+    agents = webview / "agents"
+    agents.mkdir(parents=True)
+    index = webview / "index.html"
+    index.write_text(
+        "const AGENT_AVATARS = {\n"
+        "    'codex': 'agents/codex.svg',\n"
+        "  };\n",
+        encoding="utf-8",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(204, request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = PetdexClient(config, http_client=http_client)
+        result = await client.send_state("success", message="Run done")
+
+    assert result.ok is True
+    assert "Libre Claw lobster" in (agents / "libre-claw.svg").read_text(encoding="utf-8")
+    assert "'libre-claw': 'agents/libre-claw.svg'" in index.read_text(encoding="utf-8")
+    assert json.loads(requests[1].content)["text"] == "Run done"
 
 
 @pytest.mark.asyncio
