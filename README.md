@@ -66,6 +66,17 @@ tool. The generated SearXNG settings enable JSON output, which is required for
 agent searches. The implementation walkthrough lives in
 [docs/SEARXNG_INTEGRATION.md](docs/SEARXNG_INTEGRATION.md).
 
+Update an installed Git checkout safely:
+
+```bash
+libre-claw update
+```
+
+The updater fetches `origin/main`, compares commits, writes a backup under
+`~/.libre-claw/backups/updates/`, then applies a fast-forward update. It refuses
+to pull over uncommitted changes; use `libre-claw update --dry-run` to check
+first.
+
 Optional Petdex companion integration:
 
 ```toml

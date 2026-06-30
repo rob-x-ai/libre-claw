@@ -32,6 +32,9 @@ First shippable Libre Claw release, built by Kroonen AI.
   `libre-claw restart` for shutting down or restarting the daemon/Telegram
   stack from another terminal. `libre-claw stop` now cancels the active daemon
   turn without stopping Libre Claw.
+- Safe self-update command with `libre-claw update`, which checks `origin/main`,
+  writes a rollback backup under `~/.libre-claw/backups/updates/`, refuses dirty
+  worktrees, and applies only fast-forward updates.
 - Local web dashboard at `http://127.0.0.1:8766/dashboard` for starting runs,
   reviewing timelines, approving blocked tools, managing schedules, and checking
   usage from the daemon.

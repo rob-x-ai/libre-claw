@@ -39,6 +39,16 @@ libre-claw daemon    # local API, dashboard, automations, and daemon-owned runs
 When the daemon is running, open the local dashboard at
 `http://127.0.0.1:8766/dashboard`.
 
+Update the installed Git checkout safely:
+
+```bash
+libre-claw update
+```
+
+The updater fetches `origin/main`, writes a backup under
+`~/.libre-claw/backups/updates/`, and only applies a clean fast-forward. Use
+`libre-claw update --dry-run` to check first without changing files.
+
 ## 3. Set up a provider
 
 Inside the TUI:

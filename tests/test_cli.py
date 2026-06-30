@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import errno
+import subprocess
 
 from collections.abc import Iterable
+from pathlib import Path
 
 from click.testing import CliRunner
 
@@ -35,6 +37,37 @@ class FakeKeyStore:
         return {provider: self.get_api_key(provider, env).source for provider, env in providers}
 
 
+def _git(cwd: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _git_commit(cwd: Path, message: str) -> None:
+    _git(cwd, "-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", message)
+
+
+def _make_update_repos(tmp_path: Path) -> tuple[Path, Path]:
+    remote = tmp_path / "remote.git"
+    source = tmp_path / "source"
+    checkout = tmp_path / "checkout"
+    _git(tmp_path, "init", "--bare", str(remote))
+    _git(tmp_path, "clone", str(remote), str(source))
+    _git(source, "checkout", "-b", "main")
+    (source / "README.md").write_text("one\n", encoding="utf-8")
+    _git(source, "add", "README.md")
+    _git_commit(source, "one")
+    _git(source, "push", "origin", "main")
+    _git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+    _git(tmp_path, "clone", str(remote), str(checkout))
+    return source, checkout
+
+
 def test_cli_entrypoint_imports() -> None:
     assert main.name == "main"
 
@@ -62,6 +95,7 @@ def test_cli_exposes_telegram_command() -> None:
     assert "tui" in result.output
     assert "chat" in result.output
     assert "telegram" in result.output
+    assert "update" in result.output
     assert "workspace" in result.output
     assert "searx" in result.output
     assert "auth" in result.output
@@ -175,6 +209,70 @@ def test_cli_start_exposes_daemon_options() -> None:
     assert "--port" in result.output
     assert "--detach" in result.output
     assert "-d" in result.output
+
+
+def test_cli_update_fast_forwards_with_backup(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    source, checkout = _make_update_repos(tmp_path)
+    (source / "README.md").write_text("two\n", encoding="utf-8")
+    _git(source, "add", "README.md")
+    _git_commit(source, "two")
+    _git(source, "push", "origin", "main")
+
+    result = runner.invoke(main, ["update", "--repo", str(checkout)])
+
+    assert result.exit_code == 0
+    assert "Checking origin/main" in result.output
+    assert "Backup:" in result.output
+    assert "Updated Libre Claw" in result.output
+    assert (checkout / "README.md").read_text(encoding="utf-8") == "two\n"
+    backups = list((home / ".libre-claw" / "backups" / "updates").glob("*"))
+    assert len(backups) == 1
+    assert (backups[0] / "head.bundle").exists()
+    assert (backups[0] / "metadata.json").exists()
+
+
+def test_cli_update_refuses_dirty_tree_after_backup(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    source, checkout = _make_update_repos(tmp_path)
+    (source / "README.md").write_text("two\n", encoding="utf-8")
+    _git(source, "add", "README.md")
+    _git_commit(source, "two")
+    _git(source, "push", "origin", "main")
+    (checkout / "README.md").write_text("local edits\n", encoding="utf-8")
+    (checkout / "scratch.txt").write_text("untracked\n", encoding="utf-8")
+
+    result = runner.invoke(main, ["update", "--repo", str(checkout)])
+
+    assert result.exit_code != 0
+    assert "Working tree has uncommitted changes" in result.output
+    assert (checkout / "README.md").read_text(encoding="utf-8") == "local edits\n"
+    backups = list((home / ".libre-claw" / "backups" / "updates").glob("*"))
+    assert len(backups) == 1
+    assert "scratch.txt" in (backups[0] / "untracked.txt").read_text(encoding="utf-8")
+    assert (backups[0] / "untracked.zip").exists()
+
+
+def test_cli_update_dry_run_does_not_write_backup(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    source, checkout = _make_update_repos(tmp_path)
+    (source / "README.md").write_text("two\n", encoding="utf-8")
+    _git(source, "add", "README.md")
+    _git_commit(source, "two")
+    _git(source, "push", "origin", "main")
+
+    result = runner.invoke(main, ["update", "--repo", str(checkout), "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "Update available" in result.output
+    assert (checkout / "README.md").read_text(encoding="utf-8") == "one\n"
+    assert not (home / ".libre-claw" / "backups" / "updates").exists()
 
 
 def test_cli_searx_init_writes_local_files(tmp_path) -> None:

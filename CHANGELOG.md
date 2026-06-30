@@ -27,6 +27,9 @@ Initial shippable Libre Claw release.
   `libre-claw restart` for shutting down or restarting the daemon/Telegram
   stack from another terminal. `libre-claw stop` now cancels the active daemon
   turn without stopping Libre Claw.
+- Safe self-update command with `libre-claw update`, which checks `origin/main`,
+  writes a rollback backup under `~/.libre-claw/backups/updates/`, refuses dirty
+  worktrees, and applies only fast-forward updates.
 - Local web dashboard served by the daemon at `/dashboard` for starting runs,
   reviewing timelines, approving blocked tools, managing schedules, and checking
   usage.
