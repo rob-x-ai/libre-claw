@@ -467,6 +467,7 @@ Create recurring local runs:
 ```text
 /schedule examples
 /schedule add daily 09:00 | Daily repo health check | Inspect git status, tests, and risks.
+/schedule add daily 08:00 @ America/Montreal | Morning brief | Send a compact morning report.
 /schedule list
 /schedule pause <id>
 /schedule resume <id>
@@ -475,6 +476,8 @@ Create recurring local runs:
 The agent can also create and edit Libre Claw schedules itself with the
 `schedule_list` and `schedule` tools. These are daemon automations, not host
 cron entries, so they stay portable across TUI, dashboard, and Telegram.
+Use an IANA timezone suffix such as `@ America/Montreal` for location-specific
+jobs; otherwise schedules use the daemon's local timezone.
 
 Start lightweight periodic check-ins:
 

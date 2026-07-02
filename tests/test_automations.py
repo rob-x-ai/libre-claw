@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -29,9 +30,21 @@ def test_next_scheduled_at_supports_aliases_and_cron() -> None:
     assert next_scheduled_at("0 12 * * mon", after=base) == datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc)
 
 
+def test_next_scheduled_at_supports_schedule_timezone() -> None:
+    base = datetime(2026, 7, 2, 5, 0, tzinfo=timezone.utc)
+    expected_montreal = datetime(2026, 7, 2, 8, 0, tzinfo=ZoneInfo("America/Montreal"))
+
+    assert next_scheduled_at("daily 08:00 @ America/Montreal", after=base) == expected_montreal
+    assert next_scheduled_at("daily 08:00 America/Montreal", after=base) == expected_montreal
+    assert next_scheduled_at("0 8 * * * @ America/Montreal", after=base) == expected_montreal
+
+
 def test_next_scheduled_at_rejects_invalid_schedule() -> None:
     with pytest.raises(AutomationError):
         next_scheduled_at("whenever")
+
+    with pytest.raises(AutomationError, match="Unknown schedule timezone"):
+        next_scheduled_at("daily 08:00 @ Mars/Olympus")
 
 
 async def test_automation_store_create_list_due_mark_and_delete(tmp_path: Path) -> None:

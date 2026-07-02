@@ -52,7 +52,8 @@ class ScheduleTool(BaseTool):
     description = (
         "Create or change Libre Claw recurring automations. Use this instead of asking the user "
         "to edit host cron, launchd, or systemd timers. Supports schedules like daily HH:MM, "
-        "weekly mon HH:MM, every N minutes, hourly, and five-field cron."
+        "weekly mon HH:MM, every N minutes, hourly, and five-field cron. Add an IANA timezone "
+        "with `@ America/Montreal` for location-specific schedules."
     )
     parameters = {
         "action": {
@@ -77,7 +78,10 @@ class ScheduleTool(BaseTool):
         },
         "schedule": {
             "type": "string",
-            "description": "daily HH:MM, weekly mon HH:MM, every N minutes, hourly, or five-field cron.",
+            "description": (
+                "daily HH:MM, weekly mon HH:MM, every N minutes, hourly, or five-field cron. "
+                "Optionally append `@ America/Montreal` or another IANA timezone."
+            ),
             "default": "",
         },
         "route": {

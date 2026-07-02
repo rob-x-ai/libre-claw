@@ -1470,6 +1470,33 @@ _DASHBOARD_HTML = r"""<!doctype html>
       return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
     }
 
+    function scheduleTimezone(schedule) {
+      const text = String(schedule || "").trim();
+      const explicit = text.match(/\s(?:@|in)\s+([A-Za-z0-9_.\/+-]+)$/);
+      if (explicit) return explicit[1];
+      const implicit = text.match(/\s([A-Za-z_]+\/[A-Za-z0-9_.\/+-]+)$/);
+      return implicit ? implicit[1] : "";
+    }
+
+    function formatAutomationNext(automation) {
+      const value = automation.next_run_at;
+      if (!value) return "";
+      const zone = scheduleTimezone(automation.schedule);
+      if (!zone) return formatTime(value);
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      try {
+        return `${new Intl.DateTimeFormat(undefined, {
+          dateStyle: "short",
+          timeStyle: "medium",
+          timeZone: zone,
+          timeZoneName: "short",
+        }).format(date)} (${zone})`;
+      } catch (_error) {
+        return formatTime(value);
+      }
+    }
+
     function formatShortTime(value) {
       if (!value) return "";
       const date = new Date(value);
@@ -1784,7 +1811,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
         const meta = document.createElement("div");
         meta.className = "automation-meta";
         const model = [automation.provider, automation.model].filter(Boolean).join(":") || "default model";
-        meta.textContent = `${automation.schedule} | ${automation.route} | ${model} | next ${formatTime(automation.next_run_at)}`;
+        meta.textContent = `${automation.schedule} | ${automation.route} | ${model} | next ${formatAutomationNext(automation)}`;
         const prompt = document.createElement("div");
         prompt.className = "tiny";
         prompt.textContent = truncate(automation.prompt || "", 180);

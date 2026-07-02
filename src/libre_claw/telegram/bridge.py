@@ -1343,6 +1343,7 @@ def _schedule_help_text() -> str:
             "/schedule list",
             "/schedule examples",
             "/schedule add [--route report|tui|telegram] <schedule> | <name> | <prompt>",
+            "Example timezone: /schedule add daily 08:00 @ America/Montreal | Morning brief | Send a compact report.",
             "/schedule pause <id>",
             "/schedule resume <id>",
             "/schedule delete <id>",

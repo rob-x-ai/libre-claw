@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 AutomationStatus = Literal["active", "paused"]
@@ -415,7 +416,7 @@ def automation_is_due(record: AutomationRecord, now: datetime | None = None) -> 
 
 def next_scheduled_at(schedule: str, *, after: datetime | None = None) -> datetime:
     parsed = _parse_schedule(schedule)
-    base = _floor_minute(after or _now_dt())
+    base = _floor_minute(_schedule_base_time(after or _now_dt(), parsed))
     kind = parsed["kind"]
 
     if kind == "every_minutes":
@@ -444,23 +445,25 @@ def next_scheduled_at(schedule: str, *, after: datetime | None = None) -> dateti
 
 
 def _parse_schedule(schedule: str) -> dict[str, object]:
-    cleaned = " ".join(schedule.strip().lower().split())
+    schedule_text, timezone_name = _split_schedule_timezone(schedule)
+    cleaned = " ".join(schedule_text.strip().lower().split())
     if not cleaned:
         raise AutomationError("Schedule is required.")
+    timezone_payload: dict[str, object] = {"timezone": timezone_name} if timezone_name else {}
     if cleaned == "hourly":
-        return {"kind": "every_minutes", "minutes": 60}
+        return {"kind": "every_minutes", "minutes": 60, **timezone_payload}
 
     every = re.fullmatch(r"every\s+([1-9]\d*)\s+minutes?", cleaned)
     if every:
         minutes = int(every.group(1))
         if minutes > 24 * 60:
             raise AutomationError("Every-minute schedules are limited to 1440 minutes.")
-        return {"kind": "every_minutes", "minutes": minutes}
+        return {"kind": "every_minutes", "minutes": minutes, **timezone_payload}
 
     daily = re.fullmatch(r"daily\s+(\d{1,2}):(\d{2})", cleaned)
     if daily:
         hour, minute = _time_parts(daily.group(1), daily.group(2))
-        return {"kind": "daily", "hour": hour, "minute": minute}
+        return {"kind": "daily", "hour": hour, "minute": minute, **timezone_payload}
 
     weekly = re.fullmatch(r"weekly\s+([a-z]+)\s+(\d{1,2}):(\d{2})", cleaned)
     if weekly:
@@ -468,7 +471,7 @@ def _parse_schedule(schedule: str) -> dict[str, object]:
         if weekday is None:
             raise AutomationError("Weekly schedules must use a weekday like mon or monday.")
         hour, minute = _time_parts(weekly.group(2), weekly.group(3))
-        return {"kind": "weekly", "weekday": weekday, "hour": hour, "minute": minute}
+        return {"kind": "weekly", "weekday": weekday, "hour": hour, "minute": minute, **timezone_payload}
 
     fields = cleaned.split()
     if len(fields) == 5:
@@ -480,11 +483,52 @@ def _parse_schedule(schedule: str) -> dict[str, object]:
             "day": _cron_field(day, 1, 31),
             "month": _cron_field(month, 1, 12),
             "weekday": _cron_field(weekday, 0, 7, aliases=_WEEKDAYS, normalize_seven=True),
+            **timezone_payload,
         }
 
     raise AutomationError(
-        "Schedule must look like `daily 09:00`, `weekly mon 10:00`, `every 30 minutes`, `hourly`, or five-field cron."
+        "Schedule must look like `daily 09:00`, `weekly mon 10:00`, `every 30 minutes`, "
+        "`hourly`, or five-field cron. Add a timezone with `@ America/Montreal` when needed."
     )
+
+
+def _split_schedule_timezone(schedule: str) -> tuple[str, str | None]:
+    normalized = " ".join(schedule.strip().split())
+    if not normalized:
+        return "", None
+
+    explicit = re.fullmatch(r"(.+?)\s+(?:@|in)\s+([A-Za-z0-9_./+\-]+)", normalized)
+    if explicit:
+        schedule_text, timezone_name = explicit.group(1), explicit.group(2)
+        return schedule_text.strip(), _valid_timezone_name(timezone_name)
+
+    parts = normalized.rsplit(maxsplit=1)
+    if len(parts) == 2 and "/" in parts[1]:
+        try:
+            timezone_name = _valid_timezone_name(parts[1])
+        except AutomationError:
+            return normalized, None
+        return parts[0].strip(), timezone_name
+
+    return normalized, None
+
+
+def _valid_timezone_name(value: str) -> str:
+    try:
+        ZoneInfo(value)
+    except ZoneInfoNotFoundError as exc:
+        raise AutomationError(f"Unknown schedule timezone: {value}") from exc
+    return value
+
+
+def _schedule_base_time(value: datetime, parsed: dict[str, object]) -> datetime:
+    timezone_name = parsed.get("timezone")
+    if not isinstance(timezone_name, str):
+        return value
+    zone = ZoneInfo(timezone_name)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=zone)
+    return value.astimezone(zone)
 
 
 def _time_parts(hour_text: str, minute_text: str) -> tuple[int, int]:
